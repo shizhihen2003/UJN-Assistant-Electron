@@ -1,74 +1,257 @@
-import { app, BrowserWindow, ipcMain } from 'electron'
-import path from 'path'
-import { fileURLToPath } from 'url'
-import Store from 'electron-store'
+// electron/main.js
+import { app, BrowserWindow, ipcMain } from 'electron';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import fetch from 'node-fetch';
+import FormData from 'form-data';
+import Store from 'electron-store';
 
-// 获取__dirname的等效值
-const __dirname = fileURLToPath(new URL('.', import.meta.url))
+// 获取__dirname的替代方法（ES模块中不存在__dirname）
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
-// 创建持久化存储
-const store = new Store()
+// 创建存储实例
+const store = new Store();
 
-// 初始化配置
-if (!store.has('settings')) {
-    store.set('settings', {
-        entranceTime: new Date().getFullYear() - 4,
-        timeTable: 0,
-        showAllLesson: true,
-        hideFinishLesson: false,
-        hideTeacher: true,
-        lockLesson: false
-    })
-}
-
-// 保持对窗口对象的全局引用，如果不这样做，
-// 当JavaScript对象被垃圾回收，窗口将自动关闭
-let mainWindow
-
+// 创建主窗口
 function createWindow() {
-    // 创建浏览器窗口
-    mainWindow = new BrowserWindow({
-        width: 1024,
-        height: 768,
+    const mainWindow = new BrowserWindow({
+        width: 1200,
+        height: 800,
         webPreferences: {
             preload: path.join(__dirname, 'preload.js'),
-            nodeIntegration: false,
             contextIsolation: true,
-        }
-    })
+            nodeIntegration: false
+        },
+        titleBarStyle: 'hidden',
+        frame: false
+    });
 
     // 加载应用
-    if (process.env.VITE_DEV_SERVER_URL) {
-        mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL)
-        // 开发模式下打开开发者工具
-        mainWindow.webContents.openDevTools()
+    if (app.isPackaged) {
+        mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
     } else {
-        // 生产模式下加载打包后的index.html
-        mainWindow.loadFile(path.join(process.env.DIST, 'index.html'))
+        mainWindow.loadURL('http://localhost:5173');
+        mainWindow.webContents.openDevTools();
     }
+
+    return mainWindow;
 }
 
-// 应用准备就绪时创建窗口
+// 设置 IPC 处理程序
+function setupIPC() {
+    // 窗口控制
+    ipcMain.on('window:minimize', (event) => {
+        BrowserWindow.fromWebContents(event.sender).minimize();
+    });
+
+    ipcMain.on('window:maximize', (event) => {
+        const window = BrowserWindow.fromWebContents(event.sender);
+        if (window.isMaximized()) {
+            window.unmaximize();
+        } else {
+            window.maximize();
+        }
+    });
+
+    ipcMain.on('window:close', (event) => {
+        BrowserWindow.fromWebContents(event.sender).close();
+    });
+
+    // 版本信息
+    ipcMain.handle('app:version', () => {
+        return app.getVersion();
+    });
+
+    // 存储相关
+    ipcMain.handle('store:get', (event, key) => {
+        return store.get(key);
+    });
+
+    ipcMain.handle('store:set', (event, key, value) => {
+        store.set(key, value);
+        return true;
+    });
+
+    ipcMain.handle('store:has', (event, key) => {
+        return store.has(key);
+    });
+
+    ipcMain.handle('store:delete', (event, key) => {
+        store.delete(key);
+        return true;
+    });
+
+    ipcMain.handle('store:clear', () => {
+        store.clear();
+        return true;
+    });
+
+    // 统一的 EAS 请求处理函数
+    ipcMain.handle('eas:request', async (event, args) => {
+        try {
+            const { method, url, data, cookies, headers = {} } = args;
+
+            // 创建请求头
+            const requestHeaders = { ...headers };
+
+            // 添加 Cookie
+            if (cookies && cookies.length > 0) {
+                requestHeaders.Cookie = cookies.join('; ');
+            }
+
+            // 准备请求选项
+            const options = {
+                method: method,
+                headers: requestHeaders,
+                redirect: 'manual'
+            };
+
+            // 如果是 POST 请求，添加表单数据
+            if (method === 'POST' && data) {
+                const formData = new FormData();
+                for (const key in data) {
+                    formData.append(key, data[key]);
+                }
+
+                options.body = formData;
+                // 添加表单头部
+                if (formData.getBoundary) {
+                    requestHeaders['Content-Type'] = `multipart/form-data; boundary=${formData.getBoundary()}`;
+                }
+            }
+
+            // 执行请求
+            const response = await fetch(url, options);
+
+            // 获取响应内容
+            let responseData;
+            try {
+                responseData = await response.text();
+            } catch (e) {
+                responseData = '';
+            }
+
+            // 获取设置的 Cookie
+            const responseCookies = response.headers.raw()['set-cookie'] || [];
+
+            // 确定请求是否成功
+            let success = response.status >= 200 && response.status < 300;
+
+            // POST 登录请求的特殊处理
+            if (method === 'POST' && url.includes('login') && response.status === 302) {
+                success = !response.headers.get('location')?.includes('login');
+            }
+
+            return {
+                success,
+                status: response.status,
+                data: responseData,
+                cookies: responseCookies,
+                headers: Object.fromEntries(response.headers.entries()),
+                location: response.headers.get('location')
+            };
+        } catch (error) {
+            console.error('eas:request error', error);
+            return {
+                success: false,
+                error: error.message
+            };
+        }
+    });
+
+    // 统一的 IPASS 请求处理函数
+    ipcMain.handle('ipass:request', async (event, args) => {
+        try {
+            const { method, url, data, cookies, headers = {} } = args;
+
+            // 创建请求头
+            const requestHeaders = { ...headers };
+
+            // 添加 Cookie
+            if (cookies && cookies.length > 0) {
+                requestHeaders.Cookie = cookies.join('; ');
+            }
+
+            // 准备请求选项
+            const options = {
+                method: method,
+                headers: requestHeaders,
+                redirect: 'manual'
+            };
+
+            // 如果是 POST 请求，添加表单数据
+            if (method === 'POST' && data) {
+                const formData = new FormData();
+                for (const key in data) {
+                    formData.append(key, data[key]);
+                }
+
+                options.body = formData;
+                // 添加表单头部
+                if (formData.getBoundary) {
+                    requestHeaders['Content-Type'] = `multipart/form-data; boundary=${formData.getBoundary()}`;
+                }
+            }
+
+            // 执行请求
+            const response = await fetch(url, options);
+
+            // 获取响应内容
+            let responseData;
+            try {
+                responseData = await response.text();
+            } catch (e) {
+                responseData = '';
+            }
+
+            // 获取设置的 Cookie
+            const responseCookies = response.headers.raw()['set-cookie'] || [];
+
+            // 确定请求是否成功
+            let success = response.status >= 200 && response.status < 300;
+
+            // POST 登录请求的特殊处理
+            if (method === 'POST' && url.includes('login') && response.status === 302) {
+                success = !response.headers.get('location')?.includes('login');
+            }
+
+            return {
+                success,
+                status: response.status,
+                data: responseData,
+                cookies: responseCookies,
+                headers: Object.fromEntries(response.headers.entries()),
+                location: response.headers.get('location')
+            };
+        } catch (error) {
+            console.error('ipass:request error', error);
+            return {
+                success: false,
+                error: error.message
+            };
+        }
+    });
+}
+
+// 初始化 app
 app.whenReady().then(() => {
-    createWindow()
+    const mainWindow = createWindow();
+    setupIPC();
 
+    // 在 macOS 上，当点击 dock 图标且没有其他窗口打开时，
+    // 通常在应用程序中重新创建一个窗口
     app.on('activate', function () {
-        // 在macOS上，当点击dock图标并且没有其他窗口打开时，通常会重新创建一个窗口
-        if (BrowserWindow.getAllWindows().length === 0) createWindow()
-    })
-})
+        if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    });
+});
 
-// 当所有窗口都关闭时退出，除了在macOS上
+// 当所有窗口关闭时退出应用，除了在 macOS 上
 app.on('window-all-closed', function () {
-    if (process.platform !== 'darwin') app.quit()
-})
+    if (process.platform !== 'darwin') app.quit();
+});
 
-// IPC通信
-ipcMain.handle('get-store-value', (event, key) => {
-    return store.get(key)
-})
-
-ipcMain.handle('set-store-value', (event, key, value) => {
-    store.set(key, value)
-    return true
-})
+// 在 macOS 上，用户通常通过 Cmd + Q 显式退出应用程序
+app.on('before-quit', () => {
+    // 在这里执行应用退出前的清理工作
+});
