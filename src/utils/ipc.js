@@ -245,6 +245,18 @@ export default {
      */
     async easRequest(method, url, data = null, options = {}) {
         try {
+            // 确保URL是完整的URL
+            if (!url.startsWith('http://') && !url.startsWith('https://')) {
+                // 如果不是完整URL并且不是相对URL，则报错
+                if (!url.includes('/')) {
+                    console.error(`[请求错误] 无效的URL: ${url}`);
+                    return {
+                        success: false,
+                        error: `无效的URL: ${url}`
+                    };
+                }
+            }
+
             console.log(`[网络请求] ${method} ${url}`);
             if (data) {
                 console.log("[请求数据]", data);
@@ -258,11 +270,16 @@ export default {
 
             // 处理查询参数
             if (options.params) {
-                const urlObj = new URL(url);
-                Object.entries(options.params).forEach(([key, value]) => {
-                    urlObj.searchParams.append(key, value);
-                });
-                url = urlObj.toString();
+                try {
+                    const urlObj = new URL(url);
+                    Object.entries(options.params).forEach(([key, value]) => {
+                        urlObj.searchParams.append(key, value);
+                    });
+                    url = urlObj.toString();
+                } catch (e) {
+                    console.error(`[URL解析错误] ${e.message}, URL: ${url}`);
+                    throw new Error(`URL解析错误: ${e.message}`);
+                }
             }
 
             // 处理表单数据
@@ -278,24 +295,46 @@ export default {
                 }
             }
 
+            // 添加默认请求头
+            if (!options.headers) {
+                options.headers = {};
+            }
+            // 设置一些默认请求头
+            if (!options.headers['User-Agent']) {
+                options.headers['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+            }
+
+            // 如果有Cookie但没有设置Cookie头
+            if (options.cookies && options.cookies.length > 0 && !options.headers['Cookie']) {
+                // 将Cookie数组转换为字符串形式
+                options.headers['Cookie'] = options.cookies.join('; ');
+            }
+
             // 创建请求参数
             const requestArgs = {
                 method,
                 url,
                 data: processedData,
-                cookies: options.cookies,
+                cookies: options.cookies || [],
                 headers: options.headers
             };
+
+            // 输出详细请求信息以便调试
+            console.log("[完整请求信息]", {
+                method,
+                url,
+                dataType: typeof processedData,
+                cookiesCount: requestArgs.cookies?.length || 0,
+                headers: options.headers
+            });
 
             // 发送请求到主进程
             const response = await window.ipcRenderer.invoke('eas:request', requestArgs);
 
             // 处理响应
-            this._logResponse(response);
-
-            return response;
+            return this._logResponse(response);
         } catch (error) {
-            console.error('请求失败', error);
+            console.error('[请求失败]', error);
             return {
                 success: false,
                 error: error.message || '请求失败'
@@ -316,19 +355,28 @@ export default {
                 console.log(`[响应头] ${JSON.stringify(response.headers)}`);
             }
 
+            if (response.location) {
+                console.log(`[重定向地址] ${response.location}`);
+            }
+
             if (response.cookies && response.cookies.length > 0) {
                 console.log(`[响应Cookie] 收到 ${response.cookies.length} 个Cookie`);
+                // 打印每个Cookie的内容以便调试
+                response.cookies.forEach((cookie, index) => {
+                    console.log(`Cookie ${index + 1}: ${cookie}`);
+                });
             }
 
             if (response.data) {
                 const previewLength = 200;
-                const contentPreview = response.data.length > previewLength
+                const contentPreview = typeof response.data === 'string' && response.data.length > previewLength
                     ? response.data.substring(0, previewLength) + "..."
                     : response.data;
                 console.log(`[响应内容预览] ${contentPreview}`);
             }
         } else {
             console.error(`[响应错误] ${response.error || '未知错误'}`);
+            console.error(`[错误详情]`, response.errorDetails || {});
         }
 
         return response;
@@ -344,6 +392,18 @@ export default {
      */
     async ipassRequest(method, url, data = null, options = {}) {
         try {
+            // 确保URL是完整的URL
+            if (!url.startsWith('http://') && !url.startsWith('https://')) {
+                // 如果不是完整URL并且不是相对URL，则报错
+                if (!url.includes('/')) {
+                    console.error(`[请求错误] 无效的URL: ${url}`);
+                    return {
+                        success: false,
+                        error: `无效的URL: ${url}`
+                    };
+                }
+            }
+
             console.log(`[网络请求] ${method} ${url}`);
             if (data) {
                 console.log("[请求数据]", data);
@@ -357,11 +417,16 @@ export default {
 
             // 处理查询参数
             if (options.params) {
-                const urlObj = new URL(url);
-                Object.entries(options.params).forEach(([key, value]) => {
-                    urlObj.searchParams.append(key, value);
-                });
-                url = urlObj.toString();
+                try {
+                    const urlObj = new URL(url);
+                    Object.entries(options.params).forEach(([key, value]) => {
+                        urlObj.searchParams.append(key, value);
+                    });
+                    url = urlObj.toString();
+                } catch (e) {
+                    console.error(`[URL解析错误] ${e.message}, URL: ${url}`);
+                    throw new Error(`URL解析错误: ${e.message}`);
+                }
             }
 
             // 处理表单数据
@@ -376,24 +441,46 @@ export default {
                 }
             }
 
+            // 添加默认请求头
+            if (!options.headers) {
+                options.headers = {};
+            }
+            // 设置一些默认请求头
+            if (!options.headers['User-Agent']) {
+                options.headers['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+            }
+
+            // 如果有Cookie但没有设置Cookie头
+            if (options.cookies && options.cookies.length > 0 && !options.headers['Cookie']) {
+                // 将Cookie数组转换为字符串形式
+                options.headers['Cookie'] = options.cookies.join('; ');
+            }
+
             // 创建请求参数
             const requestArgs = {
                 method,
                 url,
                 data: processedData,
-                cookies: options.cookies,
+                cookies: options.cookies || [],
                 headers: options.headers
             };
+
+            // 输出详细请求信息以便调试
+            console.log("[完整请求信息]", {
+                method,
+                url,
+                dataType: typeof processedData,
+                cookiesCount: requestArgs.cookies?.length || 0,
+                headers: options.headers
+            });
 
             // 发送请求到主进程
             const response = await window.ipcRenderer.invoke('ipass:request', requestArgs);
 
             // 处理响应
-            this._logResponse(response);
-
-            return response;
+            return this._logResponse(response);
         } catch (error) {
-            console.error('请求失败', error);
+            console.error('[请求失败]', error);
             return {
                 success: false,
                 error: error.message || '请求失败'

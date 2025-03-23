@@ -22699,6 +22699,12 @@ function setupIPC() {
       if (cookies && cookies.length > 0) {
         requestHeaders.Cookie = cookies.join("; ");
       }
+      console.log(`[主进程] 请求详情:`, {
+        method,
+        url,
+        headers: requestHeaders,
+        dataType: data ? typeof data : "none"
+      });
       const options = {
         method,
         headers: requestHeaders,
@@ -22706,50 +22712,71 @@ function setupIPC() {
       };
       if (method === "POST" && data) {
         if (headers["Content-Type"] === "application/x-www-form-urlencoded") {
-          if (typeof data !== "string") {
-            const params = new URLSearchParams();
-            for (const key in data) {
-              params.append(key, data[key]);
-            }
-            options.body = params.toString();
-            console.log(`[主进程] 已转换表单数据: ${options.body}`);
-          } else {
+          if (typeof data === "string") {
             options.body = data;
+            console.log(`[主进程] 使用原始表单数据: ${data.substring(0, 100)}${data.length > 100 ? "..." : ""}`);
+          } else {
+            try {
+              const params = new URLSearchParams();
+              for (const key in data) {
+                params.append(key, data[key]);
+              }
+              options.body = params.toString();
+              console.log(`[主进程] 已转换表单数据: ${options.body.substring(0, 100)}${options.body.length > 100 ? "..." : ""}`);
+            } catch (e) {
+              console.error(`[主进程] 表单数据转换错误:`, e);
+              throw new Error(`表单数据转换错误: ${e.message}`);
+            }
+          }
+        } else if (headers["Content-Type"] && headers["Content-Type"].includes("application/json")) {
+          try {
+            options.body = typeof data === "string" ? data : JSON.stringify(data);
+            console.log(`[主进程] JSON数据: ${options.body.substring(0, 100)}${options.body.length > 100 ? "..." : ""}`);
+          } catch (e) {
+            console.error(`[主进程] JSON数据转换错误:`, e);
+            throw new Error(`JSON数据转换错误: ${e.message}`);
           }
         } else {
-          const formData = new FormData();
-          for (const key in data) {
-            formData.append(key, data[key]);
-          }
-          options.body = formData;
-          if (formData.getBoundary) {
-            requestHeaders["Content-Type"] = `multipart/form-data; boundary=${formData.getBoundary()}`;
+          try {
+            const formData = new FormData();
+            for (const key in data) {
+              formData.append(key, data[key]);
+            }
+            options.body = formData;
+            console.log(`[主进程] 使用FormData`);
+            delete requestHeaders["Content-Type"];
+          } catch (e) {
+            console.error(`[主进程] FormData创建错误:`, e);
+            throw new Error(`FormData创建错误: ${e.message}`);
           }
         }
       }
       console.log(`[主进程] 发送${method}请求: ${url}`);
-      console.log(`[主进程] 请求头: ${JSON.stringify(requestHeaders)}`);
-      if (options.body) {
-        console.log(`[主进程] 请求数据: ${typeof options.body === "string" ? options.body : "(FormData)"}`);
+      let response;
+      try {
+        response = await fetch(url, options);
+      } catch (fetchError) {
+        console.error(`[主进程] 网络请求错误:`, fetchError);
+        throw new Error(`网络请求错误: ${fetchError.message}`);
       }
-      const response = await fetch(url, options);
       let responseData;
       try {
         responseData = await response.text();
       } catch (e) {
+        console.error(`[主进程] 响应内容读取错误:`, e);
         responseData = "";
       }
       const responseCookies = response.headers.raw()["set-cookie"] || [];
       console.log(`[主进程] 响应状态: ${response.status}`);
       if (responseCookies.length > 0) {
         console.log(`[主进程] 收到Cookie: ${responseCookies.length}个`);
+        console.log(`[主进程] Cookie内容:`, responseCookies);
       }
-      let success = response.status >= 200 && response.status < 300;
-      if (method === "POST" && url.includes("login") && response.status === 302) {
-        success = !((_a = response.headers.get("location")) == null ? void 0 : _a.includes("login"));
-      }
+      const isLoginRedirect = method === "POST" && url.includes("login") && response.status === 302;
+      const isLoginSuccess = isLoginRedirect && !((_a = response.headers.get("location")) == null ? void 0 : _a.includes("login"));
+      console.log(`[主进程] 是否为登录重定向: ${isLoginRedirect}, 登录是否成功: ${isLoginSuccess}`);
       return {
-        success,
+        success: response.status >= 200 && response.status < 300 || isLoginSuccess,
         status: response.status,
         data: responseData,
         cookies: responseCookies,
@@ -22757,10 +22784,15 @@ function setupIPC() {
         location: response.headers.get("location")
       };
     } catch (error) {
-      console.error("eas:request error", error);
+      console.error("[主进程] eas:request 错误:", error);
       return {
         success: false,
-        error: error.message
+        error: error.message,
+        errorDetails: {
+          name: error.name,
+          stack: error.stack,
+          code: error.code
+        }
       };
     }
   });

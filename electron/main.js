@@ -87,8 +87,7 @@ function setupIPC() {
         return true;
     });
 
-    // 统一的 EAS 请求处理函数
-    // 统一的 EAS 请求处理函数
+// 统一的 EAS 请求处理函数
     ipcMain.handle('eas:request', async (event, args) => {
         try {
             const { method, url, data, cookies, headers = {} } = args;
@@ -101,6 +100,14 @@ function setupIPC() {
                 requestHeaders.Cookie = cookies.join('; ');
             }
 
+            // 记录详细请求信息以便调试
+            console.log(`[主进程] 请求详情:`, {
+                method,
+                url,
+                headers: requestHeaders,
+                dataType: data ? typeof data : 'none'
+            });
+
             // 准备请求选项
             const options = {
                 method: method,
@@ -108,50 +115,76 @@ function setupIPC() {
                 redirect: 'manual'
             };
 
-            // 如果是 POST 请求，添加表单数据
+            // 如果是 POST 请求，添加数据
             if (method === 'POST' && data) {
                 // 检查Content-Type
                 if (headers['Content-Type'] === 'application/x-www-form-urlencoded') {
-                    // 如果是表单提交，确保数据是字符串格式
-                    if (typeof data !== 'string') {
-                        const params = new URLSearchParams();
-                        for (const key in data) {
-                            params.append(key, data[key]);
-                        }
-                        options.body = params.toString();
-                        console.log(`[主进程] 已转换表单数据: ${options.body}`);
-                    } else {
+                    // 处理表单数据
+                    if (typeof data === 'string') {
+                        // 如果数据已经是字符串格式，直接使用
                         options.body = data;
+                        console.log(`[主进程] 使用原始表单数据: ${data.substring(0, 100)}${data.length > 100 ? '...' : ''}`);
+                    } else {
+                        // 将对象转换为表单数据
+                        try {
+                            const params = new URLSearchParams();
+                            for (const key in data) {
+                                params.append(key, data[key]);
+                            }
+                            options.body = params.toString();
+                            console.log(`[主进程] 已转换表单数据: ${options.body.substring(0, 100)}${options.body.length > 100 ? '...' : ''}`);
+                        } catch (e) {
+                            console.error(`[主进程] 表单数据转换错误:`, e);
+                            throw new Error(`表单数据转换错误: ${e.message}`);
+                        }
+                    }
+                } else if (headers['Content-Type'] && headers['Content-Type'].includes('application/json')) {
+                    // JSON数据
+                    try {
+                        options.body = typeof data === 'string' ? data : JSON.stringify(data);
+                        console.log(`[主进程] JSON数据: ${options.body.substring(0, 100)}${options.body.length > 100 ? '...' : ''}`);
+                    } catch (e) {
+                        console.error(`[主进程] JSON数据转换错误:`, e);
+                        throw new Error(`JSON数据转换错误: ${e.message}`);
                     }
                 } else {
                     // 默认使用FormData
-                    const formData = new FormData();
-                    for (const key in data) {
-                        formData.append(key, data[key]);
-                    }
-                    options.body = formData;
+                    try {
+                        const formData = new FormData();
+                        for (const key in data) {
+                            formData.append(key, data[key]);
+                        }
+                        options.body = formData;
+                        console.log(`[主进程] 使用FormData`);
 
-                    // 添加表单头部
-                    if (formData.getBoundary) {
-                        requestHeaders['Content-Type'] = `multipart/form-data; boundary=${formData.getBoundary()}`;
+                        // 注意：node-fetch的FormData不一定有getBoundary方法
+                        // 让 node-fetch 自动处理Content-Type
+                        delete requestHeaders['Content-Type'];
+                    } catch (e) {
+                        console.error(`[主进程] FormData创建错误:`, e);
+                        throw new Error(`FormData创建错误: ${e.message}`);
                     }
                 }
             }
 
             // 执行请求
             console.log(`[主进程] 发送${method}请求: ${url}`);
-            console.log(`[主进程] 请求头: ${JSON.stringify(requestHeaders)}`);
-            if (options.body) {
-                console.log(`[主进程] 请求数据: ${typeof options.body === 'string' ? options.body : '(FormData)'}`);
-            }
 
-            const response = await fetch(url, options);
+            // 捕获任何网络错误
+            let response;
+            try {
+                response = await fetch(url, options);
+            } catch (fetchError) {
+                console.error(`[主进程] 网络请求错误:`, fetchError);
+                throw new Error(`网络请求错误: ${fetchError.message}`);
+            }
 
             // 获取响应内容
             let responseData;
             try {
                 responseData = await response.text();
             } catch (e) {
+                console.error(`[主进程] 响应内容读取错误:`, e);
                 responseData = '';
             }
 
@@ -160,18 +193,17 @@ function setupIPC() {
             console.log(`[主进程] 响应状态: ${response.status}`);
             if (responseCookies.length > 0) {
                 console.log(`[主进程] 收到Cookie: ${responseCookies.length}个`);
+                console.log(`[主进程] Cookie内容:`, responseCookies);
             }
 
-            // 确定请求是否成功
-            let success = response.status >= 200 && response.status < 300;
+            // 特殊处理302重定向状态码
+            const isLoginRedirect = method === 'POST' && url.includes('login') && response.status === 302;
+            const isLoginSuccess = isLoginRedirect && !response.headers.get('location')?.includes('login');
 
-            // POST 登录请求的特殊处理
-            if (method === 'POST' && url.includes('login') && response.status === 302) {
-                success = !response.headers.get('location')?.includes('login');
-            }
+            console.log(`[主进程] 是否为登录重定向: ${isLoginRedirect}, 登录是否成功: ${isLoginSuccess}`);
 
             return {
-                success,
+                success: (response.status >= 200 && response.status < 300) || isLoginSuccess,
                 status: response.status,
                 data: responseData,
                 cookies: responseCookies,
@@ -179,10 +211,15 @@ function setupIPC() {
                 location: response.headers.get('location')
             };
         } catch (error) {
-            console.error('eas:request error', error);
+            console.error('[主进程] eas:request 错误:', error);
             return {
                 success: false,
-                error: error.message
+                error: error.message,
+                errorDetails: {
+                    name: error.name,
+                    stack: error.stack,
+                    code: error.code
+                }
             };
         }
     });

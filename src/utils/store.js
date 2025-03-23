@@ -68,12 +68,27 @@ class Store {
      * @param {number} defaultValue 默认值
      * @returns {Promise<number>|number} 值
      */
-    async getInt(key, defaultValue = 0) {
+    getInt(key, defaultValue = 0) {
         if (this.useElectron) {
-            return await ipc.getStoreValue(this.getFullKey(key), defaultValue);
+            return ipc.getStoreValue(this.getFullKey(key), defaultValue);
         } else {
             const value = localStorage.getItem(this.getFullKey(key));
-            return value !== null ? parseInt(value, 10) : defaultValue;
+
+            // 添加详细日志
+            console.log(`从本地存储获取整数值: ${key} = ${value}`);
+
+            if (value === null) {
+                console.log(`键 ${key} 不存在，使用默认值: ${defaultValue}`);
+                return defaultValue;
+            }
+
+            const parsed = parseInt(value, 10);
+            if (isNaN(parsed)) {
+                console.log(`键 ${key} 的值 ${value} 无法解析为整数，使用默认值: ${defaultValue}`);
+                return defaultValue;
+            }
+
+            return parsed;
         }
     }
 

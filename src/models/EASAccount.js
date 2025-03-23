@@ -15,16 +15,58 @@ class EASAccount extends Account {
      * 私有构造函数，使用 getInstance 获取实例
      */
     constructor() {
+        // 添加调试信息
+        console.log("UJNAPI对象:", UJNAPI);
+        console.log("EA_HOSTS数组:", UJNAPI.EA_HOSTS);
+
+        // 使用默认值初始化
+        let hostIndex = 0;
+        try {
+            // 直接获取同步值，避免Promise问题
+            const lastSuccessfulHost = localStorage.getItem('ujn_assistant_LAST_SUCCESSFUL_HOST');
+            if (lastSuccessfulHost) {
+                const parsed = parseInt(lastSuccessfulHost, 10);
+                if (!isNaN(parsed) && parsed >= 0 && parsed < UJNAPI.EA_HOSTS.length) {
+                    hostIndex = parsed;
+                    console.log(`使用上次成功登录节点索引: ${hostIndex}`);
+                }
+            } else {
+                const savedHost = localStorage.getItem('ujn_assistant_EA_HOST');
+                if (savedHost) {
+                    const parsed = parseInt(savedHost, 10);
+                    if (!isNaN(parsed) && parsed >= 0 && parsed < UJNAPI.EA_HOSTS.length) {
+                        hostIndex = parsed;
+                        console.log(`使用保存的节点索引: ${hostIndex}`);
+                    }
+                }
+            }
+        } catch (e) {
+            console.error("获取节点索引失败，使用默认值0", e);
+        }
+
+        // 确保获取到有效的主机地址
+        const host = UJNAPI.EA_HOSTS[hostIndex];
+        if (!host) {
+            console.error("无法获取有效的主机地址！UJNAPI.EA_HOSTS:", UJNAPI.EA_HOSTS);
+            throw new Error("初始化失败：无法获取有效的教务主机地址");
+        }
+
+        console.log(`初始化 EASAccount: 使用主机 ${host}`);
+
         super(
-            UJNAPI.EA_HOSTS[store.getInt('EA_HOST', 0)],
+            host,
             'EAS_ACCOUNT',
             'EAS_PASSWORD',
             'http',
             'eaCookie'
         );
 
-        // 入学年份
-        this._entranceTime = store.getInt('ENTRANCE_TIME', -1);
+        // 保存当前使用的节点索引
+        this._currentHostIndex = hostIndex;
+
+        // 入学年份 - 同样使用同步方式
+        this._entranceTime = localStorage.getItem('ujn_assistant_ENTRANCE_TIME') ?
+            parseInt(localStorage.getItem('ujn_assistant_ENTRANCE_TIME'), 10) : -1;
 
         // 使用CookieJar管理Cookie
         this.cookieJar = new CookieJar(this.scheme, this.host, this.cookieName);
@@ -100,6 +142,10 @@ class EASAccount extends Account {
      * @returns {string} 完整URL
      */
     getFullUrl(path) {
+        if (!this.host) {
+            console.error("错误: 主机为undefined");
+            throw new Error("主机未定义，无法构建URL");
+        }
         return `${this.scheme}://${this.host}/${path}`;
     }
 
@@ -124,6 +170,7 @@ class EASAccount extends Account {
     async absCheckLogin() {
         try {
             console.log("检查登录状态...");
+            console.log("当前主机:", this.host); // 添加这行
 
             // 检查是否有保存的Cookie
             const cookies = await this.cookieJar.getCookies();
@@ -328,6 +375,12 @@ class EASAccount extends Account {
 
                     // 设置登录成功状态
                     this.isLogin = true;
+                    // 记录当前成功使用的节点索引
+                    const currentHostIndex = UJNAPI.EA_HOSTS.indexOf(this.host);
+                    if (currentHostIndex >= 0) {
+                        console.log(`登录成功，保存当前使用的节点索引: ${currentHostIndex}`);
+                        localStorage.setItem('ujn_assistant_LAST_SUCCESSFUL_HOST', currentHostIndex.toString());
+                    }
                     return true;
                 } else {
                     console.warn("登录成功但未收到Cookie，尝试二次验证");
@@ -362,6 +415,12 @@ class EASAccount extends Account {
             if (hasStudentInfo) {
                 console.log("登录成功 (备用验证)");
                 this.isLogin = true;
+                // 记录当前成功使用的节点索引
+                const currentHostIndex = UJNAPI.EA_HOSTS.indexOf(this.host);
+                if (currentHostIndex >= 0) {
+                    console.log(`登录成功，保存当前使用的节点索引: ${currentHostIndex}`);
+                    localStorage.setItem('ujn_assistant_LAST_SUCCESSFUL_HOST', currentHostIndex.toString());
+                }
                 return true;
             }
 
