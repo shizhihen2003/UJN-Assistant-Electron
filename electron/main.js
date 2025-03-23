@@ -88,6 +88,7 @@ function setupIPC() {
     });
 
     // 统一的 EAS 请求处理函数
+    // 统一的 EAS 请求处理函数
     ipcMain.handle('eas:request', async (event, args) => {
         try {
             const { method, url, data, cookies, headers = {} } = args;
@@ -109,19 +110,41 @@ function setupIPC() {
 
             // 如果是 POST 请求，添加表单数据
             if (method === 'POST' && data) {
-                const formData = new FormData();
-                for (const key in data) {
-                    formData.append(key, data[key]);
-                }
+                // 检查Content-Type
+                if (headers['Content-Type'] === 'application/x-www-form-urlencoded') {
+                    // 如果是表单提交，确保数据是字符串格式
+                    if (typeof data !== 'string') {
+                        const params = new URLSearchParams();
+                        for (const key in data) {
+                            params.append(key, data[key]);
+                        }
+                        options.body = params.toString();
+                        console.log(`[主进程] 已转换表单数据: ${options.body}`);
+                    } else {
+                        options.body = data;
+                    }
+                } else {
+                    // 默认使用FormData
+                    const formData = new FormData();
+                    for (const key in data) {
+                        formData.append(key, data[key]);
+                    }
+                    options.body = formData;
 
-                options.body = formData;
-                // 添加表单头部
-                if (formData.getBoundary) {
-                    requestHeaders['Content-Type'] = `multipart/form-data; boundary=${formData.getBoundary()}`;
+                    // 添加表单头部
+                    if (formData.getBoundary) {
+                        requestHeaders['Content-Type'] = `multipart/form-data; boundary=${formData.getBoundary()}`;
+                    }
                 }
             }
 
             // 执行请求
+            console.log(`[主进程] 发送${method}请求: ${url}`);
+            console.log(`[主进程] 请求头: ${JSON.stringify(requestHeaders)}`);
+            if (options.body) {
+                console.log(`[主进程] 请求数据: ${typeof options.body === 'string' ? options.body : '(FormData)'}`);
+            }
+
             const response = await fetch(url, options);
 
             // 获取响应内容
@@ -134,6 +157,10 @@ function setupIPC() {
 
             // 获取设置的 Cookie
             const responseCookies = response.headers.raw()['set-cookie'] || [];
+            console.log(`[主进程] 响应状态: ${response.status}`);
+            if (responseCookies.length > 0) {
+                console.log(`[主进程] 收到Cookie: ${responseCookies.length}个`);
+            }
 
             // 确定请求是否成功
             let success = response.status >= 200 && response.status < 300;
@@ -234,7 +261,7 @@ function setupIPC() {
     });
 }
 
-// 初始化 app
+// 初始化 app©∫
 app.whenReady().then(() => {
     const mainWindow = createWindow();
     setupIPC();

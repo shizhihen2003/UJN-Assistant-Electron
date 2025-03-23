@@ -1,4 +1,4 @@
-<!-- src/views/login/EASLogin.vue -->
+<!-- src/views/Login/EASLogin.vue -->
 <template>
   <div class="login-container">
     <h1 class="page-title">教务系统登录</h1>
@@ -36,7 +36,7 @@
         <el-form-item label="入学年份" prop="entranceYear">
           <el-input-number
               v-model="loginForm.entranceYear"
-              :min="2000"
+              :min="1990"
               :max="currentYear"
               controls-position="right"
           ></el-input-number>
@@ -81,17 +81,27 @@
           </span>
         </div>
       </el-form>
+
+      <div class="server-status" v-if="serverStatus">
+        <el-alert
+            :title="serverStatus.message"
+            :type="serverStatus.type"
+            :closable="false"
+            show-icon
+        />
+      </div>
     </el-card>
   </div>
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { User, Lock, Key, RefreshLeft, Connection } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import authService from '@/services/authService'
 import { UJNAPI } from '@/constants/api'
+import ipc from '@/utils/ipc'
 
 const router = useRouter()
 
@@ -99,6 +109,7 @@ const router = useRouter()
 const loginFormRef = ref(null)
 const loading = ref(false)
 const loginStatus = ref(null)
+const serverStatus = ref(null)
 const currentYear = new Date().getFullYear()
 
 // 教务节点列表
@@ -138,46 +149,114 @@ const rules = {
   ]
 }
 
+// 检查教务服务器连接状态
+const checkServerStatus = async () => {
+  try {
+    const host = eaNodes[loginForm.nodeIndex]
+    const url = `http://${host}/jwglxt/xtgl/login_slogin.html`
+
+    loading.value = true
+    serverStatus.value = { message: '正在检查教务服务器状态...', type: 'info' }
+
+    // 使用ipc直接发送请求检查状态
+    const result = await ipc.easGet(url, { timeout: 5000 })
+
+    if (result.success) {
+      serverStatus.value = { message: '教务服务器连接正常', type: 'success' }
+      setTimeout(() => {
+        serverStatus.value = null
+      }, 3000)
+    } else {
+      serverStatus.value = { message: '教务服务器连接异常，可尝试切换节点', type: 'warning' }
+    }
+  } catch (error) {
+    console.error('服务器状态检查失败', error)
+    serverStatus.value = { message: '教务服务器连接失败', type: 'error' }
+  } finally {
+    loading.value = false
+  }
+}
+
 // 处理登录
 const handleLogin = async () => {
-  if (!loginFormRef.value) return
+  if (!loginFormRef.value) return;
 
   try {
     // 表单验证
-    await loginFormRef.value.validate()
+    await loginFormRef.value.validate();
 
     // 显示加载状态
-    loading.value = true
-    loginStatus.value = { success: false, message: '正在登录...' }
+    loading.value = true;
+    loginStatus.value = { success: false, message: '正在登录...' };
+
+    // 检查教务节点
+    if (loginForm.nodeIndex >= 0 && loginForm.nodeIndex < eaNodes.length) {
+      // 设置主机
+      authService.easAccount.changeHost(loginForm.nodeIndex);
+    }
+
+    // 清空之前可能的登录状态，确保重新登录
+    authService.logoutEas();
 
     // 执行登录
+    console.log("开始登录...");
+    console.log(`使用账号: ${loginForm.username}, 节点索引: ${loginForm.nodeIndex}, 入学年份: ${loginForm.entranceYear}`);
+
     const result = await authService.loginEas(
         loginForm.username,
         loginForm.password,
         loginForm.entranceYear,
         loginForm.nodeIndex
-    )
+    );
 
-    if (result) {
+    console.log("登录结果:", result);
+
+    // 更新登录状态
+    loading.value = false;
+
+    if (result === true) {
       // 登录成功
-      loginStatus.value = { success: true, message: '登录成功，正在跳转...' }
-      ElMessage.success('登录成功')
+      loginStatus.value = { success: true, message: '登录成功，正在跳转...' };
+      ElMessage.success('登录成功');
+
+      // 保存账号信息
+      if (loginForm.savePassword) {
+        try {
+          await ipc.setStoreValue('EAS_ACCOUNT', loginForm.username);
+          await ipc.setStoreValue('EAS_PASSWORD', loginForm.password);
+          await ipc.setStoreValue('ENTRANCE_TIME', loginForm.entranceYear);
+          await ipc.setStoreValue('EA_HOST', loginForm.nodeIndex);
+          console.log("账号信息保存成功");
+        } catch (error) {
+          console.error('保存账号信息失败', error);
+        }
+      }
+
+      // 保存自动登录设置
+      if (loginForm.autoLogin) {
+        await authService.saveAutoLogin('eas', true);
+      }
 
       // 延迟跳转首页
       setTimeout(() => {
-        router.push('/')
-      }, 1000)
+        router.push('/');
+      }, 1000);
     } else {
       // 登录失败
-      loginStatus.value = { success: false, message: '用户名或密码错误' }
-      ElMessage.error('登录失败：用户名或密码错误')
+      loginStatus.value = { success: false, message: '用户名或密码错误' };
+      ElMessage.error('登录失败：用户名或密码错误');
+
+      // 检查服务器状态
+      checkServerStatus();
     }
   } catch (error) {
-    console.error('登录失败', error)
-    loginStatus.value = { success: false, message: `登录失败: ${error.message || '未知错误'}` }
-    ElMessage.error(`登录失败: ${error.message || '网络错误'}`)
-  } finally {
-    loading.value = false
+    console.error('登录过程出现异常', error);
+    loading.value = false;
+    loginStatus.value = { success: false, message: `登录失败: ${error.message || '未知错误'}` };
+    ElMessage.error(`登录失败: ${error.message || '网络错误'}`);
+
+    // 检查服务器状态
+    checkServerStatus();
   }
 }
 
@@ -186,6 +265,7 @@ const resetForm = () => {
   if (loginFormRef.value) {
     loginFormRef.value.resetFields()
     loginStatus.value = null
+    serverStatus.value = null
   }
 }
 
@@ -203,8 +283,16 @@ const autoSetEntranceYear = () => {
 }
 
 // 监听学号变化，自动设置入学年份
-const watchUsername = computed(() => loginForm.username)
-watchUsername.value && autoSetEntranceYear()
+watch(() => loginForm.username, (newValue) => {
+  if (newValue) {
+    autoSetEntranceYear()
+  }
+})
+
+// 监听节点变化
+watch(() => loginForm.nodeIndex, () => {
+  serverStatus.value = null
+})
 
 // 加载已保存的数据
 onMounted(async () => {
@@ -224,15 +312,19 @@ onMounted(async () => {
       loginForm.password = savedAccount.password || ''
       loginForm.entranceYear = savedAccount.entranceYear || currentYear - 4
       loginForm.nodeIndex = savedAccount.nodeIndex || 0
+      loginForm.autoLogin = savedAccount.autoLogin || false
 
       // 如果设置了自动登录
-      if (savedAccount.autoLogin) {
-        loginForm.autoLogin = true
+      if (savedAccount.autoLogin && savedAccount.username && savedAccount.password) {
         handleLogin()
       }
     }
+
+    // 检查服务器状态
+    checkServerStatus()
   } catch (error) {
     console.error('加载数据失败', error)
+    ElMessage.warning('加载保存的账号信息失败')
   }
 })
 </script>
@@ -268,6 +360,7 @@ onMounted(async () => {
 .login-status {
   text-align: center;
   margin-top: 16px;
+  margin-bottom: 16px;
 }
 
 .status-success {
@@ -282,5 +375,9 @@ onMounted(async () => {
   font-size: 12px;
   color: var(--el-color-info);
   margin-top: 4px;
+}
+
+.server-status {
+  margin-top: 16px;
 }
 </style>

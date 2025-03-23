@@ -52,26 +52,31 @@ class Account {
      * @returns {Promise<boolean>} 登录是否成功
      * @throws {Error} 网络错误
      */
+// 在 Account.js 中确保 login 方法正确处理结果
     async login(account, password, saveData = true) {
         if (!account || !password) {
-            this.isLogin = false
-            return false
+            this.isLogin = false;
+            return false;
         }
 
         try {
-            this.isLogin = await this.absLogin(account, password)
+            // 调用抽象登录方法并获取结果
+            const loginSuccess = await this.absLogin(account, password);
+            this.isLogin = loginSuccess;
 
-            if (saveData && this.isLogin) {
+            // 如果登录成功且需要保存数据
+            if (saveData && loginSuccess) {
                 await store.edit(async editor => {
-                    await editor.putString(this.accountName, account)
-                    await editor.putString(this.passwordName, password)
-                })
+                    await editor.putString(this.accountName, account);
+                    await editor.putString(this.passwordName, password);
+                });
             }
 
-            return this.isLogin
+            return loginSuccess;
         } catch (error) {
-            console.error('登录失败', error)
-            throw error
+            console.error('登录失败', error);
+            this.isLogin = false;
+            throw error;
         }
     }
 
@@ -82,19 +87,38 @@ class Account {
      */
     async checkLogin() {
         try {
-            this.isLogin = await this.absCheckLogin()
-            if (!this.isLogin) {
-                this.isLogin = await this.login()
+            // 检查是否已登录
+            const isAlreadyLoggedIn = await this.absCheckLogin();
+            this.isLogin = isAlreadyLoggedIn;
+
+            // 如果未登录，尝试使用保存的账号密码自动登录
+            if (!isAlreadyLoggedIn) {
+                console.log("未登录，尝试自动登录");
+                const account = await store.getString(this.accountName);
+                const password = await store.getString(this.passwordName);
+
+                if (account && password) {
+                    const loginSuccess = await this.login(account, password, false);
+                    this.isLogin = loginSuccess;
+
+                    if (!loginSuccess) {
+                        console.error("自动登录失败");
+                        throw new NeedLoginException();
+                    }
+
+                    console.log("自动登录成功");
+                    return true;
+                } else {
+                    console.error("没有保存的账号密码，无法自动登录");
+                    throw new NeedLoginException();
+                }
             }
 
-            if (!this.isLogin) {
-                throw new NeedLoginException()
-            }
-
-            return true
+            return true;
         } catch (error) {
-            console.error('检查登录状态失败', error)
-            throw error
+            console.error('检查登录状态失败', error);
+            this.isLogin = false;
+            throw error;
         }
     }
 

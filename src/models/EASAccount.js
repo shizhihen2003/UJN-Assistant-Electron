@@ -1,11 +1,11 @@
 // src/models/EASAccount.js
 import Account from './Account';
+import CookieJar from './CookieJar';
 import { UJNAPI } from '../constants/api';
 import store from '../utils/store';
-import cryptoUtils from '../utils/cryptoUtils';
+import getenPassword from '../utils/cryptoUtils';
 import { ElMessage } from 'element-plus';
 import ipc from '../utils/ipc';
-import CookieJar from './CookieJar';
 
 /**
  * 教务系统账号类
@@ -109,14 +109,37 @@ class EASAccount extends Account {
      */
     async absCheckLogin() {
         try {
-            // 使用 ipc 发送请求
-            const result = await ipc.easGet(this.getFullUrl('jwglxt/xtgl/index_initMenu.html'), {
-                cookies: await store.getStringSet(this.cookieName)
+            console.log("检查登录状态...");
+
+            // 检查是否有保存的Cookie
+            const cookies = await this.cookieJar.getCookies();
+            if (!cookies || cookies.length === 0) {
+                console.log("没有保存的Cookie，需要重新登录");
+                return false;
+            }
+
+            // 尝试访问个人信息页面验证登录状态
+            const personalInfoUrl = 'jwglxt/xsxxxggl/xsxxwh_cxCkDgxsxx.html?gnmkdm=N100801';
+            const result = await ipc.easGet(this.getFullUrl(personalInfoUrl), {
+                cookies: cookies
             });
 
-            return result.success && result.status === 200;
+            // 检查响应是否包含个人信息，而不是无权限提示
+            const isLoggedIn = result.data &&
+                !result.data.includes("无功能权限") &&
+                (result.data.includes("学生信息") ||
+                    result.data.includes("姓名") ||
+                    result.data.includes("学号"));
+
+            if (isLoggedIn) {
+                console.log("登录状态有效");
+                return true;
+            }
+
+            console.log("登录状态已失效，需要重新登录");
+            return false;
         } catch (error) {
-            console.error('检查登录状态失败', error);
+            console.error("检查登录状态时出错", error);
             return false;
         }
     }
@@ -132,61 +155,223 @@ class EASAccount extends Account {
             // 清空之前的Cookie
             this.cookieJar.clearCookies();
 
-            // 获取登录页面
-            const loginPageResult = await ipc.easGet(this.getFullUrl(UJNAPI.EA_LOGIN));
+            console.log("=== 开始登录流程 ===");
+            console.log(`账号: ${account}`);
+            console.log(`密码长度: ${password.length}`);
 
+            // 步骤1: 获取登录页面获取CSRF令牌
+            const timestamp = new Date().getTime();
+            console.log(`\n[步骤1] 获取登录页面和CSRF令牌 (${timestamp})`);
+
+            const loginPageUrl = this.getFullUrl(`${UJNAPI.EA_LOGIN}?time=${timestamp}`);
+            console.log(`请求登录页面: ${loginPageUrl}`);
+
+            const loginPageResult = await ipc.easGet(loginPageUrl);
             if (!loginPageResult.success) {
-                throw new Error(loginPageResult.error || '无法获取登录页面');
+                console.error("获取登录页面失败:", loginPageResult.error || '未知错误');
+                return false;
             }
 
-            // 提取 csrftoken
+            // 保存初始 cookie
+            if (loginPageResult.cookies && loginPageResult.cookies.length > 0) {
+                console.log("保存初始 Cookie:", loginPageResult.cookies);
+                await this.cookieJar.saveCookies(loginPageResult.cookies);
+            }
+
             const loginPageHtml = loginPageResult.data;
-            const csrfTokenMatch = loginPageHtml.match(/<input[^>]+name="csrftoken"[^>]+value="([^"]+)"/);
+            // 提取CSRF令牌
+            const csrfTokenRegex = /<input[^>]+name="csrftoken"[^>]+value="([^"]+)"/i;
+            const csrfTokenMatch = loginPageHtml.match(csrfTokenRegex);
+
             if (!csrfTokenMatch) {
-                throw new Error('无法获取 csrfToken');
+                console.error("无法获取CSRF令牌");
+                console.log("登录页面内容片段:", loginPageHtml.substring(0, 500));
+                return false;
             }
+
             const csrfToken = csrfTokenMatch[1];
+            console.log("成功获取CSRF令牌:", csrfToken);
 
-            // 获取 RSA 公钥
-            const publicKeyResult = await ipc.easGet(this.getFullUrl(UJNAPI.EA_LOGIN_PUBLIC_KEY));
+            // 步骤2: 获取RSA公钥
+            console.log(`\n[步骤2] 获取RSA公钥`);
 
-            if (!publicKeyResult.success) {
-                throw new Error(publicKeyResult.error || '无法获取 RSA 公钥');
-            }
+            const publicKeyUrl = this.getFullUrl(UJNAPI.EA_LOGIN_PUBLIC_KEY);
+            console.log(`请求公钥URL: ${publicKeyUrl}`);
 
-            const publicKeyData = JSON.parse(publicKeyResult.data);
-            if (!publicKeyData.modulus) {
-                throw new Error('无法获取 publicKey');
-            }
+            const publicKeyParams = { time: timestamp, _: timestamp };
+            const publicKeyHeaders = {
+                'Referer': loginPageUrl
+            };
 
-            // 使用 RSA 加密密码
-            const rsaPassword = cryptoUtils.encryptPassword(password, publicKeyData.modulus, publicKeyData.exponent);
-            if (!rsaPassword) {
-                throw new Error('RSA 加密出错');
-            }
-
-            // 执行登录
-            const loginResult = await ipc.easPost(this.getFullUrl(UJNAPI.EA_LOGIN), {
-                csrftoken: csrfToken,
-                yhm: account,
-                mm: rsaPassword
+            const currentCookies = await this.cookieJar.getCookies();
+            const publicKeyResult = await ipc.easGet(publicKeyUrl, {
+                params: publicKeyParams,
+                headers: publicKeyHeaders,
+                cookies: currentCookies
             });
 
-            if (loginResult.success) {
-                // 保存 Cookie
-                if (loginResult.cookies) {
-                    await store.putStringSet(this.cookieName, new Set(loginResult.cookies));
+            if (!publicKeyResult.success) {
+                console.error("获取公钥失败:", publicKeyResult.error || '未知错误');
+                return false;
+            }
+
+            let publicKeyData;
+            try {
+                publicKeyData = JSON.parse(publicKeyResult.data);
+            } catch (e) {
+                console.error("解析公钥JSON失败:", e);
+                console.log("公钥响应内容:", publicKeyResult.data);
+                return false;
+            }
+
+            if (!publicKeyData.modulus) {
+                console.error("公钥数据不完整");
+                console.log("公钥响应内容:", publicKeyResult.data);
+                return false;
+            }
+
+            console.log("成功获取公钥:");
+            console.log("- 模数(modulus)前20字符:", publicKeyData.modulus.substring(0, 20) + "...");
+            console.log("- 指数(exponent):", publicKeyData.exponent);
+
+            // 步骤3: 加密密码
+            console.log(`\n[步骤3] 加密密码`);
+
+            // 使用原始的cryptoUtils.js中的加密方法
+            const rsaPassword = getenPassword(password, publicKeyData.modulus, publicKeyData.exponent);
+            if (!rsaPassword) {
+                console.error("密码加密失败");
+                return false;
+            }
+
+            console.log("密码加密成功");
+
+            // 步骤4: 提交登录请求
+            console.log(`\n[步骤4] 提交登录请求`);
+
+            // 构造登录表单数据
+            const loginData = {
+                csrftoken: csrfToken,
+                language: 'zh_CN',
+                yhm: account,
+                mm: rsaPassword
+            };
+
+            console.log("登录表单数据:");
+            console.log("- csrftoken:", csrfToken);
+            console.log("- language: zh_CN");
+            console.log("- yhm:", account);
+            console.log("- mm: [已加密]");
+
+            const loginUrl = this.getFullUrl(UJNAPI.EA_LOGIN);
+            console.log("登录请求URL:", loginUrl);
+
+            const loginHeaders = {
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'Referer': loginPageUrl,
+                'Origin': this.getFullUrl(''),
+                'Upgrade-Insecure-Requests': '1'
+            };
+
+            console.log("发送登录请求...");
+            const cookies = await this.cookieJar.getCookies();
+
+            const loginResult = await ipc.easPost(loginUrl, loginData, {
+                headers: loginHeaders,
+                cookies: cookies
+            });
+
+            // 步骤5: 分析登录结果
+            console.log(`\n[步骤5] 分析登录结果`);
+            console.log(`登录请求状态码: ${loginResult.status}`);
+
+            // 特别关注并保存 Set-Cookie 头中的 JSESSIONID cookie
+            if (loginResult.cookies && loginResult.cookies.length > 0) {
+                console.log("登录响应返回的 Cookie:", loginResult.cookies);
+                const jsessionidCookie = loginResult.cookies.find(cookie => cookie.includes('JSESSIONID'));
+
+                if (jsessionidCookie) {
+                    console.log("找到 JSESSIONID Cookie:", jsessionidCookie);
+                    // 清空旧 cookie 并设置新的 JSESSIONID cookie
+                    this.cookieJar.clearCookies();
+                    await this.cookieJar.saveCookies([jsessionidCookie]);
+                    console.log("已保存 JSESSIONID Cookie");
+                } else {
+                    console.log("未找到 JSESSIONID Cookie");
+                    // 保存所有返回的 cookie
+                    await this.cookieJar.saveCookies(loginResult.cookies);
                 }
+            }
 
-                // 自动提取学生信息
-                this.fetchStudentInfo(account);
+            // 验证方法1: 检查状态码和重定向
+            const redirectSuccess = loginResult.status === 302 && !loginResult.location?.includes('login');
+            console.log(`验证方法1 (重定向): ${redirectSuccess ? '通过' : '失败'}`);
 
+            if (redirectSuccess) {
+                console.log("重定向URL:", loginResult.location);
+
+                // 保存Cookie
+                if (loginResult.cookies && loginResult.cookies.length > 0) {
+                    console.log("保存登录Cookie:", loginResult.cookies);
+                    await this.cookieJar.saveCookies(loginResult.cookies);
+
+                    console.log("登录成功 (重定向验证)");
+                    this.isLogin = true;
+                    return true;
+                } else {
+                    console.warn("警告: 登录成功但未收到Cookie");
+
+                    // 尝试进行二次验证
+                    const isValid = await this.absCheckLogin();
+                    if (isValid) {
+                        this.isLogin = true;
+                        return true;
+                    }
+                }
+            }
+
+            // 备用验证: 访问个人信息页面
+            console.log("\n尝试备用验证方式");
+            const personalInfoUrl = this.getFullUrl('jwglxt/xsxxxggl/xsxxwh_cxCkDgxsxx.html?gnmkdm=N100801');
+            console.log("请求个人信息页面:", personalInfoUrl);
+
+            const personalInfoResult = await ipc.easGet(personalInfoUrl);
+
+            // 检查是否包含学生信息
+            const personalInfoHtml = personalInfoResult.data || '';
+            const hasStudentInfo = personalInfoHtml.includes('学生信息') ||
+                personalInfoHtml.includes('姓名') ||
+                personalInfoHtml.includes('学号');
+
+            console.log(`备用验证: ${hasStudentInfo ? '通过' : '失败'}`);
+
+            if (hasStudentInfo) {
+                console.log("登录成功 (备用验证)");
+                this.isLogin = true;
                 return true;
             }
 
+            // 如果所有验证方法都失败，尝试提取错误信息
+            console.log("\n尝试提取错误信息");
+            try {
+                // 使用正则表达式提取错误信息
+                const errorMatch = loginResult.data.match(/<div[^>]*id=['"]tips['"][^>]*>(.*?)<\/div>/i);
+                if (errorMatch && errorMatch[1]) {
+                    const errorMsg = errorMatch[1].trim();
+                    console.error("登录失败，错误信息:", errorMsg);
+                } else {
+                    console.error("登录失败，无法提取错误信息");
+                }
+            } catch (e) {
+                console.error("解析错误信息失败:", e);
+            }
+
+            console.log("=== 登录流程结束：失败 ===");
+            this.isLogin = false;
             return false;
         } catch (error) {
-            console.error('登录失败', error);
+            console.error('登录过程发生异常:', error);
+            this.isLogin = false;
             return false;
         }
     }
@@ -197,14 +382,29 @@ class EASAccount extends Account {
      */
     async fetchStudentInfo(account) {
         try {
+            console.log("开始获取学生信息");
             // 获取学生信息
             const response = await ipc.easGet(
-                this.getFullUrl('jwglxt/xsxxxggl/xsxxwh_cxCkDgxsxx.html?gnmkdm=N100801'),
-                { cookies: await store.getStringSet(this.cookieName) }
+                this.getFullUrl('jwglxt/xsxxxggl/xsxxwh_cxCkDgxsxx.html?gnmkdm=N100801')
             );
 
-            // 处理响应...
-            console.log('获取学生信息成功');
+            if (!response.success || response.status !== 200) {
+                console.error("获取学生信息请求失败", response);
+                return false;
+            }
+
+            // 检查是否有权限查看
+            if (response.data.includes('无功能权限')) {
+                console.error("获取学生信息失败：无功能权限");
+                return false;
+            }
+
+            // 检查是否重定向到登录页
+            if (response.data.includes('id="yhm"') ||
+                response.data.includes('name="yhm"')) {
+                console.error("获取学生信息失败：未登录或会话已过期");
+                return false;
+            }
 
             // 提取学号中的入学年份信息
             if (account && account.length >= 4) {
@@ -213,10 +413,15 @@ class EASAccount extends Account {
 
                 if (!isNaN(year) && year >= 1990 && year <= new Date().getFullYear()) {
                     this.entranceTime = year;
+                    console.log(`设置入学年份: ${year}`);
                 }
             }
+
+            console.log("获取学生信息成功");
+            return true;
         } catch (error) {
             console.error('获取学生信息失败', error);
+            return false;
         }
     }
 
@@ -249,6 +454,9 @@ class EASAccount extends Account {
      */
     async queryMark(index, xnm, xqm) {
         try {
+            // 获取已保存的Cookie
+            const cookies = await this.cookieJar.getCookies();
+
             // 查询成绩列表
             const markResponse = await ipc.easPost(
                 this.getFullUrl(UJNAPI.GET_MARK),
@@ -257,7 +465,12 @@ class EASAccount extends Account {
                     xqm: xqm,
                     'queryModel.showCount': '999'
                 },
-                { cookies: await store.getStringSet(this.cookieName) }
+                {
+                    cookies: cookies,
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded'
+                    }
+                }
             );
 
             if (!markResponse.success) {
@@ -295,7 +508,12 @@ class EASAccount extends Account {
                     xqm: xqm,
                     'queryModel.showCount': '999'
                 },
-                { cookies: await store.getStringSet(this.cookieName) }
+                {
+                    cookies: cookies,
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded'
+                    }
+                }
             );
 
             if (!markDetailResponse.success) {
@@ -363,6 +581,9 @@ class EASAccount extends Account {
      */
     async queryNotice(page = 1, pageSize = 1) {
         try {
+            // 获取已保存的Cookie
+            const cookies = await this.cookieJar.getCookies();
+
             const response = await ipc.easPost(
                 this.getFullUrl(UJNAPI.EA_SYSTEM_NOTICE),
                 {
@@ -371,7 +592,12 @@ class EASAccount extends Account {
                     'queryModel.sortName': 'cjsj',
                     'queryModel.sortOrder': 'desc'
                 },
-                { cookies: await store.getStringSet(this.cookieName) }
+                {
+                    cookies: cookies,
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded'
+                    }
+                }
             );
 
             if (!response.success) {
@@ -408,6 +634,9 @@ class EASAccount extends Account {
      */
     async queryExam(xnm, xqm) {
         try {
+            // 获取已保存的Cookie
+            const cookies = await this.cookieJar.getCookies();
+
             const response = await ipc.easPost(
                 this.getFullUrl(UJNAPI.GET_EXAM),
                 {
@@ -415,7 +644,12 @@ class EASAccount extends Account {
                     xqm: xqm,
                     'queryModel.showCount': '999'
                 },
-                { cookies: await store.getStringSet(this.cookieName) }
+                {
+                    cookies: cookies,
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded'
+                    }
+                }
             );
 
             if (!response.success) {

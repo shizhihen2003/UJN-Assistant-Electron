@@ -56,7 +56,7 @@ class AuthService {
             }
 
             // 加载用户信息
-            this.loadUserInfo()
+            await this.loadUserInfo()
         } catch (error) {
             console.error('认证服务初始化失败', error)
         }
@@ -111,9 +111,19 @@ class AuthService {
      */
     async saveUserInfo() {
         try {
-            await store.putObject('userInfo', this.userInfo)
+            // 创建一个简单的对象，避免无法克隆的问题
+            const simpleUserInfo = {
+                studentId: this.userInfo.studentId,
+                name: this.userInfo.name || '',
+                entranceYear: this.userInfo.entranceYear || 0,
+                college: this.userInfo.college || '',
+                major: this.userInfo.major || '',
+                class: this.userInfo.class || ''
+            }
+            await store.putObject('userInfo', simpleUserInfo)
         } catch (error) {
             console.error('保存用户信息失败', error)
+            // 出错时也不要阻止登录流程继续
         }
     }
 
@@ -131,6 +141,7 @@ class AuthService {
                 this.easAccount.changeHost(nodeIndex)
             }
 
+            // 执行登录，需要确保这里的返回值正确反映登录是否成功
             const result = await this.easAccount.login(username, password, true)
 
             if (result) {
@@ -142,17 +153,24 @@ class AuthService {
                 this.userInfo.entranceYear = entranceYear
 
                 // 保存用户信息
-                await this.saveUserInfo()
+                try {
+                    await this.saveUserInfo()
+                } catch (error) {
+                    console.error('保存用户信息失败，但登录已成功', error)
+                }
 
                 // 更新登录状态
                 this.easLoginStatus.value = true
 
                 return true
             } else {
+                // 登录失败
+                this.easLoginStatus.value = false
                 return false
             }
         } catch (error) {
             console.error('教务系统登录失败', error)
+            this.easLoginStatus.value = false
             ElMessage.error(`登录失败: ${error.message || '网络错误'}`)
             return false
         }
@@ -173,17 +191,24 @@ class AuthService {
                 this.userInfo.studentId = username
 
                 // 保存用户信息
-                await this.saveUserInfo()
+                try {
+                    await this.saveUserInfo()
+                } catch (error) {
+                    console.error('保存用户信息失败，但登录已成功', error)
+                }
 
                 // 更新登录状态
                 this.ipassLoginStatus.value = true
 
                 return true
             } else {
+                // 登录失败
+                this.ipassLoginStatus.value = false
                 return false
             }
         } catch (error) {
             console.error('智慧济大登录失败', error)
+            this.ipassLoginStatus.value = false
             ElMessage.error(`登录失败: ${error.message || '网络错误'}`)
             return false
         }

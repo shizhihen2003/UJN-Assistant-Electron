@@ -22705,14 +22705,32 @@ function setupIPC() {
         redirect: "manual"
       };
       if (method === "POST" && data) {
-        const formData = new FormData();
-        for (const key in data) {
-          formData.append(key, data[key]);
+        if (headers["Content-Type"] === "application/x-www-form-urlencoded") {
+          if (typeof data !== "string") {
+            const params = new URLSearchParams();
+            for (const key in data) {
+              params.append(key, data[key]);
+            }
+            options.body = params.toString();
+            console.log(`[主进程] 已转换表单数据: ${options.body}`);
+          } else {
+            options.body = data;
+          }
+        } else {
+          const formData = new FormData();
+          for (const key in data) {
+            formData.append(key, data[key]);
+          }
+          options.body = formData;
+          if (formData.getBoundary) {
+            requestHeaders["Content-Type"] = `multipart/form-data; boundary=${formData.getBoundary()}`;
+          }
         }
-        options.body = formData;
-        if (formData.getBoundary) {
-          requestHeaders["Content-Type"] = `multipart/form-data; boundary=${formData.getBoundary()}`;
-        }
+      }
+      console.log(`[主进程] 发送${method}请求: ${url}`);
+      console.log(`[主进程] 请求头: ${JSON.stringify(requestHeaders)}`);
+      if (options.body) {
+        console.log(`[主进程] 请求数据: ${typeof options.body === "string" ? options.body : "(FormData)"}`);
       }
       const response = await fetch(url, options);
       let responseData;
@@ -22722,6 +22740,10 @@ function setupIPC() {
         responseData = "";
       }
       const responseCookies = response.headers.raw()["set-cookie"] || [];
+      console.log(`[主进程] 响应状态: ${response.status}`);
+      if (responseCookies.length > 0) {
+        console.log(`[主进程] 收到Cookie: ${responseCookies.length}个`);
+      }
       let success = response.status >= 200 && response.status < 300;
       if (method === "POST" && url.includes("login") && response.status === 302) {
         success = !((_a = response.headers.get("location")) == null ? void 0 : _a.includes("login"));
