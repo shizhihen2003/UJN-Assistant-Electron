@@ -104,6 +104,20 @@ class EASAccount extends Account {
     }
 
     /**
+     * 检查页面内容是否有效（已登录）
+     * @param {string} pageContent 页面内容
+     * @returns {boolean} 是否有效
+     */
+    isValidLoggedInPage(pageContent) {
+        return pageContent &&
+            !pageContent.includes("无功能权限") &&
+            !pageContent.includes("id=\"yhm\"") &&
+            !pageContent.includes("name=\"yhm\"") &&
+            (pageContent.includes("xh") ||
+                pageContent.includes("xm"));
+    }
+
+    /**
      * 检查登录状态
      * @returns {Promise<boolean>} 是否已登录
      */
@@ -121,15 +135,15 @@ class EASAccount extends Account {
             // 尝试访问个人信息页面验证登录状态
             const personalInfoUrl = 'jwglxt/xsxxxggl/xsxxwh_cxCkDgxsxx.html?gnmkdm=N100801';
             const result = await ipc.easGet(this.getFullUrl(personalInfoUrl), {
-                cookies: cookies
+                cookies: cookies,
+                headers: {
+                    'Referer': this.getFullUrl(''),
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                }
             });
 
-            // 检查响应是否包含个人信息，而不是无权限提示
-            const isLoggedIn = result.data &&
-                !result.data.includes("无功能权限") &&
-                (result.data.includes("学生信息") ||
-                    result.data.includes("姓名") ||
-                    result.data.includes("学号"));
+            // 检查响应是否包含个人信息
+            const isLoggedIn = this.isValidLoggedInPage(result.data);
 
             if (isLoggedIn) {
                 console.log("登录状态有效");
@@ -270,7 +284,8 @@ class EASAccount extends Account {
                 'Content-Type': 'application/x-www-form-urlencoded',
                 'Referer': loginPageUrl,
                 'Origin': this.getFullUrl(''),
-                'Upgrade-Insecure-Requests': '1'
+                'Upgrade-Insecure-Requests': '1',
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
             };
 
             console.log("发送登录请求...");
@@ -303,31 +318,23 @@ class EASAccount extends Account {
                 }
             }
 
-            // 验证方法1: 检查状态码和重定向
-            const redirectSuccess = loginResult.status === 302 && !loginResult.location?.includes('login');
-            console.log(`验证方法1 (重定向): ${redirectSuccess ? '通过' : '失败'}`);
+            // 修改: 优先处理302状态码，直接视为登录成功
+            if (loginResult.status === 302) {
+                console.log("收到302重定向状态码，登录成功");
 
-            if (redirectSuccess) {
-                console.log("重定向URL:", loginResult.location);
-
-                // 保存Cookie
                 if (loginResult.cookies && loginResult.cookies.length > 0) {
-                    console.log("保存登录Cookie:", loginResult.cookies);
-                    await this.cookieJar.saveCookies(loginResult.cookies);
+                    console.log("验证方法1 (重定向): 通过");
+                    // 已经在上面保存了Cookie，这里不需要重复保存
 
-                    console.log("登录成功 (重定向验证)");
+                    // 设置登录成功状态
                     this.isLogin = true;
                     return true;
                 } else {
-                    console.warn("警告: 登录成功但未收到Cookie");
-
-                    // 尝试进行二次验证
-                    const isValid = await this.absCheckLogin();
-                    if (isValid) {
-                        this.isLogin = true;
-                        return true;
-                    }
+                    console.warn("登录成功但未收到Cookie，尝试二次验证");
                 }
+            } else {
+                console.log("未收到302重定向状态码，验证方法1失败");
+                console.log("验证方法1 (重定向): 失败");
             }
 
             // 备用验证: 访问个人信息页面
@@ -335,13 +342,20 @@ class EASAccount extends Account {
             const personalInfoUrl = this.getFullUrl('jwglxt/xsxxxggl/xsxxwh_cxCkDgxsxx.html?gnmkdm=N100801');
             console.log("请求个人信息页面:", personalInfoUrl);
 
-            const personalInfoResult = await ipc.easGet(personalInfoUrl);
+            // 使用当前保存的Cookie和合适的请求头
+            const savedCookies = await this.cookieJar.getCookies();
+            console.log("使用已保存的Cookie进行验证:", savedCookies);
 
-            // 检查是否包含学生信息
-            const personalInfoHtml = personalInfoResult.data || '';
-            const hasStudentInfo = personalInfoHtml.includes('学生信息') ||
-                personalInfoHtml.includes('姓名') ||
-                personalInfoHtml.includes('学号');
+            const personalInfoResult = await ipc.easGet(personalInfoUrl, {
+                cookies: savedCookies,
+                headers: {
+                    'Referer': this.getFullUrl(''),
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                }
+            });
+
+            // 使用统一方法检查响应是否有效
+            const hasStudentInfo = this.isValidLoggedInPage(personalInfoResult.data);
 
             console.log(`备用验证: ${hasStudentInfo ? '通过' : '失败'}`);
 
@@ -383,9 +397,19 @@ class EASAccount extends Account {
     async fetchStudentInfo(account) {
         try {
             console.log("开始获取学生信息");
+            // 获取已保存的Cookie
+            const cookies = await this.cookieJar.getCookies();
+
             // 获取学生信息
             const response = await ipc.easGet(
-                this.getFullUrl('jwglxt/xsxxxggl/xsxxwh_cxCkDgxsxx.html?gnmkdm=N100801')
+                this.getFullUrl('jwglxt/xsxxxggl/xsxxwh_cxCkDgxsxx.html?gnmkdm=N100801'),
+                {
+                    cookies: cookies,
+                    headers: {
+                        'Referer': this.getFullUrl(''),
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                    }
+                }
             );
 
             if (!response.success || response.status !== 200) {
@@ -393,16 +417,9 @@ class EASAccount extends Account {
                 return false;
             }
 
-            // 检查是否有权限查看
-            if (response.data.includes('无功能权限')) {
-                console.error("获取学生信息失败：无功能权限");
-                return false;
-            }
-
-            // 检查是否重定向到登录页
-            if (response.data.includes('id="yhm"') ||
-                response.data.includes('name="yhm"')) {
-                console.error("获取学生信息失败：未登录或会话已过期");
+            // 使用统一方法检查响应是否有效
+            if (!this.isValidLoggedInPage(response.data)) {
+                console.error("获取学生信息失败：无权限或未登录");
                 return false;
             }
 
@@ -468,7 +485,9 @@ class EASAccount extends Account {
                 {
                     cookies: cookies,
                     headers: {
-                        'Content-Type': 'application/x-www-form-urlencoded'
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                        'Referer': this.getFullUrl(''),
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
                     }
                 }
             );
@@ -511,7 +530,9 @@ class EASAccount extends Account {
                 {
                     cookies: cookies,
                     headers: {
-                        'Content-Type': 'application/x-www-form-urlencoded'
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                        'Referer': this.getFullUrl(''),
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
                     }
                 }
             );
@@ -595,7 +616,9 @@ class EASAccount extends Account {
                 {
                     cookies: cookies,
                     headers: {
-                        'Content-Type': 'application/x-www-form-urlencoded'
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                        'Referer': this.getFullUrl(''),
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
                     }
                 }
             );
@@ -647,7 +670,9 @@ class EASAccount extends Account {
                 {
                     cookies: cookies,
                     headers: {
-                        'Content-Type': 'application/x-www-form-urlencoded'
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                        'Referer': this.getFullUrl(''),
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
                     }
                 }
             );
