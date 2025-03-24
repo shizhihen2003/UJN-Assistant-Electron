@@ -3,7 +3,7 @@
     <h1 class="page-title">教务通知</h1>
 
     <div class="controls">
-      <el-button type="primary" @click="refreshNotices" :loading="loading">
+      <el-button type="primary" @click="queryNotices" :loading="loading">
         <el-icon><Refresh /></el-icon> 刷新通知
       </el-button>
     </div>
@@ -26,7 +26,7 @@
       <el-card v-for="(notice, index) in notices" :key="index" class="notice-card">
         <template #header>
           <div class="notice-header">
-            <span class="notice-title">{{ notice.content.length > 30 ? notice.content.substring(0, 30) + '...' : notice.content }}</span>
+            <span class="notice-title">{{ notice.title || notice.content.substring(0, 30) + '...' }}</span>
             <span class="notice-time">{{ formatTime(notice.time) }}</span>
           </div>
         </template>
@@ -41,6 +41,8 @@ import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Refresh } from '@element-plus/icons-vue'
+import EASAccount from '@/models/EASAccount'
+import store from '@/utils/store'
 
 const router = useRouter()
 const loading = ref(false)
@@ -52,44 +54,71 @@ const formatTime = (timeString) => {
   if (!timeString) return ''
 
   try {
-    const date = new Date(timeString)
+    // 处理YYYY-MM-DD HH:MM:SS格式
+    const date = new Date(timeString.replace(/-/g, '/'))
+    if (isNaN(date.getTime())) {
+      return timeString
+    }
     return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')} ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
   } catch (error) {
+    console.error('时间格式化失败:', error)
     return timeString
   }
 }
 
+// 加载缓存的通知
+const loadCachedNotices = async () => {
+  try {
+    const cachedNotices = await store.getObject('eas_notices', [])
+    if (cachedNotices && cachedNotices.length > 0) {
+      notices.value = cachedNotices
+      console.log('从缓存加载通知:', cachedNotices.length)
+    }
+  } catch (error) {
+    console.error('加载缓存通知失败:', error)
+  }
+}
+
 // 刷新通知
-const refreshNotices = async () => {
+const queryNotices = async () => {
   loading.value = true
+  needLogin.value = false
 
   try {
-    // 实际开发中，这里应该调用实际的API获取通知
-    // 模拟获取通知数据
-    await new Promise(resolve => setTimeout(resolve, 1000))
+    const easAccount = EASAccount.getInstance()
 
-    // 模拟数据
-    notices.value = [
-      {
-        id: '1',
-        time: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString(),
-        content: '关于2024-2025学年第一学期期末考试安排的通知'
-      },
-      {
-        id: '2',
-        time: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString(),
-        content: '关于2024-2025学年暑假放假时间的通知'
-      },
-      {
-        id: '3',
-        time: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString(),
-        content: '关于本科生转专业申请的通知'
+    // 检查登录状态
+    const isLoggedIn = await easAccount.absCheckLogin()
+    if (!isLoggedIn) {
+      const loginSuccess = await easAccount.login()
+      if (!loginSuccess) {
+        needLogin.value = true
+        ElMessage.warning('请先登录教务系统')
+        return
       }
-    ]
+    }
 
-    needLogin.value = false
+    // 查询通知
+    console.log('开始查询教务通知')
+    const noticeResults = await easAccount.queryNotice(1, 20)
+
+    // 处理结果
+    if (noticeResults && noticeResults.length > 0) {
+      notices.value = noticeResults
+
+      // 缓存通知
+      await store.putObject('eas_notices', noticeResults)
+
+      ElMessage.success(`成功获取 ${noticeResults.length} 条通知`)
+    } else {
+      if (notices.value.length === 0) {
+        ElMessage.info('暂无教务通知')
+      } else {
+        ElMessage.info('通知已是最新')
+      }
+    }
   } catch (error) {
-    console.error('获取通知失败:', error)
+    console.error('查询通知失败:', error)
 
     if (error.message && error.message.includes('登录')) {
       needLogin.value = true
@@ -109,7 +138,18 @@ const goToLogin = () => {
 
 // 初始化
 onMounted(async () => {
-  await refreshNotices()
+  // 首先加载缓存的通知
+  await loadCachedNotices()
+
+  // 如果已经有缓存，显示缓存内容后再刷新
+  if (notices.value.length > 0) {
+    setTimeout(() => {
+      queryNotices()
+    }, 1000)
+  } else {
+    // 如果没有缓存，直接查询
+    await queryNotices()
+  }
 })
 </script>
 
@@ -142,6 +182,7 @@ onMounted(async () => {
   margin-top: 10px;
   color: #606266;
   line-height: 1.6;
+  white-space: pre-line;
 }
 
 .loading-container {
