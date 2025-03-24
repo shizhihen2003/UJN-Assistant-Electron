@@ -555,20 +555,55 @@ class EASAccount extends Account {
                 throw new Error(markResponse.error || '查询成绩失败');
             }
 
-            // 解析成绩数据
-            const markData = JSON.parse(markResponse.data);
+            // 尝试解析成绩数据
+            let markData;
+            try {
+                markData = JSON.parse(markResponse.data);
+            } catch (parseError) {
+                // 如果响应不是JSON，检查是否是HTML
+                if (markResponse.data.includes('<!doctype html>') ||
+                    markResponse.data.includes('<html>')) {
+                    // 检查是否包含无权限信息
+                    if (markResponse.data.includes('无功能权限') ||
+                        markResponse.data.includes('错误提示')) {
+                        throw new Error('无权限查询成绩或会话已过期，请重新登录');
+                    }
+                }
+                // 抛出原始解析错误
+                throw parseError;
+            }
+
             const markMap = new Map();
 
             if (markData && markData.items) {
                 for (const item of markData.items) {
                     const name = item.kcmc;
                     if (!markMap.has(name)) {
+                        // 生成唯一ID
+                        const id = `${index}_${item.kch_id}_${Date.now()}`;
+
+                        // 尝试解析成绩
+                        const scoreValue = parseFloat(item.cj || '0');
+
+                        // 计算绩点
+                        let gpaValue = '0';
+                        if (scoreValue >= 60) {
+                            if (item.ksxz === '正常考试') {
+                                gpaValue = (scoreValue >= 95) ? '5.0' :
+                                    ((5.0 - (95 - scoreValue) / 10).toFixed(2)).toString();
+                            } else {
+                                gpaValue = '1';
+                            }
+                        }
+
                         markMap.set(name, {
+                            id,
                             kchId: item.kch_id,
                             name: name.trim(),
                             type: item.ksxz || '正常考试',
                             credit: item.xf,
-                            mark: parseFloat(item.cj || '0'),
+                            mark: scoreValue,
+                            gpa: gpaValue,
                             time: item.tjsj ? new Date(item.tjsj) : new Date(),
                             items: [],
                             index: index,
@@ -578,78 +613,78 @@ class EASAccount extends Account {
                 }
             }
 
-            // 查询成绩详情
-            const markDetailResponse = await ipc.easPost(
-                this.getFullUrl(UJNAPI.GET_MARK_DETAIL),
-                {
-                    xnm: xnm,
-                    xqm: xqm,
-                    'queryModel.showCount': '999'
-                },
-                {
-                    cookies: cookies,
-                    headers: {
-                        'Content-Type': 'application/x-www-form-urlencoded',
-                        'Referer': this.getFullUrl(''),
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-                    }
-                }
-            );
-
-            if (!markDetailResponse.success) {
-                throw new Error(markDetailResponse.error || '查询成绩详情失败');
-            }
-
-            // 解析成绩详情数据
-            const markDetailData = JSON.parse(markDetailResponse.data);
-
-            if (markDetailData && markDetailData.items) {
-                for (const item of markDetailData.items) {
-                    const name = item.kcmc;
-                    let mark = markMap.get(name);
-
-                    if (!mark) {
-                        mark = {
-                            kchId: item.kch_id,
-                            name: name.trim(),
-                            type: item.ksxz || '正常考试',
-                            credit: item.xf,
-                            mark: 0,
-                            time: item.tjsj ? new Date(item.tjsj) : new Date(),
-                            items: [],
-                            index: index,
-                            isNew: 1
-                        };
-                        markMap.set(name, mark);
-                    }
-
-                    // 添加成绩项
-                    if (item.xmblmc) {
-                        if (item.xmblmc === '总评' && mark.mark === 0 && item.xmcj) {
-                            mark.mark = parseFloat(item.xmcj || '0');
-
-                            // 计算绩点
-                            if (mark.mark < 60) {
-                                mark.gpa = '0';
-                            } else if (mark.type === '正常考试') {
-                                mark.gpa = (mark.mark >= 95) ? '5.0' : ((5.0 - (95 - mark.mark) / 10).toFixed(2)).toString();
-                            } else {
-                                mark.gpa = '1';
-                            }
-                        } else {
-                            mark.items.push({
-                                name: item.xmblmc,
-                                mark: item.xmcj || ''
-                            });
+            // 尝试查询成绩详情
+            try {
+                const markDetailResponse = await ipc.easPost(
+                    this.getFullUrl(UJNAPI.GET_MARK_DETAIL),
+                    {
+                        xnm: xnm,
+                        xqm: xqm,
+                        'queryModel.showCount': '999'
+                    },
+                    {
+                        cookies: cookies,
+                        headers: {
+                            'Content-Type': 'application/x-www-form-urlencoded',
+                            'Referer': this.getFullUrl(''),
+                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
                         }
                     }
+                );
+
+                if (markDetailResponse.success) {
+                    // 尝试解析成绩详情数据
+                    try {
+                        const markDetailData = JSON.parse(markDetailResponse.data);
+
+                        if (markDetailData && markDetailData.items) {
+                            for (const item of markDetailData.items) {
+                                const name = item.kcmc;
+                                let mark = markMap.get(name);
+
+                                if (!mark) {
+                                    continue; // 跳过不存在的课程
+                                }
+
+                                // 添加成绩项
+                                if (item.xmblmc) {
+                                    if (item.xmblmc === '总评' && mark.mark === 0 && item.xmcj) {
+                                        mark.mark = parseFloat(item.xmcj || '0');
+
+                                        // 计算绩点
+                                        if (mark.mark < 60) {
+                                            mark.gpa = '0';
+                                        } else if (mark.type === '正常考试') {
+                                            mark.gpa = (mark.mark >= 95) ? '5.0' : ((5.0 - (95 - mark.mark) / 10).toFixed(2)).toString();
+                                        } else {
+                                            mark.gpa = '1';
+                                        }
+                                    } else {
+                                        mark.items.push({
+                                            name: item.xmblmc,
+                                            mark: item.xmcj || ''
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                    } catch (detailParseError) {
+                        console.warn('解析成绩详情失败，将只使用基本成绩信息', detailParseError);
+                        // 不抛出错误，继续使用基本成绩信息
+                    }
+                } else {
+                    console.warn('获取成绩详情失败，将只使用基本成绩信息');
+                    // 不抛出错误，继续使用基本成绩信息
                 }
+            } catch (detailError) {
+                console.warn('查询成绩详情出错，将只使用基本成绩信息', detailError);
+                // 不抛出错误，继续使用基本成绩信息
             }
 
             return Array.from(markMap.values());
         } catch (error) {
             console.error('查询成绩失败', error);
-            return [];
+            throw error;
         }
     }
 

@@ -2,6 +2,75 @@
 import ipc from './ipc';
 
 /**
+ * 将对象安全序列化为可存储的格式
+ * 处理循环引用、不可序列化的值等问题
+ * @param {*} obj 要序列化的对象
+ * @returns {*} 安全的可序列化对象
+ */
+function safeSerialize(obj) {
+    try {
+        // 尝试直接通过JSON序列化，如果成功就直接返回解析后的对象
+        return JSON.parse(JSON.stringify(obj));
+    } catch (error) {
+        console.warn('对象包含无法直接序列化的内容，将进行安全处理', error);
+
+        // 如果是数组，处理每个元素
+        if (Array.isArray(obj)) {
+            return obj.map(item => safeSerialize(item));
+        }
+
+        // 如果是对象，递归处理每个属性
+        if (obj && typeof obj === 'object' && obj !== null) {
+            const result = {};
+
+            // 获取所有可枚举的属性
+            for (const key in obj) {
+                if (Object.prototype.hasOwnProperty.call(obj, key)) {
+                    try {
+                        const value = obj[key];
+
+                        // 跳过函数
+                        if (typeof value === 'function') continue;
+
+                        // 处理Date对象
+                        if (value instanceof Date) {
+                            result[key] = value.toISOString();
+                            continue;
+                        }
+
+                        // 处理其他类型
+                        if (value === undefined) {
+                            // 跳过undefined
+                            continue;
+                        } else if (value === null) {
+                            result[key] = null;
+                        } else if (typeof value === 'object') {
+                            // 递归处理嵌套对象，但避免循环引用
+                            try {
+                                result[key] = safeSerialize(value);
+                            } catch (e) {
+                                // 如果无法序列化，用空对象或数组替代
+                                result[key] = Array.isArray(value) ? [] : {};
+                            }
+                        } else {
+                            // 处理原始类型
+                            result[key] = value;
+                        }
+                    } catch (propError) {
+                        console.warn(`无法序列化属性 ${key}`, propError);
+                        // 跳过无法处理的属性
+                    }
+                }
+            }
+            return result;
+        }
+
+        // 其他情况返回原始值的字符串表示或空字符串
+        return obj?.toString ? obj.toString() : '';
+    }
+}
+
+/**
  * 数据存储工具类
  * 用于持久化用户数据和设置
  * 支持Electron和Web环境
@@ -127,10 +196,12 @@ class Store {
      * @param {Set<string>} value 值
      */
     async putStringSet(key, value) {
+        const safeValue = safeSerialize(value);
+
         if (this.useElectron) {
-            await ipc.setStoreValue(this.getFullKey(key), Array.from(value));
+            await ipc.setStoreValue(this.getFullKey(key), Array.from(safeValue));
         } else {
-            localStorage.setItem(this.getFullKey(key), JSON.stringify(Array.from(value)));
+            localStorage.setItem(this.getFullKey(key), JSON.stringify(Array.from(safeValue)));
         }
     }
 
@@ -157,15 +228,57 @@ class Store {
     }
 
     /**
-     * 设置对象
+     * 安全地设置对象
      * @param {string} key 键名
      * @param {Object} value 值
      */
     async putObject(key, value) {
-        if (this.useElectron) {
-            await ipc.setStoreValue(this.getFullKey(key), value);
-        } else {
-            localStorage.setItem(this.getFullKey(key), JSON.stringify(value));
+        try {
+            // 安全序列化对象
+            const safeValue = safeSerialize(value);
+
+            if (this.useElectron) {
+                await ipc.setStoreValue(this.getFullKey(key), safeValue);
+            } else {
+                localStorage.setItem(this.getFullKey(key), JSON.stringify(safeValue));
+            }
+        } catch (error) {
+            console.error('存储对象失败:', error);
+
+            // 尝试使用更简单的方式存储
+            try {
+                // 创建一个简单的保底版本
+                let fallbackValue = {};
+
+                // 如果是数组，创建一个空数组
+                if (Array.isArray(value)) {
+                    fallbackValue = [];
+                    // 尝试处理每个元素，只保存基本类型
+                    for (const item of value) {
+                        if (item && typeof item === 'object') {
+                            // 只取对象的id和name属性（如果有的话）
+                            const simpleItem = {};
+                            if ('id' in item) simpleItem.id = String(item.id);
+                            if ('name' in item) simpleItem.name = String(item.name);
+                            fallbackValue.push(simpleItem);
+                        } else if (typeof item !== 'function') {
+                            // 直接添加基本类型
+                            fallbackValue.push(item);
+                        }
+                    }
+                }
+
+                if (this.useElectron) {
+                    await ipc.setStoreValue(this.getFullKey(key), fallbackValue);
+                } else {
+                    localStorage.setItem(this.getFullKey(key), JSON.stringify(fallbackValue));
+                }
+
+                console.warn('使用简化版本存储对象成功');
+            } catch (fallbackError) {
+                console.error('备选存储方式也失败:', fallbackError);
+                throw new Error('无法存储对象，所有尝试都失败');
+            }
         }
     }
 
@@ -177,8 +290,13 @@ class Store {
      */
     async getObject(key, defaultValue = {}) {
         if (this.useElectron) {
-            const value = await ipc.getStoreValue(this.getFullKey(key));
-            return value || defaultValue;
+            try {
+                const value = await ipc.getStoreValue(this.getFullKey(key));
+                return value || defaultValue;
+            } catch (error) {
+                console.error('获取对象失败:', error);
+                return defaultValue;
+            }
         } else {
             const value = localStorage.getItem(this.getFullKey(key));
             if (value === null) return defaultValue;
@@ -226,6 +344,35 @@ class Store {
     async edit(editCallback) {
         const editor = new StoreEditor(this);
         await editCallback(editor);
+    }
+
+    /**
+     * 安全地存储对象，如果无法存储则不抛出异常
+     * @param {string} key 键名
+     * @param {Object} value 对象
+     * @param {Object} fallback 备选存储对象，如果提供则在主存储失败时使用
+     * @returns {Promise<boolean>} 是否成功存储
+     */
+    async safePutObject(key, value, fallback = null) {
+        try {
+            await this.putObject(key, value);
+            return true;
+        } catch (error) {
+            console.error(`安全存储对象失败: ${key}`, error);
+
+            // 如果提供了备选对象，尝试存储它
+            if (fallback !== null) {
+                try {
+                    await this.putObject(key, fallback);
+                    console.log(`使用备选对象存储成功: ${key}`);
+                    return true;
+                } catch (fallbackError) {
+                    console.error(`备选存储也失败: ${key}`, fallbackError);
+                }
+            }
+
+            return false;
+        }
     }
 }
 
@@ -293,6 +440,18 @@ class StoreEditor {
      */
     async putObject(key, value) {
         await this.store.putObject(key, value);
+        return this;
+    }
+
+    /**
+     * 安全设置对象，失败时不抛出异常
+     * @param {string} key 键名
+     * @param {Object} value 值
+     * @param {Object} fallback 备选值
+     * @returns {StoreEditor} 编辑器实例
+     */
+    async safePutObject(key, value, fallback = null) {
+        await this.store.safePutObject(key, value, fallback);
         return this;
     }
 
