@@ -11,7 +11,15 @@
         </el-col>
       </el-row>
 
-      <el-empty v-if="todayLessons.length === 0" description="今日无课" />
+      <el-empty v-if="loading" description="加载中...">
+        <el-button :loading="true">加载课表</el-button>
+      </el-empty>
+
+      <el-empty v-else-if="needLogin" description="请先登录教务系统">
+        <el-button type="primary" @click="goToLogin">去登录</el-button>
+      </el-empty>
+
+      <el-empty v-else-if="todayLessons.length === 0" description="今日无课" />
 
       <div v-else class="lessons-container">
         <el-card
@@ -33,50 +41,31 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue';
+import { useRouter } from 'vue-router';
+import { ElMessage } from 'element-plus';
+import store from '@/utils/store';
+import EASAccount from '@/models/EASAccount';
 
-// 模拟数据 - 实际开发中需要从存储或API获取
-const currentWeek = ref(1)
-const currentDayOfWeek = ref(new Date().getDay() || 7) // 1-7 表示周一到周日
-const dayOfWeekMap = ['周日', '周一', '周二', '周三', '周四', '周五', '周六', '周日']
-const dayOfWeekText = computed(() => dayOfWeekMap[currentDayOfWeek.value])
+const router = useRouter();
+const loading = ref(true);
+const needLogin = ref(false);
+const currentWeek = ref(1);
+const currentDayOfWeek = ref(new Date().getDay() || 7); // 1-7 表示周一到周日
+const dayOfWeekMap = ['周日', '周一', '周二', '周三', '周四', '周五', '周六', '周日'];
+const dayOfWeekText = computed(() => dayOfWeekMap[currentDayOfWeek.value]);
 
 // 格式化当前日期
 const currentDate = computed(() => {
-  const date = new Date()
-  return `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日`
-})
+  const date = new Date();
+  return `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日`;
+});
 
 // 是否隐藏教师信息
-const hideTeacher = ref(true)
+const hideTeacher = ref(true);
 
-// 模拟今日课程数据
-const todayLessons = ref([
-  {
-    name: '高等数学',
-    place: '教学楼 A101',
-    teacher: '张老师',
-    count: 1, // 第几节开始
-    len: 2,   // 持续几节课
-    color: 1  // 颜色编号
-  },
-  {
-    name: '大学物理',
-    place: '教学楼 B203',
-    teacher: '李老师',
-    count: 3,
-    len: 2,
-    color: 2
-  },
-  {
-    name: '程序设计',
-    place: '计算机楼 304',
-    teacher: '王老师',
-    count: 7,
-    len: 2,
-    color: 3
-  }
-])
+// 今日课程列表
+const todayLessons = ref([]);
 
 // 颜色映射
 function getLessonColor(index) {
@@ -88,8 +77,8 @@ function getLessonColor(index) {
     '#909399', // 灰色
     '#9B55FF', // 紫色
     '#36CEBB'  // 青色
-  ]
-  return colors[index % colors.length]
+  ];
+  return colors[(index || 0) % colors.length];
 }
 
 // 获取时间段
@@ -105,27 +94,148 @@ function getTimeSlot(start, len) {
     '17:10-18:00', // 第8节
     '19:00-19:50', // 第9节
     '20:00-20:50'  // 第10节
-  ]
+  ];
 
-  const startTime = timeSlots[start - 1].split('-')[0]
-  const endTime = timeSlots[start + len - 2].split('-')[1]
+  if (!timeSlots[start - 1] || !timeSlots[start + len - 2]) {
+    return `第${start}-${start + len - 1}节`;
+  }
 
-  return `${startTime} - ${endTime}`
+  const startTime = timeSlots[start - 1].split('-')[0];
+  const endTime = timeSlots[start + len - 2].split('-')[1];
+
+  return `${startTime} - ${endTime}`;
 }
+
+// 跳转到登录页面
+const goToLogin = () => {
+  router.push('/login/eas');
+};
+
+// 将 BigInt 字符串转换为 BigInt 对象
+function parseBigInt(str) {
+  try {
+    if (typeof str === 'string') {
+      return BigInt(str);
+    } else if (typeof str === 'number') {
+      return BigInt(str);
+    } else if (typeof str === 'bigint') {
+      return str;
+    }
+    return 0n;
+  } catch (e) {
+    console.error('解析 BigInt 失败:', e, str);
+    return 0n;
+  }
+}
+
+// 加载课表数据
+const loadLessonTable = async () => {
+  try {
+    loading.value = true;
+
+    // 加载保存的课表数据
+    const savedTable = await store.getObject('lesson_table', null);
+    const savedInfo = await store.getObject('lesson_table_info', null);
+
+    if (!savedTable || !savedInfo) {
+      loading.value = false;
+      ElMessage.warning('未找到课表数据，请先在课表查询页面获取数据');
+      needLogin.value = true;
+      return;
+    }
+
+    // 设置当前周次
+    if (savedInfo.totalWeek) {
+      currentWeek.value = getCurrentWeek(savedInfo.startDay, savedInfo.totalWeek);
+    }
+
+    // 提取今日课程
+    extractTodayLessons(savedTable, currentWeek.value, currentDayOfWeek.value);
+
+    loading.value = false;
+  } catch (error) {
+    console.error('加载课表数据失败:', error);
+    ElMessage.error('加载课表数据失败: ' + error.message);
+    loading.value = false;
+  }
+};
+
+// 根据保存的数据获取当前周次
+const getCurrentWeek = (startDayStr, totalWeeks) => {
+  try {
+    const now = new Date();
+    const startDay = new Date(startDayStr);
+
+    // 计算当前周次
+    const timeDiff = now.getTime() - startDay.getTime();
+    const dayDiff = Math.floor(timeDiff / (1000 * 60 * 60 * 24));
+    const weekDiff = Math.floor(dayDiff / 7) + 1;
+
+    return Math.max(1, Math.min(weekDiff, totalWeeks));
+  } catch (error) {
+    console.error('计算当前周次失败:', error);
+    return 1;
+  }
+};
+
+// 提取今日课程
+const extractTodayLessons = (lessonTable, week, dayOfWeek) => {
+  try {
+    todayLessons.value = [];
+
+    if (!lessonTable.lessons || !lessonTable.lessons[dayOfWeek - 1]) {
+      return;
+    }
+
+    const dayLessons = lessonTable.lessons[dayOfWeek - 1];
+    const weekBit = BigInt(1) << BigInt(week - 1);
+
+    // 遍历时间段
+    for (let timeIndex = 0; timeIndex < dayLessons.length; timeIndex++) {
+      const group = dayLessons[timeIndex];
+      if (!group || !group.lessons || group.lessons.length === 0) {
+        continue;
+      }
+
+      // 查找本周的课程
+      for (const lesson of group.lessons) {
+        // 解析周次位图
+        const weekBitmap = parseBigInt(lesson.week);
+
+        // 判断当前周是否有课
+        if ((weekBitmap & weekBit) !== 0n) {
+          todayLessons.value.push({
+            ...lesson,
+            count: group.count || (timeIndex + 1),
+            len: lesson.len || 1
+          });
+          break; // 找到第一个匹配的课程就跳出循环
+        }
+      }
+    }
+
+    // 按照课程开始时间排序
+    todayLessons.value.sort((a, b) => (a.count - b.count));
+
+  } catch (error) {
+    console.error('提取今日课程失败:', error);
+    todayLessons.value = [];
+  }
+};
 
 // 加载设置和课表数据
 onMounted(async () => {
-  // 实际开发中，这里应该从electron-store获取设置和课表数据
   try {
-    // 获取设置
-    // const settings = await window.electronAPI.getStoreValue('settings')
-    // hideTeacher.value = settings.hideTeacher
+    // 加载设置
+    hideTeacher.value = await store.getBoolean('HIDE_TEACHER', true);
 
-    // 加载课表数据 - 实际项目中需要替换为真实数据
+    // 加载课表
+    await loadLessonTable();
   } catch (error) {
-    console.error('加载数据失败:', error)
+    console.error('初始化失败:', error);
+    loading.value = false;
   }
-})
+});
 </script>
 
 <style scoped>
