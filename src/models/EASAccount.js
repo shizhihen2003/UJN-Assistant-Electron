@@ -381,6 +381,22 @@ class EASAccount extends Account {
                         console.log(`登录成功，保存当前使用的节点索引: ${currentHostIndex}`);
                         localStorage.setItem('ujn_assistant_LAST_SUCCESSFUL_HOST', currentHostIndex.toString());
                     }
+                    // 登录成功，同步保存入学年份
+                    try {
+                        if (this._entranceTime > 0) {
+                            localStorage.setItem('ujn_assistant_ENTRANCE_TIME', this._entranceTime.toString());
+                            console.log(`登录成功后同步入学年份到localStorage: ${this._entranceTime}`);
+
+                            // 如果有store模块，也保存到store中
+                            if (typeof store !== 'undefined' && store.putInt) {
+                                store.putInt('ENTRANCE_TIME', this._entranceTime).catch(err => {
+                                    console.error('登录后保存入学年份到store失败:', err);
+                                });
+                            }
+                        }
+                    } catch (e) {
+                        console.error('登录成功后保存入学年份失败:', e);
+                    }
                     return true;
                 } else {
                     console.warn("登录成功但未收到Cookie，尝试二次验证");
@@ -420,6 +436,22 @@ class EASAccount extends Account {
                 if (currentHostIndex >= 0) {
                     console.log(`登录成功，保存当前使用的节点索引: ${currentHostIndex}`);
                     localStorage.setItem('ujn_assistant_LAST_SUCCESSFUL_HOST', currentHostIndex.toString());
+                }
+                // 登录成功，同步保存入学年份
+                try {
+                    if (this._entranceTime > 0) {
+                        localStorage.setItem('ujn_assistant_ENTRANCE_TIME', this._entranceTime.toString());
+                        console.log(`登录成功后同步入学年份到localStorage: ${this._entranceTime}`);
+
+                        // 如果有store模块，也保存到store中
+                        if (typeof store !== 'undefined' && store.putInt) {
+                            store.putInt('ENTRANCE_TIME', this._entranceTime).catch(err => {
+                                console.error('登录后保存入学年份到store失败:', err);
+                            });
+                        }
+                    }
+                } catch (e) {
+                    console.error('登录成功后保存入学年份失败:', e);
                 }
                 return true;
             }

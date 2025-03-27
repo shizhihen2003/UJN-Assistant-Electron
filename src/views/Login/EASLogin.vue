@@ -1,4 +1,4 @@
-<!-- src/views/Login/EASLogin.vue -->
+<!-- src/views/Login/EASLogin.vue 增强版 -->
 <template>
   <div class="login-container">
     <h1 class="page-title">教务系统登录</h1>
@@ -102,6 +102,7 @@ import { ElMessage } from 'element-plus'
 import authService from '@/services/authService'
 import { UJNAPI } from '@/constants/api'
 import ipc from '@/utils/ipc'
+import store from '@/utils/store'
 
 const router = useRouter()
 
@@ -201,6 +202,15 @@ const handleLogin = async () => {
     // 执行登录
     console.log("开始登录...");
     console.log(`使用账号: ${loginForm.username}, 节点索引: ${loginForm.nodeIndex}, 入学年份: ${loginForm.entranceYear}`);
+
+    // 确保保存入学年份到持久化存储
+    try {
+      // 在登录前先保存入学年份到本地存储
+      await store.putInt('ENTRANCE_TIME', loginForm.entranceYear);
+      console.log(`入学年份 ${loginForm.entranceYear} 已保存到本地存储`);
+    } catch (e) {
+      console.error("保存入学年份失败", e);
+    }
 
     const result = await authService.loginEas(
         loginForm.username,
@@ -314,9 +324,18 @@ onMounted(async () => {
       loginForm.nodeIndex = savedAccount.nodeIndex || 0
       loginForm.autoLogin = savedAccount.autoLogin || false
 
+      console.log(`已加载保存的账号信息，入学年份: ${loginForm.entranceYear}`);
+
       // 如果设置了自动登录
       if (savedAccount.autoLogin && savedAccount.username && savedAccount.password) {
         handleLogin()
+      }
+    } else {
+      // 即使没有保存账号，也尝试加载入学年份
+      const savedEntranceYear = await store.getInt('ENTRANCE_TIME', 0)
+      if (savedEntranceYear > 0) {
+        loginForm.entranceYear = savedEntranceYear
+        console.log(`已加载保存的入学年份: ${loginForm.entranceYear}`);
       }
     }
 

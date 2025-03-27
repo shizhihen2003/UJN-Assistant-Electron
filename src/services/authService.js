@@ -1,4 +1,4 @@
-// src/services/authService.js
+// src/services/authService.js (增强版)
 import { ref, reactive } from 'vue'
 import { ElMessage } from 'element-plus'
 import EASAccount from '../models/EASAccount'
@@ -39,6 +39,14 @@ class AuthService {
      */
     async init() {
         try {
+            // 加载入学年份
+            const entranceYear = await store.getInt('ENTRANCE_TIME', 0)
+            if (entranceYear > 0) {
+                console.log(`初始化: 从存储加载入学年份 ${entranceYear}`)
+                this.easAccount.entranceTime = entranceYear
+                this.userInfo.entranceYear = entranceYear
+            }
+
             // 检查教务系统登录状态
             const easAccount = await store.getString('EAS_ACCOUNT')
             const easPassword = await store.getString('EAS_PASSWORD')
@@ -97,9 +105,26 @@ class AuthService {
      */
     async loadUserInfo() {
         try {
+            // 从存储加载用户信息
             const savedUserInfo = await store.getObject('userInfo')
             if (savedUserInfo) {
                 Object.assign(this.userInfo, savedUserInfo)
+            }
+
+            // 从存储加载入学年份
+            if (!this.userInfo.entranceYear) {
+                const entranceYear = await store.getInt('ENTRANCE_TIME', 0)
+                if (entranceYear > 0) {
+                    this.userInfo.entranceYear = entranceYear
+                }
+            }
+
+            // 加载学号
+            if (!this.userInfo.studentId) {
+                const easAccount = await store.getString('EAS_ACCOUNT', '')
+                if (easAccount) {
+                    this.userInfo.studentId = easAccount
+                }
             }
         } catch (error) {
             console.error('加载用户信息失败', error)
@@ -121,6 +146,10 @@ class AuthService {
                 class: this.userInfo.class || ''
             }
             await store.putObject('userInfo', simpleUserInfo)
+
+            // 额外保存入学年份到专门的键值中
+            await store.putInt('ENTRANCE_TIME', this.userInfo.entranceYear || 0)
+            console.log(`已保存入学年份: ${this.userInfo.entranceYear}`)
         } catch (error) {
             console.error('保存用户信息失败', error)
             // 出错时也不要阻止登录流程继续
@@ -141,13 +170,18 @@ class AuthService {
                 this.easAccount.changeHost(nodeIndex)
             }
 
-            // 执行登录，需要确保这里的返回值正确反映登录是否成功
+            // 先设置入学年份到 EAS 账号和用户信息
+            this.easAccount.entranceTime = entranceYear
+            this.userInfo.entranceYear = entranceYear
+
+            // 确保入学年份立即保存到存储
+            await store.putInt('ENTRANCE_TIME', entranceYear)
+            console.log(`登录前：入学年份 ${entranceYear} 已保存到存储`)
+
+            // 执行登录
             const result = await this.easAccount.login(username, password, true)
 
             if (result) {
-                // 设置入学年份
-                this.easAccount.entranceTime = entranceYear
-
                 // 更新用户信息
                 this.userInfo.studentId = username
                 this.userInfo.entranceYear = entranceYear
@@ -245,11 +279,13 @@ class AuthService {
         await this.logoutEas()
         await this.logoutIpass()
 
-        // 清空用户信息
+        // 注意：登出时不清除入学年份，以便下次登录使用
+
+        // 清空其他用户信息
         Object.assign(this.userInfo, {
             studentId: '',
             name: '',
-            entranceYear: 0,
+            // 保留入学年份: this.userInfo.entranceYear,
             college: '',
             major: '',
             class: ''
