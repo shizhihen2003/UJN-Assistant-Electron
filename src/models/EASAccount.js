@@ -170,7 +170,7 @@ class EASAccount extends Account {
     async absCheckLogin() {
         try {
             console.log("检查登录状态...");
-            console.log("当前主机:", this.host); // 添加这行
+            console.log("当前主机:", this.host);
 
             // 检查是否有保存的Cookie
             const cookies = await this.cookieJar.getCookies();
@@ -184,8 +184,15 @@ class EASAccount extends Account {
             const result = await ipc.easGet(this.getFullUrl(personalInfoUrl), {
                 cookies: cookies,
                 headers: {
-                    'Referer': this.getFullUrl(''),
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                    'Host': this.host,
+                    'Proxy-Connection': 'keep-alive',
+                    'Cache-Control': 'max-age=0',
+                    'Upgrade-Insecure-Requests': '1',
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+                    'Accept-Encoding': 'gzip, deflate',
+                    'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+                    'Referer': this.getFullUrl('')
                 }
             });
 
@@ -194,6 +201,46 @@ class EASAccount extends Account {
 
             if (isLoggedIn) {
                 console.log("登录状态有效");
+
+                // 如果登录状态有效，尝试提取姓名并保存到用户信息
+                if (result.data) {
+                    try {
+                        // 尝试提取姓名
+                        let studentName = null;
+                        const patterns = [
+                            /<input[^>]*id="xm"[^>]*value="([^"]+)"/i,
+                            /<input[^>]*name="xm"[^>]*value="([^"]+)"/i,
+                            /<input[^>]*value="([^"]+)"[^>]*id="xm"/i,
+                            /<span[^>]*id="xm"[^>]*>([^<]+)<\/span>/i,
+                            /<p[^>]*id="xm"[^>]*>([^<]+)<\/p>/i,
+                            /<div[^>]*id="xhxm"[^>]*>([^<]+)<\/div>/i,
+                            /"xm":"([^"]+)"/
+                        ];
+
+                        for (const pattern of patterns) {
+                            const match = result.data.match(pattern);
+                            if (match && match[1]) {
+                                studentName = match[1].trim();
+                                console.log(`成功提取到学生姓名: ${studentName}`);
+                                break;
+                            }
+                        }
+
+                        if (studentName) {
+                            // 从存储中读取用户信息
+                            const userInfo = await store.getObject('userInfo', {});
+
+                            // 更新姓名并保存
+                            userInfo.name = studentName;
+                            await store.putObject('userInfo', userInfo);
+                            console.log('登录状态检查时更新了用户姓名:', studentName);
+                        }
+                    } catch (error) {
+                        console.error('提取姓名失败:', error);
+                        // 提取姓名失败不影响登录状态检查
+                    }
+                }
+
                 return true;
             }
 

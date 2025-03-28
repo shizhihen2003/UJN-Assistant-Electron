@@ -371,6 +371,38 @@ class AuthService {
             console.error('保存自动登录设置失败', error)
         }
     }
+
+    /**
+     * 获取本地存储的用户信息
+     * 这个方法直接从存储中获取，不会触发网络请求
+     * @returns {Promise<Object>} 用户信息对象
+     */
+    async getLocalUserInfo() {
+        try {
+            // 从存储中获取用户信息
+            const storedInfo = await store.getObject('userInfo', null);
+            if (storedInfo) {
+                return storedInfo;
+            }
+
+            // 如果没有找到存储的信息，尝试构建基本信息
+            const studentId = await store.getString('EAS_ACCOUNT', '');
+            const entranceYear = await store.getInt('ENTRANCE_TIME', 0);
+
+            return {
+                studentId,
+                entranceYear,
+                name: ''  // 如果存储中没有姓名信息，则返回空字符串
+            };
+        } catch (error) {
+            console.error('获取本地用户信息失败:', error);
+            return {
+                studentId: '',
+                name: '',
+                entranceYear: 0
+            };
+        }
+    }
 }
 
 // 创建单例实例

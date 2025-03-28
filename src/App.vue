@@ -118,6 +118,7 @@
             </el-breadcrumb>
           </div>
 
+          <!-- 用户信息区域 - 根据登录状态显示不同内容 -->
           <div class="user-info" v-if="isLoggedIn">
             <el-dropdown trigger="click">
               <div class="user-dropdown">
@@ -127,7 +128,7 @@
               </div>
               <template #dropdown>
                 <el-dropdown-menu>
-                  <el-dropdown-item>个人信息</el-dropdown-item>
+<!--                  <el-dropdown-item>个人信息</el-dropdown-item>-->
                   <el-dropdown-item divided @click="handleLogout">退出登录</el-dropdown-item>
                 </el-dropdown-menu>
               </template>
@@ -162,6 +163,7 @@
 </template>
 
 <script setup>
+// App.vue 的 script 部分
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import {
@@ -171,6 +173,7 @@ import {
 } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import zhCn from 'element-plus/es/locale/lang/zh-cn'
+import authService from '@/services/authService'
 
 // 侧边栏状态
 const isSidebarCollapsed = ref(false)
@@ -228,15 +231,71 @@ const closeWindow = () => {
 };
 
 // 登出处理
-const handleLogout = () => {
-  isLoggedIn.value = false
-  userName.value = ''
-  userAvatar.value = ''
-  ElMessage.success('已成功退出登录')
+const handleLogout = async () => {
+  try {
+    // 调用 authService 的登出方法
+    await authService.logoutAll();
+
+    // 更新本地状态
+    isLoggedIn.value = false;
+    userName.value = '';
+    userAvatar.value = '';
+
+    ElMessage.success('已成功退出登录');
+  } catch (error) {
+    console.error('退出登录失败:', error);
+    ElMessage.error('退出登录失败: ' + error.message);
+  }
+}
+
+// 更新登录状态和用户信息
+const updateUserInfo = async () => {
+  try {
+    // 获取登录状态
+    const loginStatus = authService.getLoginStatus();
+    isLoggedIn.value = loginStatus.isLoggedIn;
+
+    if (isLoggedIn.value) {
+      // 获取用户信息
+      const userInfo = authService.getUserInfo();
+
+      // 如果已经有姓名信息，则直接使用
+      if (userInfo.name) {
+        userName.value = userInfo.name;
+      }
+      // 如果没有姓名但已登录，尝试从 Cookie 或存储中获取已有会话信息
+      else if (loginStatus.eas && userInfo.studentId) {
+        try {
+          // 直接从已存储的用户信息中获取名字
+          // 这样避免再次调用可能需要权限的API
+          const storedUserInfo = await authService.getLocalUserInfo();
+          if (storedUserInfo && storedUserInfo.name) {
+            userName.value = storedUserInfo.name;
+          } else {
+            // 如果本地存储没有名字信息，则使用学号
+            userName.value = userInfo.studentId;
+          }
+        } catch (error) {
+          console.error('获取本地用户信息失败:', error);
+          userName.value = userInfo.studentId;
+        }
+      } else {
+        // 如果其他方式都失败，显示学号
+        userName.value = userInfo.studentId;
+      }
+
+      console.log('已更新用户信息:', { name: userName.value, studentId: userInfo.studentId });
+    } else {
+      userName.value = '';
+      userAvatar.value = '';
+    }
+  } catch (error) {
+    console.error('更新用户信息失败:', error);
+  }
 }
 
 // 生命周期钩子
-onMounted(() => {
+onMounted(async () => {
   // 初始化侧边栏状态
   const sidebarStatus = localStorage.getItem('sidebarStatus')
   isSidebarCollapsed.value = sidebarStatus === '1'
@@ -245,17 +304,31 @@ onMounted(() => {
   updateTime()
   setInterval(updateTime, 60000) // 每分钟更新
 
-  // 从本地存储加载用户状态
-  const savedUser = localStorage.getItem('user')
-  if (savedUser) {
-    try {
-      const user = JSON.parse(savedUser)
-      isLoggedIn.value = true
-      userName.value = user.name
-      userAvatar.value = user.avatar || ''
-    } catch (e) {
-      console.error('Failed to parse user data:', e)
+  // 检查登录状态 - 在应用启动时立即检查
+  try {
+    // 先检查EAS登录状态是否有效
+    if (authService.easAccount) {
+      // 尝试检查当前登录状态
+      const isEasLoggedIn = await authService.easAccount.absCheckLogin();
+      if (!isEasLoggedIn) {
+        // 如果当前会话失效，尝试使用保存的账户密码重新登录
+        const savedAccount = await authService.getSavedAccount('eas');
+        if (savedAccount && savedAccount.autoLogin) {
+          console.log('正在使用保存的账户自动登录...');
+          await authService.loginEas(
+              savedAccount.username,
+              savedAccount.password,
+              savedAccount.entranceYear,
+              savedAccount.nodeIndex
+          );
+        }
+      }
     }
+
+    // 更新用户信息显示
+    await updateUserInfo();
+  } catch (error) {
+    console.error('检查登录状态失败:', error);
   }
 
   // 检查网络状态
@@ -272,6 +345,21 @@ onMounted(() => {
     statusMessage.value = '网络连接已断开'
   })
 })
+
+// 监听路由变化，更新用户信息
+watch(
+    () => route.path,
+    () => {
+      updateUserInfo();
+    }
+)
+
+// 查看用户个人信息
+const viewUserInfo = () => {
+  // 此处可以添加查看个人信息的逻辑
+  // 比如打开个人信息页面或显示个人信息弹窗
+  ElMessage.info('个人信息功能暂未实现');
+}
 
 // 监听路由变化更新页面标题
 watch(
