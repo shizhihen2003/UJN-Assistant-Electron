@@ -21,6 +21,10 @@
       <el-button type="primary" @click="goToLogin">去登录</el-button>
     </el-empty>
 
+    <el-empty v-else-if="noOpeningDateSet" description="未设置开学日期">
+      <el-button type="primary" @click="goToSettings">去设置</el-button>
+    </el-empty>
+
     <el-card v-else class="term-schedule">
       <div class="schedule-header">
         <div class="time-column">时间</div>
@@ -42,7 +46,7 @@
         >
           <div class="time-column">
             <div class="time-slot">{{ timeSlot }}</div>
-            <div class="time-range">{{ getTimeRange(timeSlot) }}</div>
+            <div class="time-range">{{ getFullTimeRange(timeSlot) }}</div>
           </div>
 
           <div
@@ -62,7 +66,7 @@
             >
               <div class="lesson-name">{{ getLessonAt(day, timeSlot).name }}</div>
               <div class="lesson-place">{{ getLessonAt(day, timeSlot).place }}</div>
-              <div v-if="!hideTeacher && getLessonAt(day, timeSlot).teacher" class="lesson-teacher">
+              <div v-if="showTeacher && getLessonAt(day, timeSlot).teacher" class="lesson-teacher">
                 {{ getLessonAt(day, timeSlot).teacher }}
               </div>
             </div>
@@ -80,10 +84,10 @@
       <template v-if="selectedLesson">
         <h3>{{ selectedLesson.name }}</h3>
         <p><strong>地点:</strong> {{ selectedLesson.place }}</p>
-        <p v-if="!hideTeacher && selectedLesson.teacher">
+        <p v-if="showTeacher && selectedLesson.teacher">
           <strong>教师:</strong> {{ selectedLesson.teacher }}
         </p>
-        <p><strong>时间:</strong> {{ getTimeRange(selectedLesson.count) }} - {{ getTimeRange(selectedLesson.count + selectedLesson.len - 1, true) }}</p>
+        <p><strong>时间:</strong> {{ getClassTimeDisplay(selectedLesson) }}</p>
         <p><strong>周次:</strong> {{ formatWeeks(selectedLesson.week) }}</p>
       </template>
     </el-dialog>
@@ -91,7 +95,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, watch } from 'vue';
+import { ref, computed, onMounted, watch, onUnmounted } from 'vue';
 import { useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import store from '@/utils/store';
@@ -100,13 +104,28 @@ import EASAccount from '@/models/EASAccount';
 const router = useRouter();
 const loading = ref(true);
 const needLogin = ref(false);
+const noOpeningDateSet = ref(false);
 
 // 状态变量
 const totalWeeks = ref(20);
 const currentWeek = ref(1);
 const currentDay = ref(new Date().getDay() || 7); // 1-7 表示周一到周日
 const weekdays = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
-const hideTeacher = ref(true);
+const showTeacher = ref(false);
+
+// 时间设置
+const timeSlots = ref([
+  '08:00-08:50', // 第1节
+  '09:00-09:50', // 第2节
+  '10:10-11:00', // 第3节
+  '11:10-12:00', // 第4节
+  '14:00-14:50', // 第5节
+  '15:00-15:50', // 第6节
+  '16:10-17:00', // 第7节
+  '17:10-18:00', // 第8节
+  '19:00-19:50', // 第9节
+  '20:00-20:50'  // 第10节
+]);
 
 // 课表数据
 const lessonTable = ref({
@@ -119,27 +138,99 @@ const lessonTable = ref({
 const dialogVisible = ref(false);
 const selectedLesson = ref(null);
 
-// 获取时间范围
-function getTimeRange(timeSlot, endTime = false) {
-  const timeRanges = [
-    ['08:00', '08:50'], // 第1节
-    ['09:00', '09:50'], // 第2节
-    ['10:10', '11:00'], // 第3节
-    ['11:10', '12:00'], // 第4节
-    ['14:00', '14:50'], // 第5节
-    ['15:00', '15:50'], // 第6节
-    ['16:10', '17:00'], // 第7节
-    ['17:10', '18:00'], // 第8节
-    ['19:00', '19:50'], // 第9节
-    ['20:00', '20:50']  // 第10节
-  ];
+// 监听设置变更事件
+const handleSettingsChanged = async (event) => {
+  if (event && event.detail) {
+    // 直接从事件中获取新的设置值
+    showTeacher.value = event.detail.showTeacher;
+    console.log('实时更新教师信息显示设置:', showTeacher.value);
+  } else {
+    // 从存储中重新加载设置
+    showTeacher.value = await store.getBoolean('SHOW_TEACHER', false);
+    console.log('重新加载教师信息显示设置:', showTeacher.value);
+  }
+};
 
+// 加载自定义时间设置
+const loadTimeSettings = async () => {
+  try {
+    const customTimeSettings = await store.getObject('LESSON_TIME_SETTINGS', null);
+    if (customTimeSettings && customTimeSettings.length > 0) {
+      console.log('加载自定义时间设置:', customTimeSettings);
+      timeSlots.value = customTimeSettings.slice(0, 10);
+
+      // 如果自定义时间段数量小于10，用默认值补齐
+      if (customTimeSettings.length < 10) {
+        const defaultTimeSlots = [
+          '08:00-08:50', '09:00-09:50', '10:10-11:00', '11:10-12:00',
+          '14:00-14:50', '15:00-15:50', '16:10-17:00', '17:10-18:00',
+          '19:00-19:50', '20:00-20:50'
+        ];
+        for (let i = customTimeSettings.length; i < 10; i++) {
+          timeSlots.value.push(defaultTimeSlots[i]);
+        }
+      }
+    }
+  } catch (error) {
+    console.error('加载时间设置失败:', error);
+  }
+};
+
+// 获取完整时间范围
+function getFullTimeRange(timeSlot) {
   // 确保索引在有效范围内
-  if (timeSlot < 1 || timeSlot > timeRanges.length) {
+  if (timeSlot < 1 || timeSlot > timeSlots.value.length || !timeSlots.value[timeSlot - 1]) {
+    return `第${timeSlot}节`;
+  }
+
+  return timeSlots.value[timeSlot - 1] || `第${timeSlot}节`;
+}
+
+// 获取开始时间
+function getTimeStart(timeSlot) {
+  // 确保索引在有效范围内
+  if (timeSlot < 1 || timeSlot > timeSlots.value.length || !timeSlots.value[timeSlot - 1]) {
+    return `第${timeSlot}节`;
+  }
+
+  // 从时间段设置中获取开始时间
+  const timeRange = timeSlots.value[timeSlot - 1].split('-');
+  if (!timeRange || timeRange.length < 1) {
+    return `第${timeSlot}节`;
+  }
+  return timeRange[0] || `第${timeSlot}节`;
+}
+
+// 获取结束时间
+function getTimeEnd(timeSlot) {
+  // 确保索引在有效范围内
+  if (timeSlot < 1 || timeSlot > timeSlots.value.length || !timeSlots.value[timeSlot - 1]) {
+    return `第${timeSlot}节`;
+  }
+
+  // 从时间段设置中获取结束时间
+  const timeRange = timeSlots.value[timeSlot - 1].split('-');
+  if (!timeRange || timeRange.length < 2) {
+    return `第${timeSlot}节`;
+  }
+  return timeRange[1] || `第${timeSlot}节`;
+}
+
+// 获取课程时间显示内容
+function getClassTimeDisplay(lesson) {
+  if (!lesson || !lesson.count || !lesson.len) {
     return '未知时间';
   }
 
-  return endTime ? timeRanges[timeSlot - 1][1] : timeRanges[timeSlot - 1][0];
+  const startSlot = lesson.count;
+  const endSlot = lesson.count + lesson.len - 1;
+
+  // 获取起始和结束时间
+  const startTime = getTimeStart(startSlot);
+  const endTime = getTimeEnd(endSlot);
+
+  // 显示完整时间范围
+  return `${startTime} - ${endTime} (第${startSlot}-${endSlot}节)`;
 }
 
 // 将 BigInt 字符串转换为 BigInt 对象
@@ -175,7 +266,7 @@ function formatWeeks(weekBitmap) {
         if (start === null) start = i + 1;
       } else {
         if (start !== null) {
-          if (i === start) {
+          if (i - 1 === start - 1) {
             weeks.push(`${start}`);
           } else {
             weeks.push(`${start}-${i}`);
@@ -286,20 +377,42 @@ const goToLogin = () => {
   router.push('/login/eas');
 };
 
+// 跳转到设置页面
+const goToSettings = () => {
+  router.push('/settings');
+};
+
 // 根据保存的数据获取当前周次
 const getCurrentWeek = (startDayStr, totalWeeks) => {
   try {
+    if (!startDayStr) {
+      noOpeningDateSet.value = true;
+      return 1;  // 如果没有设置开学日期，默认为第1周并显示错误提示
+    }
+
     const now = new Date();
     const startDay = new Date(startDayStr);
+
+    // 检查开学日期是否有效
+    if (isNaN(startDay.getTime())) {
+      console.error('无效的开学日期:', startDayStr);
+      noOpeningDateSet.value = true;
+      return 1;
+    }
 
     // 计算当前周次
     const timeDiff = now.getTime() - startDay.getTime();
     const dayDiff = Math.floor(timeDiff / (1000 * 60 * 60 * 24));
     const weekDiff = Math.floor(dayDiff / 7) + 1;
 
+    // 有效的开学日期，隐藏错误提示
+    noOpeningDateSet.value = false;
+
+    console.log(`当前日期: ${now}, 开学日期: ${startDay}, 天数差: ${dayDiff}, 周次: ${weekDiff}`);
     return Math.max(1, Math.min(weekDiff, totalWeeks));
   } catch (error) {
     console.error('计算当前周次失败:', error);
+    noOpeningDateSet.value = true;
     return 1;
   }
 };
@@ -308,6 +421,9 @@ const getCurrentWeek = (startDayStr, totalWeeks) => {
 const loadLessonTable = async () => {
   try {
     loading.value = true;
+
+    // 加载自定义时间设置
+    await loadTimeSettings();
 
     // 加载保存的课表数据
     const savedTable = await store.getObject('lesson_table', null);
@@ -320,12 +436,22 @@ const loadLessonTable = async () => {
       return;
     }
 
+    // 从设置中获取自定义开学日期
+    const customOpeningDate = await store.getString('CUSTOM_OPENING_DATE', null);
+    const startDay = customOpeningDate || savedInfo.startDay;
+
     // 设置课表数据
     lessonTable.value = savedTable;
 
     // 设置总周数和当前周次
     totalWeeks.value = savedInfo.totalWeek || 20;
-    currentWeek.value = getCurrentWeek(savedInfo.startDay, totalWeeks.value);
+    currentWeek.value = getCurrentWeek(startDay, totalWeeks.value);
+
+    // 如果未设置开学日期，提前返回
+    if (noOpeningDateSet.value) {
+      loading.value = false;
+      return;
+    }
 
     loading.value = false;
   } catch (error) {
@@ -338,8 +464,12 @@ const loadLessonTable = async () => {
 // 加载设置和课表数据
 onMounted(async () => {
   try {
-    // 加载设置
-    hideTeacher.value = await store.getBoolean('HIDE_TEACHER', true);
+    // 加载设置 - 注意这里是直接获取显示教师信息的设置
+    showTeacher.value = await store.getBoolean('SHOW_TEACHER', false);
+    console.log('教师信息显示设置:', showTeacher.value);
+
+    // 注册设置变更事件监听器
+    window.addEventListener('ujn_settings_changed', handleSettingsChanged);
 
     // 加载课表
     await loadLessonTable();
@@ -352,6 +482,11 @@ onMounted(async () => {
 // 监听周次变化
 watch(currentWeek, (newWeek) => {
   console.log(`当前周次变更为: 第${newWeek}周`);
+});
+
+// 组件卸载时移除事件监听器
+onUnmounted(() => {
+  window.removeEventListener('ujn_settings_changed', handleSettingsChanged);
 });
 </script>
 

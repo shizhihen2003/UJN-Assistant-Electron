@@ -335,8 +335,8 @@ const disabledHours = () => {
 // 加载设置
 const loadSettings = async () => {
   try {
-    // 加载基本设置
-    settingsForm.showTeacher = !(await store.getBoolean('HIDE_TEACHER', true));
+    // 加载基本设置 - 直接加载"显示教师信息"设置
+    settingsForm.showTeacher = await store.getBoolean('SHOW_TEACHER', false);
 
     // 加载开学日期
     const openingDate = await store.getString('CUSTOM_OPENING_DATE', '');
@@ -607,8 +607,17 @@ const loadDataStatus = async () => {
 // 保存设置
 const saveSettings = async () => {
   try {
-    // 保存基本设置
-    await store.putBoolean('HIDE_TEACHER', !settingsForm.showTeacher);
+    // 保存基本设置 - 直接保存"显示教师信息"设置
+    await store.putBoolean('SHOW_TEACHER', settingsForm.showTeacher);
+
+    // 触发自定义事件来通知所有组件设置已更改
+    window.dispatchEvent(new CustomEvent('ujn_settings_changed', {
+      detail: {
+        showTeacher: settingsForm.showTeacher
+      }
+    }));
+
+    console.log('保存教师信息显示设置:', settingsForm.showTeacher);
     ElMessage.success('设置已保存');
   } catch (error) {
     console.error('保存设置失败:', error);
