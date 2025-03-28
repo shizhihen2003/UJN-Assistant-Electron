@@ -1,4 +1,8 @@
-<template>
+@media screen and (max-width: 480px) {
+.feature-grid {
+grid-template-columns: 1fr;
+}
+}<template>
   <div class="home-container">
     <!-- 状态卡片 -->
     <div class="status-cards">
@@ -109,7 +113,7 @@
                     <div class="lesson-title">{{ lesson.name }}</div>
                     <div class="lesson-details">
                       <el-tag size="small" effect="plain">{{ lesson.place }}</el-tag>
-                      <template v-if="!hideTeacher && lesson.teacher">
+                      <template v-if="showTeacher && lesson.teacher">
                         <el-tag size="small" type="info" effect="plain">{{ lesson.teacher }}</el-tag>
                       </template>
                     </div>
@@ -118,7 +122,10 @@
               </div>
             </template>
             <template v-else>
-              <el-empty description="今日无课" />
+              <el-empty v-if="!needLogin" description="今日无课" />
+              <el-empty v-else description="请先登录教务系统">
+                <el-button type="primary" @click="goToLogin">去登录</el-button>
+              </el-empty>
             </template>
           </div>
         </el-card>
@@ -146,15 +153,19 @@
                   class="notice-item"
                   @click="viewNoticeDetail(notice)"
               >
-                <div class="notice-title">{{ notice.title }}</div>
+                <div class="notice-title">{{ notice.title || '无标题通知' }}</div>
+                <div class="notice-content-preview">{{ getNoticePreview(notice.content) }}</div>
                 <div class="notice-meta">
-                  <span class="notice-source">{{ notice.source }}</span>
-                  <span class="notice-date">{{ notice.date }}</span>
+                  <span class="notice-source">{{ notice.source || '教务系统' }}</span>
+                  <span class="notice-date">{{ formatNoticeDate(notice.time) }}</span>
                 </div>
               </div>
             </template>
             <template v-else>
-              <el-empty description="暂无通知" />
+              <el-empty v-if="!needLogin" description="暂无通知" />
+              <el-empty v-else description="请先登录教务系统">
+                <el-button type="primary" @click="goToLogin">去登录</el-button>
+              </el-empty>
             </template>
           </div>
         </el-card>
@@ -191,30 +202,35 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import {
   Calendar, Monitor, Bell, Document, DataLine, Collection,
   AlarmClock, User, Timer, Key
 } from '@element-plus/icons-vue'
+import { ElMessage } from 'element-plus';
+import authService from '@/services/authService';
+import store from '@/utils/store';
+import EASAccount from '@/models/EASAccount';
 
-const router = useRouter()
+const router = useRouter();
 
 // 状态变量
-const isLoading = ref(true)
-const isNoticeLoading = ref(true)
-const currentWeek = ref(1)
-const currentDayOfWeek = ref(new Date().getDay() || 7) // 1-7 表示周一到周日
-const hideTeacher = ref(false)
+const isLoading = ref(true);
+const isNoticeLoading = ref(true);
+const needLogin = ref(false);
+const currentWeek = ref(1);
+const currentDayOfWeek = ref(new Date().getDay() || 7); // 1-7 表示周一到周日
+const showTeacher = ref(false);
 
-const dayOfWeekMap = ['周日', '周一', '周二', '周三', '周四', '周五', '周六', '周日']
-const dayOfWeekText = computed(() => dayOfWeekMap[currentDayOfWeek.value])
+const dayOfWeekMap = ['周日', '周一', '周二', '周三', '周四', '周五', '周六', '周日'];
+const dayOfWeekText = computed(() => dayOfWeekMap[currentDayOfWeek.value]);
 
 // 日期信息
 const dateInfo = computed(() => {
-  const date = new Date()
-  return `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日`
-})
+  const date = new Date();
+  return `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日`;
+});
 
 // 功能导航
 const features = [
@@ -274,224 +290,523 @@ const features = [
     route: '/login/eas',
     color: '#00C7BE'
   }
-]
+];
 
-// 模拟今日课程数据
-const todayLessons = ref([])
-const nextLesson = ref(null)
+// 今日课程数据
+const todayLessons = ref([]);
+const nextLesson = ref(null);
 
-// 模拟通知数据
-const notices = ref([])
+// 通知数据
+const notices = ref([]);
 
-// 模拟考试数据
-const upcomingExams = ref([])
+// 考试数据
+const upcomingExams = ref([]);
+
+// 时间设置 - 初始为空，从设置中加载
+const timeSlots = ref([]);
+
+// 监听设置变更事件
+const handleSettingsChanged = async (event) => {
+  if (event && event.detail) {
+    // 直接从事件中获取新的设置值
+    showTeacher.value = event.detail.showTeacher;
+    console.log('实时更新教师信息显示设置:', showTeacher.value);
+  } else {
+    // 从存储中重新加载设置
+    showTeacher.value = await store.getBoolean('SHOW_TEACHER', false);
+    console.log('重新加载教师信息显示设置:', showTeacher.value);
+  }
+};
+
+// 加载自定义时间设置
+const loadTimeSettings = async () => {
+  try {
+    const customTimeSettings = await store.getObject('LESSON_TIME_SETTINGS', null);
+    if (customTimeSettings && customTimeSettings.length > 0) {
+      console.log('加载自定义时间设置:', customTimeSettings);
+      timeSlots.value = customTimeSettings;
+    } else {
+      // 如果设置中没有时间数据，加载默认值
+      const defaultTimeSlots = [
+        '08:00-08:50', '09:00-09:50', '10:10-11:00', '11:10-12:00',
+        '14:00-14:50', '15:00-15:50', '16:10-17:00', '17:10-18:00',
+        '19:00-19:50', '20:00-20:50'
+      ];
+      timeSlots.value = defaultTimeSlots;
+      console.log('使用默认时间设置');
+    }
+  } catch (error) {
+    console.error('加载时间设置失败:', error);
+    // 出错时加载默认值
+    const defaultTimeSlots = [
+      '08:00-08:50', '09:00-09:50', '10:10-11:00', '11:10-12:00',
+      '14:00-14:50', '15:00-15:50', '16:10-17:00', '17:10-18:00',
+      '19:00-19:50', '20:00-20:50'
+    ];
+    timeSlots.value = defaultTimeSlots;
+  }
+};
 
 // 获取下一节课信息
 function getNextClassInfo() {
-  if (nextLesson.value) {
-    return `下一节: ${nextLesson.value.name} ${getTimeSlot(nextLesson.value.count, nextLesson.value.len)}`
-  } else if (todayLessons.value.length > 0) {
-    return '今日课程已结束'
-  } else {
-    return '今日无课'
+  if (!todayLessons.value.length) {
+    return '今日无课';
   }
+
+  const now = new Date();
+  const currentHour = now.getHours();
+  const currentMinute = now.getMinutes();
+  const currentTime = currentHour * 60 + currentMinute;
+
+  // 找到下一节要上的课
+  for (const lesson of todayLessons.value) {
+    const startTimeStr = getTimeStart(lesson.count);
+    if (!startTimeStr) continue;
+
+    const [startHour, startMinute] = startTimeStr.split(':').map(Number);
+    const startTime = startHour * 60 + startMinute;
+
+    if (startTime > currentTime) {
+      return `下一节: ${lesson.name} ${getTimeStart(lesson.count)}`;
+    }
+  }
+
+  return '今日课程已结束';
 }
 
 // 获取下一场考试信息
 function getNextExamInfo() {
   if (upcomingExams.value.length > 0) {
-    const nextExam = upcomingExams.value[0]
-    return `${nextExam.name} (${nextExam.date})`
+    const nextExam = upcomingExams.value[0];
+    return `${nextExam.name} (${nextExam.date})`;
   } else {
-    return '近期无考试'
+    return '近期无考试';
   }
 }
 
 // 判断是否为当前正在进行的课程
 function isCurrentLesson(lesson) {
-  const now = new Date()
-  const hour = now.getHours()
-  const minute = now.getMinutes()
+  const now = new Date();
+  const hour = now.getHours();
+  const minute = now.getMinutes();
+  const currentTimeInMinutes = hour * 60 + minute;
 
-  const timeSlots = [
-    {start: '08:00', end: '08:50'}, // 第1节
-    {start: '09:00', end: '09:50'}, // 第2节
-    {start: '10:10', end: '11:00'}, // 第3节
-    {start: '11:10', end: '12:00'}, // 第4节
-    {start: '14:00', end: '14:50'}, // 第5节
-    {start: '15:00', end: '15:50'}, // 第6节
-    {start: '16:10', end: '17:00'}, // 第7节
-    {start: '17:10', end: '18:00'}, // 第8节
-    {start: '19:00', end: '19:50'}, // 第9节
-    {start: '20:00', end: '20:50'}  // 第10节
-  ]
+  // 获取课程的开始和结束时间
+  const startTimeStr = getTimeStart(lesson.count);
+  const endTimeStr = getTimeEnd(lesson.count + lesson.len - 1);
 
-  const lessonStart = timeSlots[lesson.count - 1].start.split(':').map(Number)
-  const lessonEnd = timeSlots[lesson.count + lesson.len - 2].end.split(':').map(Number)
+  if (!startTimeStr || !endTimeStr) return false;
 
-  const currentTimeInMinutes = hour * 60 + minute
-  const lessonStartInMinutes = lessonStart[0] * 60 + lessonStart[1]
-  const lessonEndInMinutes = lessonEnd[0] * 60 + lessonEnd[1]
+  const [startHour, startMinute] = startTimeStr.split(':').map(Number);
+  const [endHour, endMinute] = endTimeStr.split(':').map(Number);
 
-  return currentTimeInMinutes >= lessonStartInMinutes && currentTimeInMinutes <= lessonEndInMinutes
+  const lessonStartInMinutes = startHour * 60 + startMinute;
+  const lessonEndInMinutes = endHour * 60 + endMinute;
+
+  return currentTimeInMinutes >= lessonStartInMinutes && currentTimeInMinutes <= lessonEndInMinutes;
+}
+
+// 获取开始时间
+function getTimeStart(timeSlot) {
+  // 确保索引在有效范围内
+  if (timeSlot < 1 || timeSlot > timeSlots.value.length || !timeSlots.value[timeSlot - 1]) {
+    return null;
+  }
+
+  // 从时间段设置中获取开始时间
+  const timeRange = timeSlots.value[timeSlot - 1].split('-');
+  if (!timeRange || timeRange.length < 1) {
+    return null;
+  }
+  return timeRange[0] || null;
+}
+
+// 获取结束时间
+function getTimeEnd(timeSlot) {
+  // 确保索引在有效范围内
+  if (timeSlot < 1 || timeSlot > timeSlots.value.length || !timeSlots.value[timeSlot - 1]) {
+    return null;
+  }
+
+  // 从时间段设置中获取结束时间
+  const timeRange = timeSlots.value[timeSlot - 1].split('-');
+  if (!timeRange || timeRange.length < 2) {
+    return null;
+  }
+  return timeRange[1] || null;
 }
 
 // 获取时间段
 function getTimeSlot(start, len) {
-  const timeSlots = [
-    {start: '08:00', end: '08:50'}, // 第1节
-    {start: '09:00', end: '09:50'}, // 第2节
-    {start: '10:10', end: '11:00'}, // 第3节
-    {start: '11:10', end: '12:00'}, // 第4节
-    {start: '14:00', end: '14:50'}, // 第5节
-    {start: '15:00', end: '15:50'}, // 第6节
-    {start: '16:10', end: '17:00'}, // 第7节
-    {start: '17:10', end: '18:00'}, // 第8节
-    {start: '19:00', end: '19:50'}, // 第9节
-    {start: '20:00', end: '20:50'}  // 第10节
-  ]
+  if (!start || !len) return '未知时间';
 
-  const startTime = timeSlots[start - 1].start
-  const endTime = timeSlots[start + len - 2].end
+  const startTimeStr = getTimeStart(start);
+  const endTimeStr = getTimeEnd(start + len - 1);
 
-  return `${startTime}-${endTime}`
+  if (!startTimeStr || !endTimeStr) return `第${start}-${start + len - 1}节`;
+
+  return `${startTimeStr}-${endTimeStr}`;
+}
+
+// 格式化通知日期
+function formatNoticeDate(date) {
+  if (!date) return '';
+
+  try {
+    const noticeDate = new Date(date);
+    if (isNaN(noticeDate.getTime())) return date;
+
+    return `${noticeDate.getFullYear()}-${String(noticeDate.getMonth() + 1).padStart(2, '0')}-${String(noticeDate.getDate()).padStart(2, '0')}`;
+  } catch (error) {
+    return date;
+  }
+}
+
+// 获取通知内容预览
+function getNoticePreview(content) {
+  if (!content) return '暂无内容';
+
+  // 移除HTML标签
+  const plainText = content.replace(/<[^>]*>/g, '');
+
+  // 截取合适长度的预览
+  return plainText.length > 60 ? plainText.substring(0, 60) + '...' : plainText;
 }
 
 // 查看通知详情
 function viewNoticeDetail(notice) {
-  localStorage.setItem('currentNotice', JSON.stringify(notice))
-  router.push('/eas/notice?id=' + notice.id)
+  localStorage.setItem('currentNotice', JSON.stringify(notice));
+  router.push('/eas/notice?id=' + notice.id);
 }
 
-// 加载数据
-onMounted(async () => {
+// 跳转到登录页面
+const goToLogin = () => {
+  router.push('/login/eas');
+};
+
+// 将 BigInt 字符串转换为 BigInt 对象
+function parseBigInt(str) {
   try {
-    // 在实际项目中，这里应该使用electron-store或IPC通信获取数据
-    setTimeout(() => {
-      // 模拟数据加载
-      hideTeacher.value = false
-      currentWeek.value = 12 // 假设当前是第12周
+    if (typeof str === 'string') {
+      return BigInt(str);
+    } else if (typeof str === 'number') {
+      return BigInt(str);
+    } else if (typeof str === 'bigint') {
+      return str;
+    }
+    return 0n;
+  } catch (e) {
+    console.error('解析 BigInt 失败:', e, str);
+    return 0n;
+  }
+}
 
-      // 模拟今日课程数据
-      todayLessons.value = [
-        {
-          name: '高等数学',
-          place: '教学楼 A101',
-          teacher: '张老师',
-          count: 1, // 第几节开始
-          len: 2,   // 持续几节课
-          color: 0  // 颜色编号
-        },
-        {
-          name: '大学物理',
-          place: '教学楼 B203',
-          teacher: '李老师',
-          count: 3,
-          len: 2,
-          color: 1
-        },
-        {
-          name: '程序设计',
-          place: '计算机楼 304',
-          teacher: '王老师',
-          count: 7,
-          len: 2,
-          color: 2
-        }
-      ]
+// 检查登录状态
+const checkLoginStatus = async () => {
+  try {
+    // 获取登录状态
+    const loginStatus = authService.getLoginStatus();
+    needLogin.value = !loginStatus.eas;
+    return loginStatus.eas;
+  } catch (error) {
+    console.error('检查登录状态失败:', error);
+    needLogin.value = true;
+    return false;
+  }
+};
 
-      // 设置下一节课信息
-      const now = new Date()
-      const hour = now.getHours()
-      const minute = now.getMinutes()
+// 根据保存的数据获取当前周次
+const getCurrentWeek = async () => {
+  try {
+    // 从设置中获取自定义开学日期
+    const customOpeningDate = await store.getString('CUSTOM_OPENING_DATE', null);
+    // 从课表信息中获取开学日期
+    const lessonTableInfo = await store.getObject('lesson_table_info', null);
 
-      // 简单逻辑：根据当前时间确定下一节课
-      if (hour < 8 || (hour === 8 && minute < 50)) {
-        nextLesson.value = todayLessons.value[0] // 8点前，下一节课是第一节
-      } else if (hour < 10 || (hour === 10 && minute < 10)) {
-        nextLesson.value = todayLessons.value[1] // 10:10前，下一节课是第三节
-      } else if (hour < 16 || (hour === 16 && minute < 10)) {
-        nextLesson.value = todayLessons.value[2] // 16:10前，下一节课是第七节
-      } else {
-        nextLesson.value = null // 今天没有课了
+    const startDayStr = customOpeningDate || (lessonTableInfo ? lessonTableInfo.startDay : null);
+    const totalWeeks = lessonTableInfo ? lessonTableInfo.totalWeek : 20;
+
+    if (!startDayStr) {
+      console.warn('未设置开学日期');
+      return 1;
+    }
+
+    const now = new Date();
+    const startDay = new Date(startDayStr);
+
+    // 检查开学日期是否有效
+    if (isNaN(startDay.getTime())) {
+      console.error('无效的开学日期:', startDayStr);
+      return 1;
+    }
+
+    // 计算当前周次
+    const timeDiff = now.getTime() - startDay.getTime();
+    const dayDiff = Math.floor(timeDiff / (1000 * 60 * 60 * 24));
+    const weekDiff = Math.floor(dayDiff / 7) + 1;
+
+    console.log(`当前日期: ${now}, 开学日期: ${startDay}, 天数差: ${dayDiff}, 周次: ${weekDiff}`);
+    return Math.max(1, Math.min(weekDiff, totalWeeks));
+  } catch (error) {
+    console.error('计算当前周次失败:', error);
+    return 1;
+  }
+};
+
+// 提取今日课程
+const extractTodayLessons = async () => {
+  try {
+    // 加载课表数据
+    const savedTable = await store.getObject('lesson_table', null);
+    if (!savedTable || !savedTable.lessons) {
+      console.log('未找到课表数据');
+      return [];
+    }
+
+    const dayLessons = savedTable.lessons[currentDayOfWeek.value - 1];
+    if (!dayLessons) return [];
+
+    const weekBit = BigInt(1) << BigInt(currentWeek.value - 1);
+    const todayClasses = [];
+
+    // 遍历时间段
+    for (let timeIndex = 0; timeIndex < dayLessons.length; timeIndex++) {
+      const group = dayLessons[timeIndex];
+      if (!group || !group.lessons || group.lessons.length === 0) {
+        continue;
       }
 
-      isLoading.value = false
-    }, 1000)
+      // 查找本周的课程
+      for (const lesson of group.lessons) {
+        // 解析周次位图
+        const weekBitmap = parseBigInt(lesson.week);
+
+        // 判断当前周是否有课
+        if ((weekBitmap & weekBit) !== 0n) {
+          todayClasses.push({
+            ...lesson,
+            count: group.count || (timeIndex + 1),
+            len: lesson.len || 1
+          });
+          break; // 找到第一个匹配的课程就跳出循环
+        }
+      }
+    }
+
+    // 按照课程开始时间排序
+    return todayClasses.sort((a, b) => (a.count - b.count));
+  } catch (error) {
+    console.error('提取今日课程失败:', error);
+    return [];
+  }
+};
+
+// 加载近期考试
+const loadUpcomingExams = async () => {
+  try {
+    // 获取当前学期的考试数据
+    const examKey = `exams_${currentWeek.value < 16 ? 0 : 1}`; // 简单判断是上学期还是下学期
+    const exams = await store.getObject(examKey, []);
+
+    if (!exams || exams.length === 0) {
+      // 尝试获取其他学期的考试
+      for (let i = 0; i < 8; i++) {
+        const termExams = await store.getObject(`exams_${i}`, []);
+        if (termExams && termExams.length > 0) {
+          // 找到考试数据，跳出循环
+          return processExams(termExams);
+        }
+      }
+      return [];
+    }
+
+    return processExams(exams);
+  } catch (error) {
+    console.error('加载考试数据失败:', error);
+    return [];
+  }
+};
+
+// 处理考试数据
+const processExams = (exams) => {
+  try {
+    const now = new Date();
+    const futureExams = [];
+
+    for (const exam of exams) {
+      try {
+        // 解析考试日期
+        if (!exam.date) continue;
+
+        const examDate = new Date(exam.date.replace(/-/g, '/'));
+
+        // 如果考试日期大于今天，添加到未来考试列表
+        if (examDate > now) {
+          futureExams.push(exam);
+        }
+      } catch (e) {
+        console.error('解析考试日期失败:', e);
+      }
+    }
+
+    // 按日期排序
+    return futureExams.sort((a, b) => {
+      const dateA = new Date(a.date.replace(/-/g, '/'));
+      const dateB = new Date(b.date.replace(/-/g, '/'));
+      return dateA - dateB;
+    });
+  } catch (error) {
+    console.error('处理考试数据失败:', error);
+    return [];
+  }
+};
+
+// 加载通知
+const loadNotices = async () => {
+  try {
+    isNoticeLoading.value = true;
 
     // 加载通知数据
-    setTimeout(() => {
-      notices.value = [
-        {
-          id: 1,
-          title: '关于2024-2025学年第二学期期中考试安排的通知',
-          content: '各学院、各部门：期中考试定于第9周进行，请各学院做好相关准备工作...',
-          date: '2025-03-20',
-          type: 'warning',
-          source: '教务处'
-        },
-        {
-          id: 2,
-          title: '关于开展2025届毕业生学位申请工作的通知',
-          content: '各学院：根据学校安排，现开展2025届毕业生学位申请工作，请各位学生...',
-          date: '2025-03-18',
-          type: 'primary',
-          source: '教务处'
-        },
-        {
-          id: 3,
-          title: '关于开展创新创业项目申报的通知',
-          content: '各学院：为促进学生创新能力培养，学校将开展2025年创新创业项目申报...',
-          date: '2025-03-15',
-          type: 'success',
-          source: '创新创业学院'
-        },
-        {
-          id: 4,
-          title: '关于2024-2025学年第二学期教材发放的通知',
-          content: '各位同学：本学期教材已到，请各班级学习委员于本周内到教材科领取...',
-          date: '2025-03-10',
-          type: 'info',
-          source: '教务处'
-        },
-        {
-          id: 5,
-          title: '关于校园网络系统维护的通知',
-          content: '全校师生：计划于本周六上午8:00-12:00对校园网络系统进行维护升级...',
-          date: '2025-03-08',
-          type: 'warning',
-          source: '信息中心'
-        }
-      ]
-      isNoticeLoading.value = false
-    }, 1500)
+    const savedNotices = await store.getObject('eas_notices', []);
+    if (!savedNotices || savedNotices.length === 0) {
+      console.log('未找到通知数据');
+      isNoticeLoading.value = false;
+      return [];
+    }
 
-    // 加载考试数据
-    setTimeout(() => {
-      upcomingExams.value = [
-        {
-          id: 1,
-          name: '高等数学期中考试',
-          date: '2025-04-15',
-          time: '08:30-10:30',
-          location: '第一教学楼 101'
-        },
-        {
-          id: 2,
-          name: '大学物理期中考试',
-          date: '2025-04-18',
-          time: '14:00-16:00',
-          location: '第二教学楼 205'
-        }
-      ]
-    }, 1200)
+    // 处理通知日期格式
+    const processedNotices = savedNotices.map(notice => {
+      // 确保通知有时间属性
+      if (!notice.time && notice.date) {
+        notice.time = notice.date;
+      }
+      return notice;
+    });
 
+    // 按时间排序（从新到旧）
+    return processedNotices.sort((a, b) => {
+      const timeA = new Date(a.time);
+      const timeB = new Date(b.time);
+      return timeB - timeA;
+    });
   } catch (error) {
-    console.error('加载数据失败:', error)
-    isLoading.value = false
-    isNoticeLoading.value = false
+    console.error('加载通知数据失败:', error);
+    return [];
+  } finally {
+    isNoticeLoading.value = false;
   }
-})
+};
+
+// 加载所有数据
+const loadAllData = async () => {
+  try {
+    isLoading.value = true;
+
+    // 加载设置 - 显示教师信息
+    showTeacher.value = await store.getBoolean('SHOW_TEACHER', false);
+
+    // 加载自定义时间设置
+    await loadTimeSettings();
+
+    // 获取当前周次
+    currentWeek.value = await getCurrentWeek();
+
+    // 检查登录状态
+    const isLoggedIn = await checkLoginStatus();
+
+    if (isLoggedIn) {
+      // 加载今日课程
+      todayLessons.value = await extractTodayLessons();
+
+      // 加载近期考试
+      upcomingExams.value = await loadUpcomingExams();
+
+      // 加载通知
+      notices.value = await loadNotices();
+    } else {
+      console.log('未登录教务系统');
+      // 尝试加载本地缓存的数据
+      todayLessons.value = await extractTodayLessons();
+      upcomingExams.value = await loadUpcomingExams();
+      notices.value = await loadNotices();
+    }
+
+    // 设置下一节课信息
+    updateNextLesson();
+  } catch (error) {
+    console.error('加载数据失败:', error);
+    ElMessage.error('加载数据失败，请重试');
+  } finally {
+    isLoading.value = false;
+    isNoticeLoading.value = false;
+  }
+};
+
+// 更新下一节课信息
+const updateNextLesson = () => {
+  if (!todayLessons.value.length) {
+    nextLesson.value = null;
+    return;
+  }
+
+  const now = new Date();
+  const currentHour = now.getHours();
+  const currentMinute = now.getMinutes();
+  const currentTime = currentHour * 60 + currentMinute;
+
+  // 找到下一节要上的课
+  nextLesson.value = null;
+  for (const lesson of todayLessons.value) {
+    const startTimeStr = getTimeStart(lesson.count);
+    if (!startTimeStr) continue;
+
+    const [startHour, startMinute] = startTimeStr.split(':').map(Number);
+    const startTime = startHour * 60 + startMinute;
+
+    if (startTime > currentTime) {
+      nextLesson.value = lesson;
+      break;
+    }
+  }
+};
+
+// 自动刷新功能
+let refreshTimer = null;
+const startAutoRefresh = () => {
+  // 每分钟更新一次下一节课信息和当前时间
+  refreshTimer = setInterval(() => {
+    updateNextLesson();
+  }, 60000);
+};
+
+// 停止自动刷新
+const stopAutoRefresh = () => {
+  if (refreshTimer) {
+    clearInterval(refreshTimer);
+    refreshTimer = null;
+  }
+};
+
+// 生命周期钩子
+onMounted(async () => {
+  // 注册设置变更事件监听器
+  window.addEventListener('ujn_settings_changed', handleSettingsChanged);
+
+  // 启动自动刷新
+  startAutoRefresh();
+
+  // 加载所有数据
+  await loadAllData();
+});
+
+// 在组件卸载时清理
+onUnmounted(() => {
+  // 移除事件监听器
+  window.removeEventListener('ujn_settings_changed', handleSettingsChanged);
+
+  // 停止自动刷新
+  stopAutoRefresh();
+});
 </script>
 
 <style scoped>
@@ -803,16 +1118,21 @@ onMounted(async () => {
   white-space: nowrap;
 }
 
+.notice-content-preview {
+  font-size: 13px;
+  color: #606266;
+  margin: 5px 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
 /* 响应式调整 */
 @media screen and (max-width: 768px) {
   .feature-grid {
     grid-template-columns: repeat(2, 1fr);
-  }
-}
-
-@media screen and (max-width: 480px) {
-  .feature-grid {
-    grid-template-columns: 1fr;
   }
 }
 </style>
