@@ -1,8 +1,4 @@
-@media screen and (max-width: 480px) {
-.feature-grid {
-grid-template-columns: 1fr;
-}
-}<template>
+<template>
   <div class="home-container">
     <!-- 状态卡片 -->
     <div class="status-cards">
@@ -122,10 +118,7 @@ grid-template-columns: 1fr;
               </div>
             </template>
             <template v-else>
-              <el-empty v-if="!needLogin" description="今日无课" />
-              <el-empty v-else description="请先登录教务系统">
-                <el-button type="primary" @click="goToLogin">去登录</el-button>
-              </el-empty>
+              <el-empty description="今日无课" />
             </template>
           </div>
         </el-card>
