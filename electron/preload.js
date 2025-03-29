@@ -55,11 +55,13 @@ contextBridge.exposeInMainWorld('electronStore', {
 // 暴露 IPC 功能给渲染进程
 contextBridge.exposeInMainWorld('ipcRenderer', {
     invoke: (channel, data) => {
-        // 白名单 channels
+        // 白名单 channels - 添加了两个新通道
         const validChannels = [
             'eas:request', 'ipass:request',
             'store:get', 'store:set', 'store:has', 'store:delete', 'store:clear',
-            'app:version'
+            'app:version',
+            'open-external-url',     // 用于在系统默认浏览器中打开链接
+            'check-github-release'   // 用于检查GitHub上的最新版本
         ];
 
         if (validChannels.includes(channel)) {

@@ -1,5 +1,5 @@
 // electron/main.js
-import { app, BrowserWindow, ipcMain } from 'electron';
+import { app, BrowserWindow, ipcMain, shell } from 'electron';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import fetch from 'node-fetch';
@@ -296,6 +296,77 @@ function setupIPC() {
             };
         }
     });
+
+    // 打开外部链接
+    ipcMain.handle('open-external-url', async (event, url) => {
+        try {
+            // 使用shell.openExternal在系统默认浏览器中打开URL
+            await shell.openExternal(url, { activate: true });
+            return true;
+        } catch (error) {
+            console.error('打开URL失败:', error);
+            return false;
+        }
+    });
+
+    // 处理检查GitHub最新版本的请求
+    ipcMain.handle('check-github-release', async () => {
+        try {
+            // 发送请求到GitHub API获取最新的release信息
+            const response = await fetch('https://api.github.com/repos/shizhihen2003/UJN-Assistant-Electron/releases/latest');
+
+            // 检查API请求是否成功
+            if (!response.ok) {
+                throw new Error(`GitHub API响应错误: ${response.status}`);
+            }
+
+            // 解析响应JSON数据
+            const releaseData = await response.json();
+
+            // 提取版本号并移除前缀'v'（如果有）
+            const latestVersion = releaseData.tag_name.replace('v', '');
+
+            // 获取当前应用版本号
+            const currentVersion = app.getVersion();
+
+            // 返回版本比较结果和相关信息
+            return {
+                hasUpdate: compareVersions(latestVersion, currentVersion) > 0, // 是否有更新版本
+                currentVersion: currentVersion,                                // 当前版本
+                latestVersion: latestVersion,                                  // 最新版本
+                releaseUrl: releaseData.html_url,                              // 发布页面URL
+                releaseNotes: releaseData.body                                 // 发布说明
+            };
+        } catch (error) {
+            // 记录错误并返回失败状态
+            console.error('检查GitHub更新失败:', error);
+            return {
+                hasUpdate: false,
+                error: error.message
+            };
+        }
+    });
+}
+
+// 版本比较函数：比较两个版本号的大小
+// 返回值: 1(a>b), -1(a<b), 0(a=b)
+function compareVersions(a, b) {
+    // 将版本号按点分割并转换为数字数组
+    const aParts = a.split('.').map(Number);
+    const bParts = b.split('.').map(Number);
+
+    // 遍历版本号的每一部分进行比较
+    for (let i = 0; i < Math.max(aParts.length, bParts.length); i++) {
+        // 如果某个版本号部分不存在，视为0
+        const aVal = aParts[i] || 0;
+        const bVal = bParts[i] || 0;
+
+        // 比较当前部分的值
+        if (aVal > bVal) return 1;   // a版本更新
+        if (aVal < bVal) return -1;  // b版本更新
+    }
+
+    return 0; // 版本相同
 }
 
 // 初始化 app©∫

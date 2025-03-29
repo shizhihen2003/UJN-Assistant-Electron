@@ -253,7 +253,7 @@
       </template>
 
       <div class="about-info">
-        <div class="app-logo">
+        <div class="app-logo-container">
           <el-icon :size="80" color="#409EFF"><School /></el-icon>
         </div>
         <div class="app-details">
@@ -770,50 +770,84 @@ const clearAllData = async () => {
   }
 };
 
-// 检查更新
+// 检查应用更新
 const checkUpdate = async () => {
   try {
-    if (window.electron && window.ipcRenderer) {
-      const result = await window.ipcRenderer.invoke('check-for-updates');
-      if (result.updateAvailable) {
-        ElMessageBox.confirm(
-            `发现新版本 v${result.version}，是否立即更新？`,
-            '检查更新',
-            {
-              confirmButtonText: '立即更新',
-              cancelButtonText: '暂不更新',
-              type: 'info'
-            }
-        ).then(() => {
-          window.ipcRenderer.invoke('start-update');
-        }).catch(() => {});
-      } else {
-        ElMessage.info('当前已是最新版本');
-      }
+    // 检查是否在Electron环境中运行
+    if (!window.ipcRenderer) {
+      ElMessage.info('当前环境不支持自动检查更新');
+      return;
+    }
+
+    // 显示正在检查的提示信息
+    ElMessage.info('正在检查更新...');
+
+    // 调用主进程检查GitHub上的最新版本
+    const result = await window.ipcRenderer.invoke('check-github-release');
+
+    // 如果检查过程中出现错误
+    if (result.error) {
+      ElMessage.error(`检查更新失败: ${result.error}`);
+      return;
+    }
+
+    // 如果有新版本可用
+    if (result.hasUpdate) {
+      // 显示确认对话框，询问用户是否要更新
+      ElMessageBox.confirm(
+          `发现新版本 v${result.latestVersion}，当前版本 v${result.currentVersion}，是否前往下载页面？`,
+          '检查更新',
+          {
+            confirmButtonText: '前往下载',      // 确认按钮文本
+            cancelButtonText: '暂不更新',       // 取消按钮文本
+            type: 'info',                      // 对话框类型
+            dangerouslyUseHTMLString: true,    // 允许HTML内容
+            // 构建包含版本信息和更新说明的HTML消息
+            message: `<div>
+            <p>发现新版本 v${result.latestVersion}，当前版本 v${result.currentVersion}</p>
+            <p>更新内容:</p>
+            <div style="max-height: 200px; overflow-y: auto; background: #f5f7fa; padding: 10px; border-radius: 4px;">
+              ${result.releaseNotes ? result.releaseNotes.replace(/\n/g, '<br>') : '无详细说明'}
+            </div>
+          </div>`
+          }
+      ).then(() => {
+        // 用户点击"前往下载"，在系统默认浏览器中打开release页面
+        window.ipcRenderer.invoke('open-external-url', result.releaseUrl);
+      }).catch(() => {
+        // 用户点击"暂不更新"，不执行任何操作
+      });
     } else {
-      ElMessage.info('当前环境不支持检查更新');
+      // 已经是最新版本
+      ElMessage.success('当前已是最新版本');
     }
   } catch (error) {
+    // 处理其他可能的错误
     console.error('检查更新失败:', error);
-    ElMessage.error('检查更新失败');
+    ElMessage.error('检查更新失败: ' + error.message);
   }
 };
 
 // 打开项目主页
 const openProject = () => {
-  if (window.electron) {
-    window.electron.openExternal('https://github.com/你的项目地址');
+  const projectUrl = 'https://github.com/shizhihen2003/UJN-Assistant-Electron';
+
+  if (window.ipcRenderer) {
+    window.ipcRenderer.invoke('open-external-url', projectUrl);
   } else {
-    window.open('https://github.com/你的项目地址', '_blank');
+    window.open(projectUrl, '_blank', 'noopener,noreferrer');
   }
 };
 
+
 // 打开帮助文档
 const openHelp = () => {
-  if (window.electron) {
-    window.electron.openExternal('https://你的帮助文档地址');
+  const helpUrl = 'https://github.com/shizhihen2003/UJN-Assistant-Electron/blob/main/README.md';
+
+  if (window.ipcRenderer) {
+    window.ipcRenderer.invoke('open-external-url', helpUrl);
   } else {
-    window.open('https://你的帮助文档地址', '_blank');
+    window.open(helpUrl, '_blank', 'noopener,noreferrer');
   }
 };
 
@@ -917,12 +951,16 @@ onMounted(async () => {
 
 .about-info {
   display: flex;
+  flex-direction: column;
   align-items: center;
-  margin-bottom: 20px;
+  justify-content: center;
+  text-align: center;
+  margin-bottom: 30px;
+  padding: 20px 0 0 0;
 }
 
-.app-logo {
-  margin-right: 20px;
+.app-logo-container {
+  margin-bottom: 20px;
 }
 
 .app-logo img {
@@ -930,17 +968,27 @@ onMounted(async () => {
   height: 80px;
 }
 
+.app-details {
+  flex: 1;
+  min-width: 0; /* 确保文字容器不会溢出 */
+}
+
 .app-details h2 {
   margin-top: 0;
-  margin-bottom: 10px;
+  margin-bottom: 15px;
+  font-size: 24px;
 }
 
 .app-details p {
-  margin: 5px 0;
+  margin: 8px 0;
   color: #606266;
+  line-height: 1.5;
 }
 
 .app-actions {
-  text-align: center;
+  display: flex;
+  justify-content: center;
+  gap: 15px;
+  margin-top: 20px;
 }
 </style>
