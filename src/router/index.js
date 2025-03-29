@@ -61,6 +61,12 @@ const routes = [
         name: 'Exams',
         component: () => import('../views/EAS/Exams.vue'),
         meta: { title: '考试查询' }
+    },
+    {
+        path: '/settings',
+        name: 'Settings',
+        component: () => import('../views/Settings.vue'),
+        meta: { title: '设置' }
     }
 ]
 
