@@ -30,10 +30,10 @@ class CookieJar {
             const cookieStrings = await ipc.getStoreValue(this.cookieName, [])
             if (cookieStrings && cookieStrings.length > 0) {
                 this.loadCookiesFromArray(cookieStrings)
-                console.log(`已从存储加载 ${this.cookiesList.length} 个Cookie`)
+                console.log(`已从存储加载 ${this.cookiesList.length} 个Cookie，存储键: ${this.cookieName}`)
             }
         } catch (e) {
-            console.error('加载Cookie失败', e)
+            console.error(`加载Cookie失败 (${this.cookieName})`, e)
             this.cookiesList = []
         }
     }
@@ -44,7 +44,7 @@ class CookieJar {
      */
     loadCookiesFromArray(cookieStrings) {
         if (!cookieStrings || !Array.isArray(cookieStrings)) {
-            console.warn('无效的Cookie数组')
+            console.warn(`无效的Cookie数组 (${this.cookieName})`)
             return
         }
 
@@ -53,7 +53,7 @@ class CookieJar {
                 // 解析Cookie字符串
                 return this.parseCookie(cookieString)
             } catch (e) {
-                console.error('解析Cookie失败', e, cookieString)
+                console.error(`解析Cookie失败 (${this.cookieName})`, e, cookieString)
                 return null
             }
         }).filter(cookie => cookie !== null)
@@ -122,6 +122,24 @@ class CookieJar {
     }
 
     /**
+     * 保存响应中的Cookie
+     * @param {Object} response 响应对象
+     */
+    saveFromResponse(response) {
+        if (!response || !response.headers) return
+
+        // 获取Set-Cookie头
+        const setCookieHeaders = response.headers['set-cookie']
+        if (!setCookieHeaders) return
+
+        // 将字符串或数组转换为数组
+        const cookiesArray = Array.isArray(setCookieHeaders) ? setCookieHeaders : [setCookieHeaders]
+
+        // 保存每个Cookie
+        this.saveCookies(cookiesArray)
+    }
+
+    /**
      * 将Cookie对象转换为字符串
      * @param {Object} cookie Cookie对象
      * @returns {string} Cookie字符串
@@ -145,7 +163,7 @@ class CookieJar {
     clearCookies() {
         this.cookiesList = []
         ipc.setStoreValue(this.cookieName, [])
-        console.log('已清空Cookie')
+        console.log(`已清空Cookie (${this.cookieName})`)
     }
 
     /**
@@ -169,70 +187,71 @@ class CookieJar {
     }
 
     /**
-     * 保存响应中的Cookie
+     * 保存Cookie字符串数组 - 增强版
      * @param {Array<string>} cookies Cookie字符串数组
      */
     async saveCookies(cookies) {
         if (!cookies || !Array.isArray(cookies) || cookies.length === 0) {
-            console.warn("没有需要保存的Cookie");
+            console.warn(`没有需要保存的Cookie (${this.cookieName})`);
             return;
         }
 
-        console.log(`接收到 ${cookies.length} 个Cookie`);
+        console.log(`接收到 ${cookies.length} 个Cookie (${this.cookieName})`);
+        console.log(`Cookie列表:`, cookies);
 
         try {
             // 处理每个新Cookie
             for (const cookieStr of cookies) {
                 try {
-                    // 特殊处理 JSESSIONID cookie
-                    if (cookieStr.includes('JSESSIONID')) {
-                        console.log("处理 JSESSIONID Cookie:", cookieStr);
-                        // 查找是否已存在 JSESSIONID cookie
-                        const existingIndex = this.cookiesList.findIndex(c =>
-                            c.name === 'JSESSIONID'
-                        );
+                    console.log(`处理Cookie: ${cookieStr}`);
 
-                        const newCookie = this.parseCookie(cookieStr);
+                    // 解析Cookie
+                    const newCookie = this.parseCookie(cookieStr);
+                    console.log(`解析后的Cookie对象:`, newCookie);
 
-                        // 替换或添加新Cookie
-                        if (existingIndex !== -1) {
-                            this.cookiesList[existingIndex] = newCookie;
-                            console.log("替换现有 JSESSIONID Cookie");
-                        } else {
-                            this.cookiesList.push(newCookie);
-                            console.log("添加新 JSESSIONID Cookie");
-                        }
+                    // 查找是否已存在同名Cookie
+                    const existingIndex = this.cookiesList.findIndex(c =>
+                        c.name === newCookie.name &&
+                        c.domain === newCookie.domain &&
+                        c.path === newCookie.path
+                    );
+
+                    // 替换或添加新Cookie
+                    if (existingIndex !== -1) {
+                        console.log(`替换已存在的Cookie: ${newCookie.name}`);
+                        this.cookiesList[existingIndex] = newCookie;
                     } else {
-                        // 处理其他 cookie
-                        const newCookie = this.parseCookie(cookieStr);
-
-                        // 查找是否已存在同名Cookie
-                        const existingIndex = this.cookiesList.findIndex(c =>
-                            c.name === newCookie.name &&
-                            c.domain === newCookie.domain &&
-                            c.path === newCookie.path
-                        );
-
-                        // 替换或添加新Cookie
-                        if (existingIndex !== -1) {
-                            this.cookiesList[existingIndex] = newCookie;
-                        } else {
-                            this.cookiesList.push(newCookie);
-                        }
+                        console.log(`添加新Cookie: ${newCookie.name}`);
+                        this.cookiesList.push(newCookie);
                     }
                 } catch (e) {
-                    console.error('解析Cookie失败', e, cookieStr);
+                    console.error(`解析Cookie失败 (${this.cookieName})`, e, cookieStr);
                 }
             }
 
             // 移除过期Cookie
+            const beforeCount = this.cookiesList.length;
             this.cookiesList = this.cookiesList.filter(cookie => !this.isExpired(cookie));
+            const afterCount = this.cookiesList.length;
+
+            if (beforeCount !== afterCount) {
+                console.log(`已移除 ${beforeCount - afterCount} 个过期Cookie`);
+            }
 
             // 保存到存储
             await this.persistCookies();
-            console.log(`已保存 ${this.cookiesList.length} 个Cookie到存储`);
+            console.log(`已保存 ${this.cookiesList.length} 个Cookie到存储 (${this.cookieName})`);
+
+            // 打印当前所有保存的Cookie
+            console.log(`当前保存的所有Cookie:`, this.cookiesList.map(c => ({
+                name: c.name,
+                value: c.value.length > 20 ? c.value.substring(0, 20) + '...' : c.value,
+                domain: c.domain,
+                path: c.path,
+                expires: c.expires ? c.expires.toISOString() : null
+            })));
         } catch (error) {
-            console.error("保存Cookie时出错:", error);
+            console.error(`保存Cookie失败 (${this.cookieName})`, error);
         }
     }
 
@@ -241,27 +260,26 @@ class CookieJar {
      */
     async persistCookies() {
         try {
-            const cookieStrings = this.cookiesList.map(cookie => this.stringifyCookie(cookie));
+            const cookieStrings = this.cookiesList.map(cookie => this.stringifyCookie(cookie))
             if (cookieStrings.length > 0) {
-                await ipc.setStoreValue(this.cookieName, cookieStrings);
-                console.log(`已保存 ${cookieStrings.length} 个Cookie到存储`);
+                await ipc.setStoreValue(this.cookieName, cookieStrings)
+                console.log(`已持久化 ${cookieStrings.length} 个Cookie (${this.cookieName})`)
             } else {
-                console.warn("没有Cookie需要保存");
+                console.warn(`没有Cookie需要保存 (${this.cookieName})`)
             }
         } catch (error) {
-            console.error("持久化保存Cookie失败:", error);
+            console.error(`持久化保存Cookie失败 (${this.cookieName})`, error)
         }
     }
 
     /**
      * 获取适用于当前请求的Cookie列表
-     * @returns {Array<string>} Cookie字符串数组
+     * @returns {Promise<Array<string>>} Cookie字符串数组
      */
     async getCookies() {
-        return this.cookiesList
-            .filter(cookie => !this.isExpired(cookie))
-            .map(cookie => this.stringifyCookie(cookie));
+        const validCookies = this.cookiesList.filter(cookie => !this.isExpired(cookie))
+        return validCookies.map(cookie => this.stringifyCookie(cookie))
     }
 }
 
-export default CookieJar;
+export default CookieJar

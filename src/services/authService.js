@@ -29,8 +29,28 @@ class AuthService {
         this.easAccount = EASAccount.getInstance()
         this.ipassAccount = IPassAccount.getInstance()
 
+        // VPN设置属性
+        this._useVpn = false
+
         // 初始化
         this.init()
+    }
+
+    /**
+     * 获取VPN使用状态
+     * @returns {boolean} 是否使用VPN
+     */
+    get useVpn() {
+        return this._useVpn
+    }
+
+    /**
+     * 设置VPN使用状态
+     * @param {boolean} value 是否使用VPN
+     */
+    set useVpn(value) {
+        this._useVpn = !!value // 强制转换为布尔值
+        console.log(`authService VPN设置已更新为: ${this._useVpn}`)
     }
 
     /**
@@ -39,6 +59,16 @@ class AuthService {
      */
     async init() {
         try {
+            // 加载VPN设置
+            try {
+                const savedUseVpn = await store.getBoolean('EA_USE_VPN', false)
+                this._useVpn = !!savedUseVpn // 使用双感叹号确保是布尔值
+                console.log(`从存储加载VPN设置: ${this._useVpn}`)
+            } catch (error) {
+                console.error('加载VPN设置失败', error)
+                this._useVpn = false
+            }
+
             // 加载入学年份
             const entranceYear = await store.getInt('ENTRANCE_TIME', 0)
             if (entranceYear > 0) {
@@ -218,6 +248,9 @@ class AuthService {
      */
     async loginIpass(username, password) {
         try {
+            // 确保VPN设置同步到IPassAccount
+            this.ipassAccount.useVpn = this.useVpn
+
             const result = await this.ipassAccount.login(username, password, true)
 
             if (result) {

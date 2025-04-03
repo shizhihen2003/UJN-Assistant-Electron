@@ -224,10 +224,11 @@ function setupIPC() {
         }
     });
 
-    // 统一的 IPASS 请求处理函数
+// 统一的 IPASS 请求处理函数
     ipcMain.handle('ipass:request', async (event, args) => {
         try {
             const { method, url, data, cookies, headers = {} } = args;
+            const requestId = Date.now().toString(36); // 请求ID，用于跟踪
 
             // 创建请求头
             const requestHeaders = { ...headers };
@@ -237,62 +238,215 @@ function setupIPC() {
                 requestHeaders.Cookie = cookies.join('; ');
             }
 
+            // 记录详细请求信息以便调试
+            console.log(`[主进程 ${requestId}] ipass:request 请求详情:`, {
+                method,
+                url,
+                headers: requestHeaders,
+                dataType: data ? typeof data : 'none'
+            });
+
+            // URL分析和记录
+            try {
+                const urlObj = new URL(url);
+                // 检查并记录查询参数
+                if (urlObj.search) {
+                    console.log(`[主进程 ${requestId}] URL查询参数:`, urlObj.search);
+                    // 特别记录ticket参数
+                    if (urlObj.searchParams.has('ticket')) {
+                        console.log(`[主进程 ${requestId}] 发现ticket参数:`, urlObj.searchParams.get('ticket'));
+                    }
+                }
+            } catch (e) {
+                console.log(`[主进程 ${requestId}] URL解析失败:`, e.message);
+            }
+
             // 准备请求选项
             const options = {
                 method: method,
                 headers: requestHeaders,
+                // 修改：默认允许最多3次重定向，除非显式指定
                 redirect: 'manual'
             };
 
-            // 如果是 POST 请求，添加表单数据
+            // 如果是 POST 请求，添加数据
             if (method === 'POST' && data) {
-                const formData = new FormData();
-                for (const key in data) {
-                    formData.append(key, data[key]);
-                }
+                // 检查内容类型
+                if (headers['Content-Type'] === 'application/x-www-form-urlencoded') {
+                    console.log(`[主进程 ${requestId}] 处理表单数据，类型: ${typeof data}`);
 
-                options.body = formData;
-                // 添加表单头部
-                if (formData.getBoundary) {
-                    requestHeaders['Content-Type'] = `multipart/form-data; boundary=${formData.getBoundary()}`;
+                    if (typeof data === 'string') {
+                        // 已经是字符串格式，直接使用
+                        options.body = data;
+                        console.log(`[主进程 ${requestId}] 使用原始表单数据: ${data.substring(0, 100)}${data.length > 100 ? '...' : ''}`);
+                    } else if (typeof data === 'object') {
+                        // 将对象转换为表单数据
+                        try {
+                            const params = new URLSearchParams();
+                            for (const key in data) {
+                                params.append(key, data[key]);
+                            }
+                            options.body = params.toString();
+                            console.log(`[主进程 ${requestId}] 转换对象为表单数据: ${options.body.substring(0, 100)}${options.body.length > 100 ? '...' : ''}`);
+                        } catch (e) {
+                            console.error(`[主进程 ${requestId}] 表单数据转换错误:`, e);
+                            throw new Error(`表单数据转换错误: ${e.message}`);
+                        }
+                    }
+                } else if (headers['Content-Type'] && headers['Content-Type'].includes('application/json')) {
+                    // JSON数据
+                    try {
+                        options.body = typeof data === 'string' ? data : JSON.stringify(data);
+                        console.log(`[主进程 ${requestId}] JSON数据: ${options.body.substring(0, 100)}${options.body.length > 100 ? '...' : ''}`);
+                    } catch (e) {
+                        console.error(`[主进程 ${requestId}] JSON数据转换错误:`, e);
+                        throw new Error(`JSON数据转换错误: ${e.message}`);
+                    }
+                } else {
+                    // 使用传统表单数据处理
+                    try {
+                        if (typeof data === 'string') {
+                            // 如果数据已经是字符串，直接使用
+                            options.body = data;
+                            console.log(`[主进程 ${requestId}] 使用原始数据字符串: ${data.substring(0, 100)}${data.length > 100 ? '...' : ''}`);
+                        } else {
+                            // 对象转换
+                            const formData = new FormData();
+                            for (const key in data) {
+                                formData.append(key, data[key]);
+                            }
+                            options.body = formData;
+                            console.log(`[主进程 ${requestId}] 创建FormData成功`);
+
+                            // 删除Content-Type以便node-fetch自动设置
+                            delete requestHeaders['Content-Type'];
+                        }
+                    } catch (e) {
+                        console.error(`[主进程 ${requestId}] 表单数据处理错误:`, e);
+                        throw new Error(`表单数据处理错误: ${e.message}`);
+                    }
                 }
             }
 
             // 执行请求
-            const response = await fetch(url, options);
+            console.log(`[主进程 ${requestId}] 发送${method}请求: ${url}`);
+
+            // 捕获任何网络错误
+            let response;
+            try {
+                response = await fetch(url, options);
+            } catch (fetchError) {
+                console.error(`[主进程 ${requestId}] 网络请求错误:`, fetchError);
+                throw new Error(`网络请求错误: ${fetchError.message}`);
+            }
 
             // 获取响应内容
             let responseData;
             try {
                 responseData = await response.text();
             } catch (e) {
+                console.error(`[主进程 ${requestId}] 响应内容读取错误:`, e);
                 responseData = '';
             }
 
             // 获取设置的 Cookie
             const responseCookies = response.headers.raw()['set-cookie'] || [];
-
-            // 确定请求是否成功
-            let success = response.status >= 200 && response.status < 300;
-
-            // POST 登录请求的特殊处理
-            if (method === 'POST' && url.includes('login') && response.status === 302) {
-                success = !response.headers.get('location')?.includes('login');
+            console.log(`[主进程 ${requestId}] 响应状态码: ${response.status}`);
+            if (responseCookies.length > 0) {
+                console.log(`[主进程 ${requestId}] 收到Cookie: ${responseCookies.length}个`);
+                // 详细记录Cookie内容
+                responseCookies.forEach((cookie, index) => {
+                    console.log(`[主进程 ${requestId}] Cookie ${index + 1}:`, cookie);
+                });
             }
 
+            // 处理重定向
+            const location = response.headers.get('location');
+            if (response.status >= 300 && response.status < 400 && location) {
+                console.log(`[主进程 ${requestId}] 重定向到: ${location}`);
+
+                // 分析重定向URL
+                try {
+                    // 如果location是相对URL，需要转换为绝对URL
+                    let fullRedirectUrl = location;
+                    if (!location.startsWith('http')) {
+                        // 从原始URL解析并组合新URL
+                        const originalUrl = new URL(url);
+                        if (location.startsWith('/')) {
+                            // 绝对路径
+                            fullRedirectUrl = `${originalUrl.protocol}//${originalUrl.host}${location}`;
+                        } else {
+                            // 相对路径
+                            const basePath = originalUrl.pathname.split('/').slice(0, -1).join('/');
+                            fullRedirectUrl = `${originalUrl.protocol}//${originalUrl.host}${basePath}/${location}`;
+                        }
+                    }
+
+                    // 解析重定向URL
+                    const redirectUrl = new URL(fullRedirectUrl);
+                    console.log(`[主进程 ${requestId}] 重定向主机: ${redirectUrl.host}`);
+                    console.log(`[主进程 ${requestId}] 重定向路径: ${redirectUrl.pathname}`);
+
+                    // 检查查询参数，特别是ticket
+                    if (redirectUrl.search) {
+                        console.log(`[主进程 ${requestId}] 重定向查询参数: ${redirectUrl.search}`);
+                        for (const [key, value] of redirectUrl.searchParams.entries()) {
+                            console.log(`[主进程 ${requestId}] 参数 ${key}: ${value}`);
+                        }
+                    }
+                } catch (e) {
+                    console.error(`[主进程 ${requestId}] 重定向URL解析失败:`, e);
+                }
+            }
+
+            // 特殊处理302重定向状态码
+            const isLoginRedirect = method === 'POST' && url.includes('login') && response.status === 302;
+            const isLoginSuccess = isLoginRedirect && !location?.includes('login');
+
+            console.log(`[主进程 ${requestId}] 是否为登录重定向: ${isLoginRedirect}, 登录是否成功: ${isLoginSuccess}`);
+
             return {
-                success,
+                success: (response.status >= 200 && response.status < 300) || isLoginSuccess,
                 status: response.status,
                 data: responseData,
                 cookies: responseCookies,
                 headers: Object.fromEntries(response.headers.entries()),
-                location: response.headers.get('location')
+                location: location,
+                requestId: requestId // 返回请求ID方便跟踪
             };
         } catch (error) {
-            console.error('ipass:request error', error);
+            console.error('[主进程] ipass:request 处理错误:', error);
+
+            // 提供更详细的错误信息
+            let errorMessage = error.message || '未知错误';
+            let errorDetails = {
+                name: error.name,
+                stack: error.stack,
+                code: error.code
+            };
+
+            // 网络错误特殊处理
+            if (error.code === 'ECONNREFUSED') {
+                errorMessage = `连接被拒绝 (${url})`;
+                console.error('[主进程] 连接被拒绝，服务器可能未启动或不可达');
+            } else if (error.code === 'ENOTFOUND') {
+                errorMessage = `找不到主机 (${url})`;
+                console.error('[主进程] DNS解析失败，域名可能错误或网络未连接');
+            } else if (error.code === 'ETIMEDOUT') {
+                errorMessage = `连接超时 (${url})`;
+                console.error('[主进程] 连接超时，服务器响应过慢或网络问题');
+            }
+
+            // 重定向错误特殊处理
+            if (error.message && error.message.includes('maxRedirects')) {
+                errorMessage = `重定向次数过多 (${url})`;
+                console.error('[主进程] 重定向循环或重定向链过长');
+            }
+
             return {
                 success: false,
-                error: error.message
+                error: errorMessage,
+                errorDetails: errorDetails
             };
         }
     });
