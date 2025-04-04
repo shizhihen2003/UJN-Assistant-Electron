@@ -21,6 +21,12 @@ const routes = [
         meta: { title: '学期课表' }
     },
     {
+        path: '/ipass/school-calendar',
+        name: 'SchoolCalendar',
+        component: () => import('../views/IPass/Calendar.vue'),
+        meta: { title: '校历查询' }
+    },
+    {
         path: '/login/eas',
         name: 'EASLogin',
         component: () => import('../views/Login/EASLogin.vue'),

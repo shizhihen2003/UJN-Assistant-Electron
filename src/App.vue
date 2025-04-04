@@ -79,6 +79,17 @@
             </el-menu-item>
           </el-sub-menu>
 
+          <el-sub-menu index="/ipass">
+            <template #title>
+              <el-icon><School /></el-icon>
+              <span>智慧济大查询</span>
+            </template>
+            <el-menu-item index="/ipass/school-calendar">
+              <el-icon><Bell /></el-icon>
+              <span>校历查询</span>
+            </el-menu-item>
+          </el-sub-menu>
+
           <el-sub-menu index="/user">
             <template #title>
               <el-icon><User /></el-icon>
