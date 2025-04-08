@@ -69,6 +69,12 @@ const routes = [
         meta: { title: '考试查询' }
     },
     {
+        path: '/eas/empty-classroom',
+        name: 'Empty-classroom',
+        component: () => import('../views/EAS/classroom.vue'),
+        meta: { title: '空教室查询' }
+    },
+    {
         path: '/settings',
         name: 'Settings',
         component: () => import('../views/Settings.vue'),

@@ -77,6 +77,10 @@
               <el-icon><AlarmClock /></el-icon>
               <span>考试查询</span>
             </el-menu-item>
+            <el-menu-item index="/eas/empty-classroom">
+              <el-icon><School /></el-icon>
+              <span>空教室查询</span>
+            </el-menu-item>
           </el-sub-menu>
 
           <el-sub-menu index="/ipass">
@@ -180,7 +184,7 @@ import { useRoute } from 'vue-router'
 import {
   HomeFilled, Calendar, School, User, Setting, Monitor, Notebook,
   Bell, Document, DataLine, Collection, AlarmClock, Key, Connection,
-  Timer, CaretBottom, ArrowLeft, ArrowRight, Minus, FullScreen, Close
+  Timer, CaretBottom, ArrowLeft, ArrowRight, Minus, FullScreen, Close, OfficeBuilding
 } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import zhCn from 'element-plus/es/locale/lang/zh-cn'
