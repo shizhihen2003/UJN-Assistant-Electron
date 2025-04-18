@@ -8,8 +8,43 @@ import authService from './authService';
  */
 class ClassroomService {
     constructor() {
-        // 基础URL
-        this.baseUrl = 'http://jwgl.ujn.edu.cn/jwglxt';
+        // 基础URL - 初始为空，会在查询时动态获取
+        this.baseUrl = '';
+    }
+
+    /**
+     * 获取当前教务系统URL
+     * @returns {Promise<string>} 教务系统基础URL
+     * @private
+     */
+    async _getBaseUrl() {
+        try {
+            // 如果已有缓存的baseUrl，直接返回
+            if (this.baseUrl) {
+                return this.baseUrl;
+            }
+
+            // 从EASAccount获取当前使用的host
+            if (authService.easAccount) {
+                const host = authService.easAccount.host;
+                if (host) {
+                    const scheme = authService.easAccount.scheme || 'http';
+                    this.baseUrl = `${scheme}://${host}/jwglxt`;
+                    console.log(`使用当前登录的教务地址: ${this.baseUrl}`);
+                    return this.baseUrl;
+                }
+            }
+
+            // 如果无法获取，使用默认值
+            console.warn('无法获取当前教务系统地址，使用默认值');
+            this.baseUrl = 'http://jwgl.ujn.edu.cn/jwglxt';
+            return this.baseUrl;
+        } catch (error) {
+            console.error('获取教务系统地址失败:', error);
+            // 出错时使用默认值
+            this.baseUrl = 'http://jwgl.ujn.edu.cn/jwglxt';
+            return this.baseUrl;
+        }
     }
 
     /**
@@ -68,8 +103,11 @@ class ClassroomService {
                 };
             }
 
+            // 获取当前教务系统URL
+            const baseUrl = await this._getBaseUrl();
+
             // 构造请求URL
-            const requestUrl = `${this.baseUrl}/cdjy/cdjy_cxKxcdlb.html?doType=query&gnmkdm=N2155`;
+            const requestUrl = `${baseUrl}/cdjy/cdjy_cxKxcdlb.html?doType=query&gnmkdm=N2155`;
 
             console.log('请求URL:', requestUrl);
             console.log('请求参数:', params);
@@ -83,7 +121,7 @@ class ClassroomService {
                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
                     'Accept': 'application/json, text/javascript, */*; q=0.01',
                     'X-Requested-With': 'XMLHttpRequest',
-                    'Referer': `${this.baseUrl}/xtgl/index_initMenu.html`
+                    'Referer': `${baseUrl}/xtgl/index_initMenu.html`
                 }
             });
 
@@ -211,8 +249,11 @@ class ClassroomService {
                 throw new Error('登录会话已失效，请重新登录教务系统');
             }
 
+            // 获取当前教务系统URL
+            const baseUrl = await this._getBaseUrl();
+
             // 构造请求URL
-            const requestUrl = `${this.baseUrl}/cdjy/cdjy_cxKxcdlb.html?gnmkdm=N2155`;
+            const requestUrl = `${baseUrl}/cdjy/cdjy_cxKxcdlb.html?gnmkdm=N2155`;
 
             // 发送请求获取HTML页面
             const response = await ipc.easGet(requestUrl, {
@@ -422,8 +463,11 @@ class ClassroomService {
                 };
             }
 
+            // 获取当前教务系统URL
+            const baseUrl = await this._getBaseUrl();
+
             // 构造请求URL - 修正为正确的接口
-            const requestUrl = `${this.baseUrl}/cdjy/cdjy_cxXqjc.html?gnmkdm=N2155`;
+            const requestUrl = `${baseUrl}/cdjy/cdjy_cxXqjc.html?gnmkdm=N2155`;
 
             // 构造请求参数
             const params = {
@@ -440,7 +484,7 @@ class ClassroomService {
                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
                     'Accept': 'application/json, text/javascript, */*; q=0.01',
                     'X-Requested-With': 'XMLHttpRequest',
-                    'Referer': `${this.baseUrl}/cdjy/cdjy_cxKxcdlb.html?gnmkdm=N2155`
+                    'Referer': `${baseUrl}/cdjy/cdjy_cxKxcdlb.html?gnmkdm=N2155`
                 }
             });
 
