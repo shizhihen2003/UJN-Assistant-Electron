@@ -69,10 +69,10 @@
               <el-icon><DataLine /></el-icon>
               <span>成绩查询</span>
             </el-menu-item>
-            <el-menu-item index="/eas/academic">
-              <el-icon><Collection /></el-icon>
-              <span>学业查询</span>
-            </el-menu-item>
+<!--            <el-menu-item index="/eas/academic">-->
+<!--              <el-icon><Collection /></el-icon>-->
+<!--              <span>学业查询</span>-->
+<!--            </el-menu-item>-->
             <el-menu-item index="/eas/exams">
               <el-icon><AlarmClock /></el-icon>
               <span>考试查询</span>
@@ -108,6 +108,11 @@
               <span>智慧济大登录</span>
             </el-menu-item>
           </el-sub-menu>
+
+          <el-menu-item index="/ai-assistant">
+            <el-icon><ChatDotRound /></el-icon>
+            <template #title>AI 助手</template>
+          </el-menu-item>
 
           <el-menu-item index="/settings">
             <el-icon><Setting /></el-icon>
