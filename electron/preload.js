@@ -58,7 +58,7 @@ contextBridge.exposeInMainWorld('ipcRenderer', {
         // 白名单 channels - 添加了两个新通道
         const validChannels = [
             'eas:request', 'ipass:request',
-            'store:get', 'store:set', 'store:has', 'store:delete', 'store:clear',
+            'store:get', 'store:set', 'store:has', 'store:delete', 'store:clear', 'store:getAllKeys',
             'app:version',
             'open-external-url',     // 用于在系统默认浏览器中打开链接
             'check-github-release'   // 用于检查GitHub上的最新版本

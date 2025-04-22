@@ -69,8 +69,21 @@ function setupIPC() {
     });
 
     ipcMain.handle('store:set', (event, key, value) => {
-        store.set(key, value);
-        return true;
+        try {
+            // 检查值是否为null或undefined
+            if (value === null || value === undefined) {
+                // 如果是null或undefined，使用delete方法删除键
+                store.delete(key);
+                console.log(`键 ${key} 的值为空，已删除`);
+            } else {
+                // 否则正常设置值
+                store.set(key, value);
+            }
+            return true;
+        } catch (error) {
+            console.error('store:set 错误:', error);
+            throw error;  // 将错误传回渲染进程
+        }
     });
 
     ipcMain.handle('store:has', (event, key) => {
@@ -498,6 +511,17 @@ function setupIPC() {
                 hasUpdate: false,
                 error: error.message
             };
+        }
+    });
+
+    // 获取所有键名
+    ipcMain.handle('store:getAllKeys', () => {
+        try {
+            // 获取store中的所有键
+            return Object.keys(store.store);
+        } catch (error) {
+            console.error('获取所有键失败:', error);
+            return [];
         }
     });
 }

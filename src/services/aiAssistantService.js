@@ -1,5 +1,5 @@
 // src/services/aiAssistantService.js
-// 修复版本，增加localStorage备选方案
+// 修复版本，改进存储访问方式
 
 /**
  * AI助手服务
@@ -13,6 +13,7 @@ class AiAssistantService {
         this.messages = [];
         this.isStreaming = false;
         this.useLocalStorage = false; // 是否使用localStorage作为储存介质
+        this.ipc = null;
 
         // 初始化时检查是否能使用ipc
         this.checkStorage();
@@ -23,16 +24,20 @@ class AiAssistantService {
      */
     checkStorage() {
         try {
-            // 尝试导入ipc
-            let ipc = null;
+            // 不使用require，改为从window全局对象获取ipc
             try {
-                ipc = require('../utils/ipc').default;
+                if (window.ipcRenderer) {
+                    this.ipc = window.ipcRenderer;
+                } else if (window.electron && window.electron.ipcRenderer) {
+                    this.ipc = window.electron.ipcRenderer;
+                } else if (window.ipc) {
+                    this.ipc = window.ipc;
+                }
             } catch(e) {
-                console.warn('无法导入ipc模块，将使用localStorage:', e);
+                console.warn('无法从window获取ipc模块，将使用localStorage:', e);
             }
 
-            if (ipc && typeof ipc.setStoreValue === 'function') {
-                this.ipc = ipc;
+            if (this.ipc && typeof this.ipc.invoke === 'function') {
                 this.useLocalStorage = false;
                 console.log('将使用ipc进行存储');
             } else {
@@ -294,9 +299,16 @@ class AiAssistantService {
      */
     async saveConversation(conversationId) {
         try {
+            // 确保消息中不存在null或undefined值
+            const safeMessages = this.messages.map(msg => ({
+                role: msg.role || 'user',
+                content: msg.content || '',
+                timestamp: msg.timestamp || new Date().toISOString()
+            }));
+
             const conversationData = {
                 id: conversationId,
-                messages: this.messages,
+                messages: safeMessages,
                 lastUpdated: new Date().toISOString()
             };
 
@@ -307,7 +319,11 @@ class AiAssistantService {
                 return true;
             } else if (this.ipc) {
                 // 使用ipc工具保存到本地存储
-                await this.ipc.setStoreValue(`ai_conversation_${conversationId}`, conversationData);
+                if (typeof this.ipc.setStoreValue === 'function') {
+                    await this.ipc.setStoreValue(`ai_conversation_${conversationId}`, conversationData);
+                } else if (typeof this.ipc.invoke === 'function') {
+                    await this.ipc.invoke('store:set', `ai_conversation_${conversationId}`, conversationData);
+                }
                 console.log('对话已保存到ipc存储');
                 return true;
             } else {
@@ -318,9 +334,15 @@ class AiAssistantService {
 
             // 尝试备选存储方式
             try {
+                const safeMessages = this.messages.map(msg => ({
+                    role: msg.role || 'user',
+                    content: msg.content || '',
+                    timestamp: msg.timestamp || new Date().toISOString()
+                }));
+
                 localStorage.setItem(`ai_conversation_${conversationId}`, JSON.stringify({
                     id: conversationId,
-                    messages: this.messages,
+                    messages: safeMessages,
                     lastUpdated: new Date().toISOString()
                 }));
                 console.log('对话已保存到备选存储(localStorage)');
@@ -349,7 +371,11 @@ class AiAssistantService {
                 }
             } else if (this.ipc) {
                 // 从ipc存储加载
-                conversation = await this.ipc.getStoreValue(`ai_conversation_${conversationId}`);
+                if (typeof this.ipc.getStoreValue === 'function') {
+                    conversation = await this.ipc.getStoreValue(`ai_conversation_${conversationId}`);
+                } else if (typeof this.ipc.invoke === 'function') {
+                    conversation = await this.ipc.invoke('store:get', `ai_conversation_${conversationId}`);
+                }
             }
 
             if (conversation && conversation.messages) {
@@ -384,26 +410,43 @@ class AiAssistantService {
         try {
             const conversations = [];
 
-            // 收集对话
-            if (this.useLocalStorage || (!this.ipc)) {
-                // 从localStorage获取所有对话
-                for (let i = 0; i < localStorage.length; i++) {
-                    const key = localStorage.key(i);
-                    if (key.startsWith('ai_conversation_')) {
-                        try {
-                            const conversation = JSON.parse(localStorage.getItem(key));
-                            if (conversation && conversation.id) {
-                                conversations.push(conversation);
-                            }
-                        } catch (e) {
-                            console.error('解析对话失败:', e);
+            // 从localStorage收集对话
+            for (let i = 0; i < localStorage.length; i++) {
+                const key = localStorage.key(i);
+                if (key.startsWith('ai_conversation_')) {
+                    try {
+                        const conversation = JSON.parse(localStorage.getItem(key));
+                        if (conversation && conversation.id) {
+                            conversations.push(conversation);
                         }
+                    } catch (e) {
+                        console.error('解析对话失败:', e);
                     }
                 }
-            } else if (this.ipc) {
-                // 这需要实现一个方法获取所有以ai_conversation_开头的键
-                // 由于ipc可能不支持这种操作，所以仅使用localStorage的结果
-                // TODO: 如果ipc支持获取所有键，可以添加实现
+            }
+
+            // 如果有可用的IPC方法，尝试获取所有对话键
+            if (this.ipc && !this.useLocalStorage) {
+                try {
+                    // 尝试获取所有键（如果实现了此功能）
+                    // 注意：这需要主进程支持获取所有键的功能
+                    if (typeof this.ipc.invoke === 'function') {
+                        const storeKeys = await this.ipc.invoke('store:getAllKeys');
+                        if (Array.isArray(storeKeys)) {
+                            for (const key of storeKeys) {
+                                if (key.startsWith('ai_conversation_') && !conversations.some(c => `ai_conversation_${c.id}` === key)) {
+                                    const conversation = await this.ipc.invoke('store:get', key);
+                                    if (conversation && conversation.id) {
+                                        conversations.push(conversation);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } catch (error) {
+                    console.warn('从IPC获取所有对话失败:', error);
+                    // 这不是致命错误，至少我们有localStorage中的对话
+                }
             }
 
             return conversations;
@@ -422,18 +465,21 @@ class AiAssistantService {
         try {
             const key = `ai_conversation_${conversationId}`;
 
-            if (this.useLocalStorage) {
-                localStorage.removeItem(key);
-            } else if (this.ipc) {
-                await this.ipc.deleteStoreValue(key);
-            }
+            // 删除localStorage中的对话
+            localStorage.removeItem(key);
 
-            // 无论使用哪种存储，都尝试从localStorage中删除
-            // 这是为了确保清理可能存在的备份
-            try {
-                localStorage.removeItem(key);
-            } catch (e) {
-                console.warn('从localStorage删除备份失败:', e);
+            // 如果有可用的IPC，也尝试删除IPC存储中的对话
+            if (this.ipc && !this.useLocalStorage) {
+                try {
+                    if (typeof this.ipc.deleteStoreValue === 'function') {
+                        await this.ipc.deleteStoreValue(key);
+                    } else if (typeof this.ipc.invoke === 'function') {
+                        await this.ipc.invoke('store:delete', key);
+                    }
+                } catch (error) {
+                    console.warn('从IPC存储删除对话失败:', error);
+                    // 不是致命错误，因为我们已经从localStorage中删除了
+                }
             }
 
             return true;
