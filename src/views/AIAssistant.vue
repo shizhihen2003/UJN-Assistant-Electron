@@ -299,7 +299,7 @@ async function loadDependencies() {
       const originalHtml = originalCodeRenderer(code, language, isEscaped);
 
       // 确保代码是字符串并进行URI编码
-      const encodedCode = encodeURIComponent(code);
+      const encodedCode = encodeURIComponent(code.text);
 
       // 添加复制按钮
       return `<div class="code-block-wrapper">
