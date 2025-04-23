@@ -252,7 +252,7 @@ async function loadDependencies() {
       import('highlight.js'),
     ]);
 
-    // 明确导入highlight.js样式
+    // 明确导入highlight.js样式 - 确保正确加载
     await import('highlight.js/styles/atom-one-light.css');
 
     // 保存模块引用
@@ -262,30 +262,42 @@ async function loadDependencies() {
 
     console.log('依赖库已成功加载');
 
-    // 注册常用语言（可以根据需要添加更多）
+    // 注册所有语言 - 根据文档，v11支持以下方式注册所有语言
     try {
-      hljs.value.registerLanguage('javascript', (await import('highlight.js/lib/languages/javascript')).default);
-      hljs.value.registerLanguage('python', (await import('highlight.js/lib/languages/python')).default);
-      hljs.value.registerLanguage('java', (await import('highlight.js/lib/languages/java')).default);
-      hljs.value.registerLanguage('cpp', (await import('highlight.js/lib/languages/cpp')).default);
-      hljs.value.registerLanguage('csharp', (await import('highlight.js/lib/languages/csharp')).default);
-      hljs.value.registerLanguage('html', (await import('highlight.js/lib/languages/xml')).default);
-      hljs.value.registerLanguage('css', (await import('highlight.js/lib/languages/css')).default);
+      // 导入所有语言 - 在highlight.js v11中不需要单独注册
+      // hljs.value已经包含了所有语言
+      console.log('已加载的语言:', Object.keys(hljs.value.listLanguages()));
     } catch (e) {
-      console.warn('注册语言失败:', e);
+      console.warn('语言加载失败:', e);
     }
 
     // 配置marked
     marked.value.setOptions({
       highlight: function(code, lang) {
+        // 调试输出
+        console.log('Highlight函数执行，语言:', lang);
+
+        // 提取代码文本，考虑代码可能是对象的情况
+        const codeText = typeof code === 'object' && code.text ? code.text : code;
+
         if (lang && hljs.value.getLanguage(lang)) {
           try {
-            return hljs.value.highlight(code, { language: lang }).value;
+            const result = hljs.value.highlight(codeText, { language: lang });
+            console.log('高亮结果预览:', result.value.substring(0, 50));
+            return result.value;
           } catch (e) {
             console.error('高亮显示错误:', e);
+            return codeText; // 如果高亮失败，返回原始代码
           }
         }
-        return hljs.value.highlightAuto(code).value;
+
+        try {
+          // 尝试自动检测语言
+          return hljs.value.highlightAuto(codeText).value;
+        } catch (e) {
+          console.error('自动高亮错误:', e);
+          return codeText; // 如果高亮失败，返回原始代码
+        }
       },
       breaks: true
     });
@@ -295,11 +307,17 @@ async function loadDependencies() {
     const originalCodeRenderer = renderer.code.bind(renderer);
 
     renderer.code = function(code, language, isEscaped) {
+      // 调试输出
+      console.log('Renderer.code接收的code参数:', code);
+
       // 获取原始代码块的HTML
       const originalHtml = originalCodeRenderer(code, language, isEscaped);
 
+      // 提取代码内容，考虑code可能是对象的情况
+      const codeContent = typeof code === 'object' && code.text ? code.text : code;
+
       // 确保代码是字符串并进行URI编码
-      const encodedCode = encodeURIComponent(code.text);
+      const encodedCode = encodeURIComponent(codeContent);
 
       // 添加复制按钮
       return `<div class="code-block-wrapper">
@@ -317,11 +335,35 @@ async function loadDependencies() {
     marked.value.setOptions({ renderer });
 
     console.log('所有依赖已加载成功');
+
+    // 手动应用高亮到已存在的代码块
+    applyCodeHighlighting();
   } catch (error) {
     console.error('加载依赖失败:', error);
     ElMessage.error('加载依赖失败，部分功能可能无法正常使用');
   }
 }
+
+// 增加DOM更新后的代码高亮处理函数
+const applyCodeHighlighting = async () => {
+  await nextTick();
+
+  if (!hljs.value) return;
+
+  try {
+    // 查找所有没有高亮处理的代码块
+    document.querySelectorAll('pre code:not(.hljs)').forEach((block) => {
+      try {
+        // 应用高亮 - 使用新的API名称
+        hljs.value.highlightElement(block);
+      } catch (e) {
+        console.error('应用代码高亮失败:', e);
+      }
+    });
+  } catch (err) {
+    console.error('代码高亮应用错误:', err);
+  }
+};
 
 // 用户信息
 const userName = ref('');
@@ -436,9 +478,28 @@ const formatMessage = (content) => {
 
   // 解析Markdown并进行安全过滤
   try {
-    // 使用marked处理Markdown
-    const html = marked.value.parse(content);
+    // 调试日志
+    console.log('解析前的内容:', content.substring(0, 100));
+
+    // 使用marked处理Markdown，确保使用正确的方法
+    let html;
+    if (typeof marked.value === 'function') {
+      html = marked.value(content); // 旧版API
+    } else if (typeof marked.value.parse === 'function') {
+      html = marked.value.parse(content); // 新版API
+    } else {
+      console.error('无法识别的marked API');
+      return content.replace(/\n/g, '<br>');
+    }
+
+    console.log('解析后的HTML:', html.substring(0, 100));
+
     const sanitizedHtml = DOMPurify.value.sanitize(html);
+
+    // 在返回之前尝试手动应用高亮
+    setTimeout(() => {
+      applyCodeHighlighting();
+    }, 0);
 
     return sanitizedHtml;
   } catch (error) {
@@ -467,6 +528,9 @@ const copyMessageContent = async (content) => {
 const setupCodeCopyButtons = async () => {
   await nextTick();
 
+  // 先应用代码高亮
+  applyCodeHighlighting();
+
   // 查找所有代码复制按钮
   const copyButtons = document.querySelectorAll('.copy-code-button');
 
@@ -485,7 +549,7 @@ const setupCodeCopyButtons = async () => {
 
         const code = decodeURIComponent(codeAttr);
 
-        // 确保代码是字符串而不是对象
+        // 确保代码是字符串
         if (typeof code !== 'string') {
           throw new Error('代码数据格式不正确');
         }
@@ -1048,6 +1112,9 @@ onMounted(async () => {
   try {
     if (route && route.query && route.query.conversationId) {
       await loadConversation(route.query.conversationId);
+      // 确保应用高亮
+      await nextTick();
+      applyCodeHighlighting();
     }
   } catch (error) {
     console.error('路由参数获取失败:', error);
@@ -1060,9 +1127,14 @@ onMounted(async () => {
     // 如果点击的是代码复制按钮或其子元素
     if (target.closest('.copy-code-button')) {
       const button = target.closest('.copy-code-button');
-      const code = decodeURIComponent(button.getAttribute('data-code'));
+      const codeAttr = button.getAttribute('data-code');
 
       try {
+        if (!codeAttr) {
+          throw new Error('没有找到代码数据');
+        }
+
+        const code = decodeURIComponent(codeAttr);
         await navigator.clipboard.writeText(code);
 
         // 更改按钮文本作为视觉反馈
@@ -1077,7 +1149,7 @@ onMounted(async () => {
         ElMessage.success('代码已复制到剪贴板');
       } catch (error) {
         console.error('复制代码失败:', error);
-        ElMessage.error('复制代码失败');
+        ElMessage.error('复制代码失败: ' + error.message);
       }
     }
   });
@@ -1098,18 +1170,197 @@ watch(
     { deep: true }
 );
 
-// 监听消息变化，以便更新代码复制按钮
+// 监听消息变化，以便更新代码高亮和复制按钮
 watch(
     () => messages.value,
     () => {
-      // 当消息更新时，重新设置代码复制按钮
       nextTick(() => {
+        // 应用代码高亮
+        applyCodeHighlighting();
+        // 设置代码复制按钮
         setupCodeCopyButtons();
       });
     },
     { deep: true }
 );
 </script>
+
+<style>
+/* 全局样式 - 不使用scoped以确保高亮样式正确应用 */
+.hljs {
+  display: block;
+  overflow-x: auto;
+  padding: 1em;
+  color: #383a42;
+  background: #fafafa !important;
+}
+
+/* 确保代码块样式正确显示 */
+pre code.hljs {
+  padding: 0;
+  background: #f8f8f8;
+}
+
+/* 其他代码块样式保持不变 */
+.assistant-message .message-body pre {
+  background-color: #f8f8f8;
+  border-radius: 6px;
+  padding: 0;
+  margin: 10px 0;
+  overflow: hidden;
+}
+
+.assistant-message .message-body code {
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-size: 14px;
+  tab-size: 2;
+}
+
+/* 引入highlight.js基本样式，确保语法高亮正确显示 */
+.hljs-comment,
+.hljs-quote {
+  color: #a0a1a7;
+  font-style: italic;
+}
+
+.hljs-doctag,
+.hljs-keyword,
+.hljs-formula {
+  color: #a626a4;
+}
+
+.hljs-section,
+.hljs-name,
+.hljs-selector-tag,
+.hljs-deletion,
+.hljs-subst {
+  color: #e45649;
+}
+
+.hljs-literal {
+  color: #0184bb;
+}
+
+.hljs-string,
+.hljs-regexp,
+.hljs-addition,
+.hljs-attribute,
+.hljs-meta .hljs-string {
+  color: #50a14f;
+}
+
+.hljs-attr,
+.hljs-variable,
+.hljs-template-variable,
+.hljs-type,
+.hljs-selector-class,
+.hljs-selector-attr,
+.hljs-selector-pseudo,
+.hljs-number {
+  color: #986801;
+}
+
+.hljs-symbol,
+.hljs-bullet,
+.hljs-link,
+.hljs-meta,
+.hljs-selector-id,
+.hljs-title {
+  color: #4078f2;
+}
+
+.hljs-built_in,
+.hljs-title.class_,
+.hljs-class .hljs-title {
+  color: #c18401;
+}
+
+.hljs-emphasis {
+  font-style: italic;
+}
+
+.hljs-strong {
+  font-weight: bold;
+}
+
+.hljs-link {
+  text-decoration: underline;
+}
+
+/* 代码块容器样式 */
+.assistant-message .message-body .code-block-wrapper {
+  position: relative;
+  margin: 16px 0;
+  border-radius: 6px;
+  overflow: hidden;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.assistant-message .message-body .code-block-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 12px;
+  background-color: #e8e8e8;
+  color: #333;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.assistant-message .message-body .code-language {
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.assistant-message .message-body .copy-code-button {
+  background-color: transparent;
+  border: none;
+  color: #666;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.assistant-message .message-body .copy-code-button:hover {
+  background-color: rgba(0, 0, 0, 0.1);
+  color: var(--primary-color);
+}
+
+/* 暗黑模式主题 */
+@media (prefers-color-scheme: dark) {
+  .assistant-message .message-body pre {
+    background-color: #1e1e1e;
+  }
+
+  .hljs {
+    background: #1e1e1e !important;
+    color: #d4d4d4;
+  }
+
+  pre code.hljs {
+    background: #1e1e1e;
+  }
+
+  .assistant-message .message-body .code-block-header {
+    background-color: #333;
+    color: #eee;
+  }
+
+  .assistant-message .message-body .copy-code-button {
+    color: #aaa;
+  }
+
+  .assistant-message .message-body .copy-code-button:hover {
+    background-color: rgba(255, 255, 255, 0.1);
+    color: var(--secondary-color);
+  }
+}
+</style>
 
 <style scoped>
 .ai-chat-container {
@@ -1387,64 +1638,6 @@ watch(
   border-top-left-radius: 2px;
 }
 
-/* 代码块样式 */
-.assistant-message .message-body :deep(pre) {
-  background-color: #f8f8f8;
-  border-radius: 6px;
-  padding: 0;
-  margin: 10px 0;
-  overflow: hidden;
-}
-
-.assistant-message .message-body :deep(code) {
-  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
-  font-size: 14px;
-  tab-size: 2;
-}
-
-.assistant-message .message-body :deep(.code-block-wrapper) {
-  position: relative;
-  margin: 16px 0;
-  border-radius: 6px;
-  overflow: hidden;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-}
-
-.assistant-message .message-body :deep(.code-block-header) {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 8px 12px;
-  background-color: #e8e8e8;
-  color: #333;
-  font-size: 12px;
-  font-weight: 500;
-}
-
-.assistant-message .message-body :deep(.code-language) {
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-}
-
-.assistant-message .message-body :deep(.copy-code-button) {
-  background-color: transparent;
-  border: none;
-  color: #666;
-  cursor: pointer;
-  padding: 4px 8px;
-  border-radius: 4px;
-  font-size: 12px;
-  transition: all 0.2s;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.assistant-message .message-body :deep(.copy-code-button:hover) {
-  background-color: rgba(0, 0, 0, 0.1);
-  color: var(--primary-color);
-}
-
 /* 让用户消息中的代码片段更加可读 */
 .user-message .message-body :deep(code) {
   background-color: rgba(255, 255, 255, 0.2);
@@ -1617,24 +1810,6 @@ watch(
 
 /* 暗黑模式主题 */
 @media (prefers-color-scheme: dark) {
-  .assistant-message .message-body :deep(pre) {
-    background-color: #1e1e1e;
-  }
-
-  .assistant-message .message-body :deep(.code-block-header) {
-    background-color: #333;
-    color: #eee;
-  }
-
-  .assistant-message .message-body :deep(.copy-code-button) {
-    color: #aaa;
-  }
-
-  .assistant-message .message-body :deep(.copy-code-button:hover) {
-    background-color: rgba(255, 255, 255, 0.1);
-    color: var(--secondary-color);
-  }
-
   .assistant-message .message-body :deep(th) {
     background-color: #2c2c2e;
   }
