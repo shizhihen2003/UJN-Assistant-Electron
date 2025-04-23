@@ -1,18 +1,22 @@
 // src/services/aiAssistantService.js
-// 修复版本，改进存储访问方式
+import ipc from '../utils/ipc';
+import authService from './authService';
 
 /**
  * AI助手服务
- * 提供与AI模型交互的API接口
+ * 提供与AI模型交互的API接口，支持流式响应，学生数据整合
  */
 class AiAssistantService {
     constructor() {
         this.apiUrl = 'https://api.deepseek.com/chat/completions';
         this.apiKey = ''; // 实际使用时需要设置API Key
-        this.model = 'deepseek-chat'; // 默认使用DeepSeek-V3模型
+        this.model = 'deepseek-chat'; // 默认使用DeepSeek模型
         this.messages = [];
         this.isStreaming = false;
-        this.useLocalStorage = false; // 是否使用localStorage作为储存介质
+        this.shareStudentData = false; // 是否分享学生数据
+
+        // 存储介质相关
+        this.useLocalStorage = false;
         this.ipc = null;
 
         // 初始化时检查是否能使用ipc
@@ -24,7 +28,7 @@ class AiAssistantService {
      */
     checkStorage() {
         try {
-            // 不使用require，改为从window全局对象获取ipc
+            // 尝试从window全局对象获取ipc
             try {
                 if (window.ipcRenderer) {
                     this.ipc = window.ipcRenderer;
@@ -58,6 +62,7 @@ class AiAssistantService {
         if (config.apiKey) this.apiKey = config.apiKey;
         if (config.apiUrl) this.apiUrl = config.apiUrl;
         if (config.model) this.model = config.model;
+        if (config.shareStudentData !== undefined) this.shareStudentData = config.shareStudentData;
     }
 
     /**
@@ -68,7 +73,8 @@ class AiAssistantService {
         return {
             apiKey: this.apiKey,
             apiUrl: this.apiUrl,
-            model: this.model
+            model: this.model,
+            shareStudentData: this.shareStudentData
         };
     }
 
@@ -105,63 +111,158 @@ class AiAssistantService {
     }
 
     /**
-     * 发送请求到AI模型 - 非流式
-     * @param {string} userMessage 用户消息
-     * @param {string} systemMessage 系统消息
-     * @returns {Promise<Object>} AI响应
+     * 收集学生数据（成绩、课表、考试信息等）
+     * @returns {Promise<Object>} 脱敏后的学生数据
      */
-    async sendRequest(userMessage, systemMessage = "You are a helpful assistant.") {
+    async collectStudentData() {
         try {
-            // 验证API Key是否设置
-            if (!this.apiKey) {
-                throw new Error('API Key未设置，请在设置中配置API Key');
+            if (!this.shareStudentData) {
+                return null;
             }
 
-            // 如果没有系统消息，添加默认系统消息
-            if (this.messages.length === 0 || this.messages[0].role !== 'system') {
-                this.messages.unshift({ role: 'system', content: systemMessage, timestamp: new Date().toISOString() });
-            }
+            console.log('正在收集学生数据...');
 
-            // 添加用户消息
-            this.addMessage('user', userMessage);
-
-            // 创建请求体
-            const requestBody = {
-                model: this.model,
-                messages: this.messages.map(msg => ({ role: msg.role, content: msg.content })),
-                stream: false
+            // 初始化数据对象
+            const studentData = {
+                basics: {},
+                grades: [],
+                schedule: [],
+                exams: [],
+                calendar: {}
             };
 
-            // 发送请求
-            const response = await fetch(this.apiUrl, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${this.apiKey}`
-                },
-                body: JSON.stringify(requestBody)
-            });
-
-            // 检查响应状态
-            if (!response.ok) {
-                const errorData = await response.json();
-                throw new Error(`API错误: ${errorData.error?.message || response.statusText}`);
+            // 获取基本信息
+            const userInfo = authService.getUserInfo();
+            if (userInfo) {
+                // 脱敏处理 - 移除学号等敏感信息
+                studentData.basics = {
+                    entranceYear: userInfo.entranceYear || null,
+                    major: userInfo.major || null,
+                    college: userInfo.college || null
+                };
             }
 
-            // 解析响应
-            const data = await response.json();
-            const assistantResponse = data.choices[0].message;
+            // 尝试获取成绩数据 - 修改后的代码
+            try {
+                // 尝试多个可能的键名
+                let grades = await this.getStoredData('student_grades');
+                if (!grades || !Array.isArray(grades) || grades.length === 0) {
+                    grades = await this.getStoredData('marks'); // 尝试另一个可能的键名
+                }
+                if (!grades || !Array.isArray(grades) || grades.length === 0) {
+                    grades = await this.getStoredData('eas_marks'); // 再尝试另一个可能的键名
+                }
 
-            // 添加助手回复到历史
-            this.addMessage('assistant', assistantResponse.content);
+                // 如果成功获取到成绩数据
+                if (grades && Array.isArray(grades) && grades.length > 0) {
+                    // 脱敏处理
+                    studentData.grades = grades.map(grade => ({
+                        name: grade.name || grade.kcmc || '未知课程',
+                        type: grade.type || grade.ksxz || '未知类型',
+                        credit: grade.credit || grade.xf || 0,
+                        mark: grade.mark || grade.cj || 0,
+                        gpa: grade.gpa || 0
+                    }));
+                }
+            } catch (e) {
+                console.warn('获取成绩数据失败:', e);
+            }
 
-            return {
-                content: assistantResponse.content,
-                finish_reason: data.choices[0].finish_reason
-            };
+            // 尝试获取课表数据 - 修改后的代码
+            try {
+                let schedule = await this.getStoredData('student_schedule');
+                if (!schedule || !Array.isArray(schedule) || schedule.length === 0) {
+                    schedule = await this.getStoredData('lessons'); // 尝试另一个可能的键名
+                }
+                if (!schedule || !Array.isArray(schedule) || schedule.length === 0) {
+                    schedule = await this.getStoredData('eas_lessons'); // 再尝试另一个可能的键名
+                }
+
+                if (schedule && Array.isArray(schedule) && schedule.length > 0) {
+                    // 脱敏处理
+                    studentData.schedule = schedule.map(course => ({
+                        name: course.name || course.kcmc || '未知课程',
+                        teacher: course.teacher || course.jsxm || '',
+                        location: course.location || course.cdmc || '',
+                        weekday: course.weekday || course.xqj || 0,
+                        section: course.section || course.jcs || '',
+                        weeks: course.weeks || course.zcd || ''
+                    }));
+                }
+            } catch (e) {
+                console.warn('获取课表数据失败:', e);
+            }
+
+            // 尝试获取考试数据 - 修改后的代码
+            try {
+                let exams = await this.getStoredData('student_exams');
+                if (!exams || !Array.isArray(exams) || exams.length === 0) {
+                    exams = await this.getStoredData('exams'); // 尝试另一个可能的键名
+                }
+                if (!exams || !Array.isArray(exams) || exams.length === 0) {
+                    exams = await this.getStoredData('eas_exams'); // 再尝试另一个可能的键名
+                }
+
+                if (exams && Array.isArray(exams) && exams.length > 0) {
+                    // 脱敏处理
+                    studentData.exams = exams.map(exam => ({
+                        name: exam.name || exam.kcmc || '未知课程',
+                        time: exam.time || exam.kssj || '',
+                        location: exam.location || exam.cdmc || ''
+                    }));
+                }
+            } catch (e) {
+                console.warn('获取考试数据失败:', e);
+            }
+
+            // 尝试获取校历数据 - 修改后的代码
+            try {
+                let calendar = await this.getStoredData('school_calendar');
+                if (!calendar) {
+                    calendar = await this.getStoredData('calendar'); // 尝试另一个可能的键名
+                }
+
+                if (calendar) {
+                    // 脱敏处理
+                    studentData.calendar = {
+                        year: calendar.year || calendar.semesterInfo?.year || '',
+                        semester: calendar.semester || calendar.semesterInfo?.semester || '',
+                        importantDates: calendar.importantDates || []
+                    };
+                }
+            } catch (e) {
+                console.warn('获取校历数据失败:', e);
+            }
+
+            console.log('学生数据收集完成:', studentData);
+            return studentData;
         } catch (error) {
-            console.error('AI请求失败:', error);
-            throw error;
+            console.error('收集学生数据失败:', error);
+            return null;
+        }
+    }
+
+    /**
+     * 从存储中获取数据
+     * @param {string} key 键名
+     * @returns {Promise<any>} 存储的数据
+     */
+    async getStoredData(key) {
+        try {
+            if (this.useLocalStorage) {
+                const data = localStorage.getItem(key);
+                return data ? JSON.parse(data) : null;
+            } else if (this.ipc) {
+                if (typeof this.ipc.getStoreValue === 'function') {
+                    return await this.ipc.getStoreValue(key);
+                } else if (typeof this.ipc.invoke === 'function') {
+                    return await this.ipc.invoke('store:get', key);
+                }
+            }
+            return null;
+        } catch (error) {
+            console.error(`获取存储数据 ${key} 失败:`, error);
+            return null;
         }
     }
 
@@ -181,9 +282,22 @@ class AiAssistantService {
                 throw new Error('API Key未设置，请在设置中配置API Key');
             }
 
+            // 如果要分享学生数据，先收集数据
+            let enhancedSystemMessage = systemMessage;
+            if (this.shareStudentData) {
+                const studentData = await this.collectStudentData();
+                if (studentData) {
+                    // 将学生数据添加到系统消息中
+                    enhancedSystemMessage += `\n\n以下是用户的学生数据，请根据这些信息提供更加个性化的回答：\n${JSON.stringify(studentData, null, 2)}`;
+                }
+            }
+
             // 如果没有系统消息，添加默认系统消息
             if (this.messages.length === 0 || this.messages[0].role !== 'system') {
-                this.messages.unshift({ role: 'system', content: systemMessage, timestamp: new Date().toISOString() });
+                this.messages.unshift({ role: 'system', content: enhancedSystemMessage, timestamp: new Date().toISOString() });
+            } else if (this.shareStudentData) {
+                // 如果已有系统消息，但需要添加学生数据，则更新系统消息
+                this.messages[0].content = enhancedSystemMessage;
             }
 
             // 添加用户消息
@@ -223,7 +337,7 @@ class AiAssistantService {
             const decoder = new TextDecoder('utf-8');
             let buffer = '';
 
-            // 处理数据流
+            // 处理数据流 - 修改后的代码
             while (this.isStreaming) {
                 const { done, value } = await reader.read();
 
@@ -253,9 +367,10 @@ class AiAssistantService {
                             const jsonData = JSON.parse(data);
                             const chunk = jsonData.choices[0];
 
-                            // 如果有内容，添加到完整响应并触发回调
+                            // 如果有内容，立即调用回调函数，确保UI更新
                             if (chunk.delta?.content) {
                                 fullResponse += chunk.delta.content;
+                                // 立即调用回调以实现流式显示
                                 onChunk(chunk.delta.content);
                             }
 
@@ -429,7 +544,6 @@ class AiAssistantService {
             if (this.ipc && !this.useLocalStorage) {
                 try {
                     // 尝试获取所有键（如果实现了此功能）
-                    // 注意：这需要主进程支持获取所有键的功能
                     if (typeof this.ipc.invoke === 'function') {
                         const storeKeys = await this.ipc.invoke('store:getAllKeys');
                         if (Array.isArray(storeKeys)) {

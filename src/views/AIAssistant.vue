@@ -1,6 +1,6 @@
 <template>
   <div class="ai-chat-container">
-    <!-- Login overlay if not authenticated -->
+    <!-- 需要登录的遮罩层 -->
     <div v-if="!isAuthenticated" class="auth-overlay">
       <div class="auth-card">
         <el-icon class="auth-icon"><Lock /></el-icon>
@@ -17,7 +17,7 @@
       </div>
     </div>
 
-    <!-- Sidebar with conversation list -->
+    <!-- 侧边栏(对话列表) -->
     <div class="chat-sidebar" :class="{ 'collapsed': isSidebarCollapsed }">
       <div class="sidebar-header">
         <el-button type="primary" @click="newConversation">
@@ -58,7 +58,7 @@
       </div>
     </div>
 
-    <!-- Main chat area -->
+    <!-- 主聊天区域 -->
     <div class="chat-main">
       <div class="chat-header">
         <div class="chat-title">
@@ -78,11 +78,18 @@
         </div>
       </div>
 
+      <!-- 消息区域 -->
       <div class="chat-messages" ref="chatMessagesRef">
         <div v-if="messages.length === 0" class="empty-chat">
           <img src="@/assets/ai-logo.png" alt="AI Logo" class="ai-logo" />
-          <h2>AI助手</h2>
-          <p>有什么可以帮助你的吗？</p>
+          <h2>UJN AI助手</h2>
+          <p>有什么可以帮助你的吗？我可以基于你的学习数据提供个性化建议。</p>
+          <div class="ai-suggestions">
+            <div class="suggestion-chip" @click="useTemplate('成绩分析')">分析我的成绩</div>
+            <div class="suggestion-chip" @click="useTemplate('课表优化')">优化我的学习计划</div>
+            <div class="suggestion-chip" @click="useTemplate('考试准备')">帮我准备考试</div>
+            <div class="suggestion-chip" @click="useTemplate('通用问题')">我有其他问题</div>
+          </div>
         </div>
 
         <div v-else>
@@ -101,16 +108,17 @@
                 <span class="message-sender">{{ message.role === 'user' ? userName : 'AI助手' }}</span>
                 <span class="message-time">{{ formatTime(message.timestamp) }}</span>
               </div>
+              <!-- 使用v-html并应用消息格式化 -->
               <div class="message-body" v-html="formatMessage(message.content)"></div>
               <div class="message-actions" v-if="message.role === 'assistant'">
                 <el-button link size="small" @click="copyMessageContent(message.content)">
-                  <el-icon><CopyDocument /></el-icon> 复制
+                  <el-icon><CopyDocument /></el-icon> 复制全部
                 </el-button>
               </div>
             </div>
           </div>
 
-          <!-- Loading indicator -->
+          <!-- 加载指示器 -->
           <div v-if="isLoading" class="loading-container">
             <div class="dots-loader">
               <div></div>
@@ -121,6 +129,7 @@
         </div>
       </div>
 
+      <!-- 输入区域 -->
       <div class="chat-input">
         <el-input
             v-model="inputMessage"
@@ -139,7 +148,7 @@
       </div>
     </div>
 
-    <!-- Settings dialog -->
+    <!-- 设置对话框 -->
     <el-dialog v-model="showSettings" title="AI助手设置" width="500px">
       <el-form label-position="top">
         <el-form-item label="API Key">
@@ -150,8 +159,8 @@
         </el-form-item>
         <el-form-item label="模型">
           <el-select v-model="settings.model" style="width: 100%">
-            <el-option label="DeepSeek-V3" value="deepseek-chat" />
-            <el-option label="DeepSeek-R1" value="deepseek-reasoner" />
+            <el-option label="DeepSeek Chat" value="deepseek-chat" />
+            <el-option label="DeepSeek Reasoner" value="deepseek-reasoner" />
           </el-select>
         </el-form-item>
         <el-form-item label="系统提示词">
@@ -162,6 +171,16 @@
               placeholder="设置AI助手的行为指南"
           />
         </el-form-item>
+        <el-form-item label="个性化设置">
+          <el-switch
+              v-model="settings.shareStudentData"
+              active-text="分享学生数据 (获取个性化回答)"
+              inactive-text="不分享学生数据"
+          />
+          <div class="setting-description" v-if="settings.shareStudentData">
+            启用后，AI将可以访问你的课表、成绩和考试信息以提供个性化建议。所有数据仅在本地处理，不会上传或储存到外部服务器。
+          </div>
+        </el-form-item>
       </el-form>
       <template #footer>
         <span class="dialog-footer">
@@ -171,7 +190,7 @@
       </template>
     </el-dialog>
 
-    <!-- Rename dialog -->
+    <!-- 重命名对话框 -->
     <el-dialog v-model="showRenameDialog" title="重命名对话" width="400px">
       <el-input v-model="renameTitle" placeholder="输入新标题" />
       <template #footer>
@@ -182,7 +201,7 @@
       </template>
     </el-dialog>
 
-    <!-- Delete confirmation dialog -->
+    <!-- 删除确认对话框 -->
     <el-dialog v-model="showDeleteDialog" title="删除对话" width="400px">
       <p>确定要删除此对话吗？此操作无法撤销。</p>
       <template #footer>
@@ -233,13 +252,28 @@ async function loadDependencies() {
       import('highlight.js'),
     ]);
 
-    // 导入highlight.js样式
+    // 明确导入highlight.js样式
     await import('highlight.js/styles/atom-one-light.css');
 
     // 保存模块引用
     marked.value = markedModule.marked;
     DOMPurify.value = purifyModule.default;
     hljs.value = hljsModule.default;
+
+    console.log('依赖库已成功加载');
+
+    // 注册常用语言（可以根据需要添加更多）
+    try {
+      hljs.value.registerLanguage('javascript', (await import('highlight.js/lib/languages/javascript')).default);
+      hljs.value.registerLanguage('python', (await import('highlight.js/lib/languages/python')).default);
+      hljs.value.registerLanguage('java', (await import('highlight.js/lib/languages/java')).default);
+      hljs.value.registerLanguage('cpp', (await import('highlight.js/lib/languages/cpp')).default);
+      hljs.value.registerLanguage('csharp', (await import('highlight.js/lib/languages/csharp')).default);
+      hljs.value.registerLanguage('html', (await import('highlight.js/lib/languages/xml')).default);
+      hljs.value.registerLanguage('css', (await import('highlight.js/lib/languages/css')).default);
+    } catch (e) {
+      console.warn('注册语言失败:', e);
+    }
 
     // 配置marked
     marked.value.setOptions({
@@ -248,13 +282,39 @@ async function loadDependencies() {
           try {
             return hljs.value.highlight(code, { language: lang }).value;
           } catch (e) {
-            console.error(e);
+            console.error('高亮显示错误:', e);
           }
         }
         return hljs.value.highlightAuto(code).value;
       },
       breaks: true
     });
+
+    // 添加代码复制按钮的自定义渲染器
+    const renderer = new marked.value.Renderer();
+    const originalCodeRenderer = renderer.code.bind(renderer);
+
+    renderer.code = function(code, language, isEscaped) {
+      // 获取原始代码块的HTML
+      const originalHtml = originalCodeRenderer(code, language, isEscaped);
+
+      // 确保代码是字符串并进行URI编码
+      const encodedCode = encodeURIComponent(code);
+
+      // 添加复制按钮
+      return `<div class="code-block-wrapper">
+                <div class="code-block-header">
+                  <span class="code-language">${language || 'code'}</span>
+                  <button class="copy-code-button" data-code="${encodedCode}">
+                    复制代码
+                  </button>
+                </div>
+                ${originalHtml}
+              </div>`;
+    };
+
+    // 设置自定义渲染器
+    marked.value.setOptions({ renderer });
 
     console.log('所有依赖已加载成功');
   } catch (error) {
@@ -293,7 +353,8 @@ const settings = ref({
   apiKey: '',
   apiUrl: 'https://api.deepseek.com/chat/completions',
   model: 'deepseek-chat',
-  systemPrompt: '你是一个乐于助人的助手。'
+  systemPrompt: '你是一个乐于助人的助手，专注于帮助济南大学的学生。请提供准确、有用的信息和建议。',
+  shareStudentData: false
 });
 
 // 对话操作对话框
@@ -375,8 +436,11 @@ const formatMessage = (content) => {
 
   // 解析Markdown并进行安全过滤
   try {
+    // 使用marked处理Markdown
     const html = marked.value.parse(content);
-    return DOMPurify.value.sanitize(html);
+    const sanitizedHtml = DOMPurify.value.sanitize(html);
+
+    return sanitizedHtml;
   } catch (error) {
     console.error('解析Markdown失败:', error);
     return content.replace(/\n/g, '<br>');
@@ -397,6 +461,60 @@ const copyMessageContent = async (content) => {
 };
 
 /**
+ * 处理代码块复制功能
+ * 此函数在DOM更新后绑定事件监听器到代码块复制按钮
+ */
+const setupCodeCopyButtons = async () => {
+  await nextTick();
+
+  // 查找所有代码复制按钮
+  const copyButtons = document.querySelectorAll('.copy-code-button');
+
+  // 为每个按钮添加点击事件
+  copyButtons.forEach(button => {
+    // 如果按钮已经有事件监听器，就不再添加
+    if (button.getAttribute('data-listener') === 'true') return;
+
+    button.addEventListener('click', async () => {
+      try {
+        // 获取编码后的代码并解码
+        const codeAttr = button.getAttribute('data-code');
+        if (!codeAttr) {
+          throw new Error('没有找到代码数据');
+        }
+
+        const code = decodeURIComponent(codeAttr);
+
+        // 确保代码是字符串而不是对象
+        if (typeof code !== 'string') {
+          throw new Error('代码数据格式不正确');
+        }
+
+        // 复制到剪贴板
+        await navigator.clipboard.writeText(code);
+
+        // 更改按钮文本作为视觉反馈
+        const originalText = button.innerHTML;
+        button.innerHTML = '<i class="el-icon-check"></i> 已复制';
+
+        // 2秒后恢复原文本
+        setTimeout(() => {
+          button.innerHTML = originalText;
+        }, 2000);
+
+        ElMessage.success('代码已复制到剪贴板');
+      } catch (error) {
+        console.error('复制代码失败:', error);
+        ElMessage.error('复制代码失败: ' + error.message);
+      }
+    });
+
+    // 标记按钮已添加监听器
+    button.setAttribute('data-listener', 'true');
+  });
+};
+
+/**
  * 处理Enter键按下事件
  */
 const handleEnterKey = (event) => {
@@ -408,6 +526,29 @@ const handleEnterKey = (event) => {
   // 否则发送消息
   event.preventDefault();
   sendMessage();
+};
+
+/**
+ * 使用模板提示
+ */
+const useTemplate = (templateType) => {
+  switch(templateType) {
+    case '成绩分析':
+      inputMessage.value = '请分析我的成绩情况，找出我的优势和不足，并给出提高的建议。';
+      break;
+    case '课表优化':
+      inputMessage.value = '根据我的课表，帮我制定一个高效的学习和复习计划。';
+      break;
+    case '考试准备':
+      inputMessage.value = '我有即将到来的考试，请帮我制定一个合理的考试准备计划。';
+      break;
+    case '通用问题':
+      inputMessage.value = '';
+      break;
+  }
+
+  // 自动聚焦到输入框
+  document.querySelector('.el-textarea__inner')?.focus();
 };
 
 /**
@@ -450,22 +591,32 @@ const sendMessage = async () => {
         // 接收块的回调
         (chunk) => {
           assistantMessage.content += chunk;
-          scrollToBottom();
+
+          // 强制触发DOM更新
+          nextTick(() => {
+            // 滚动到底部
+            scrollToBottom();
+            // 设置代码复制按钮
+            setupCodeCopyButtons();
+          });
         },
         // 完成时的回调
         (fullResponse) => {
           logDebug('流式响应完成:', fullResponse.substring(0, 50) + '...');
           isLoading.value = false;
           scrollToBottom();
+          setupCodeCopyButtons();
 
-          // 保存对话历史
+          // 保存对话历史 - 修复的部分
           if (currentConversationId.value) {
             saveCurrentConversation();
           } else {
             // 如果是新对话，创建一个ID并保存
             currentConversationId.value = 'conv_' + Date.now();
-            saveCurrentConversation();
-            loadConversations();
+            saveCurrentConversation().then(() => {
+              // 保存成功后立即加载对话列表以更新UI
+              loadConversations();
+            });
           }
         },
         // 错误处理回调
@@ -474,6 +625,7 @@ const sendMessage = async () => {
           assistantMessage.content += '\n\n> ⚠️ *错误: ' + error.message + '*';
           isLoading.value = false;
           scrollToBottom();
+          setupCodeCopyButtons();
           ElMessage.error('请求失败: ' + error.message);
         },
         // 系统消息
@@ -558,6 +710,9 @@ const loadConversation = async (conversationId) => {
 
       // 滚动到底部
       await scrollToBottom();
+
+      // 设置代码复制按钮
+      setupCodeCopyButtons();
     } else {
       ElMessage.error('加载对话失败');
     }
@@ -582,10 +737,20 @@ const saveCurrentConversation = async () => {
     })));
 
     // 保存对话
-    await aiAssistantService.saveConversation(currentConversationId.value);
+    const success = await aiAssistantService.saveConversation(currentConversationId.value);
 
-    // 刷新对话列表
-    loadConversations();
+    if (success) {
+      // 确保对话列表刷新
+      await loadConversations();
+
+      // 如果是新对话，设置标题
+      if (!currentConversationTitle.value) {
+        const conversation = conversations.value.find(c => c.id === currentConversationId.value);
+        if (conversation) {
+          currentConversationTitle.value = getConversationTitle(conversation);
+        }
+      }
+    }
   } catch (error) {
     console.error('保存对话失败:', error);
     ElMessage.error('保存对话失败: ' + error.message);
@@ -701,22 +866,7 @@ const confirmDelete = async () => {
 
   try {
     // 从存储中删除对话
-    const conversationKey = `ai_conversation_${actionTargetId.value}`;
-
-    try {
-      if (ipc && typeof ipc.deleteStoreValue === 'function') {
-        await ipc.deleteStoreValue(conversationKey);
-      }
-    } catch (deleteError) {
-      console.warn('从ipc删除对话失败:', deleteError);
-    }
-
-    // 无论ipc是否成功，都尝试从localStorage删除
-    try {
-      localStorage.removeItem(conversationKey);
-    } catch (localStorageError) {
-      console.warn('从localStorage删除对话失败:', localStorageError);
-    }
+    await aiAssistantService.deleteConversation(actionTargetId.value);
 
     // 如果删除的是当前对话，创建新对话
     if (actionTargetId.value === currentConversationId.value) {
@@ -744,26 +894,29 @@ const saveSettings = async () => {
     aiAssistantService.setConfig({
       apiKey: settings.value.apiKey,
       apiUrl: settings.value.apiUrl,
-      model: settings.value.model
+      model: settings.value.model,
+      shareStudentData: settings.value.shareStudentData
     });
 
-    // 保存到本地存储 - 使用localStorage作为备选
+    // 创建一个简单的可序列化对象
+    const settingsToSave = {
+      apiKey: settings.value.apiKey,
+      apiUrl: settings.value.apiUrl,
+      model: settings.value.model,
+      systemPrompt: settings.value.systemPrompt,
+      shareStudentData: settings.value.shareStudentData
+    };
+
+    // 保存到本地存储
     try {
       if (ipc && typeof ipc.setStoreValue === 'function') {
-        await ipc.setStoreValue('ai_assistant_settings', {
-          apiKey: settings.value.apiKey,
-          apiUrl: settings.value.apiUrl,
-          model: settings.value.model,
-          systemPrompt: settings.value.systemPrompt
-        });
+        // 使用JSON序列化再反序列化来避免克隆问题
+        const serialized = JSON.stringify(settingsToSave);
+        const deserialized = JSON.parse(serialized);
+        await ipc.setStoreValue('ai_assistant_settings', deserialized);
       } else {
         // 如果ipc不可用，使用localStorage
-        localStorage.setItem('ai_assistant_settings', JSON.stringify({
-          apiKey: settings.value.apiKey,
-          apiUrl: settings.value.apiUrl,
-          model: settings.value.model,
-          systemPrompt: settings.value.systemPrompt
-        }));
+        localStorage.setItem('ai_assistant_settings', JSON.stringify(settingsToSave));
       }
 
       ElMessage.success('设置已保存');
@@ -772,12 +925,7 @@ const saveSettings = async () => {
       console.error('存储设置失败，尝试使用localStorage:', storageError);
 
       // 备选：使用localStorage
-      localStorage.setItem('ai_assistant_settings', JSON.stringify({
-        apiKey: settings.value.apiKey,
-        apiUrl: settings.value.apiUrl,
-        model: settings.value.model,
-        systemPrompt: settings.value.systemPrompt
-      }));
+      localStorage.setItem('ai_assistant_settings', JSON.stringify(settingsToSave));
 
       ElMessage.success('设置已保存(使用备选存储)');
       showSettings.value = false;
@@ -821,14 +969,16 @@ const loadSettings = async () => {
         apiKey: savedSettings.apiKey || '',
         apiUrl: savedSettings.apiUrl || 'https://api.deepseek.com/chat/completions',
         model: savedSettings.model || 'deepseek-chat',
-        systemPrompt: savedSettings.systemPrompt || '你是一个乐于助人的助手。'
+        systemPrompt: savedSettings.systemPrompt || '你是一个乐于助人的助手，专注于帮助济南大学的学生。请提供准确、有用的信息和建议。',
+        shareStudentData: savedSettings.shareStudentData || false
       };
 
       // 更新服务配置
       aiAssistantService.setConfig({
         apiKey: settings.value.apiKey,
         apiUrl: settings.value.apiUrl,
-        model: settings.value.model
+        model: settings.value.model,
+        shareStudentData: settings.value.shareStudentData
       });
     }
   } catch (error) {
@@ -838,7 +988,8 @@ const loadSettings = async () => {
       apiKey: '',
       apiUrl: 'https://api.deepseek.com/chat/completions',
       model: 'deepseek-chat',
-      systemPrompt: '你是一个乐于助人的助手。'
+      systemPrompt: '你是一个乐于助人的助手，专注于帮助济南大学的学生。请提供准确、有用的信息和建议。',
+      shareStudentData: false
     };
   }
 };
@@ -901,6 +1052,35 @@ onMounted(async () => {
   } catch (error) {
     console.error('路由参数获取失败:', error);
   }
+
+  // 设置事件监听器，实现代码块复制功能
+  document.addEventListener('click', async (e) => {
+    const target = e.target;
+
+    // 如果点击的是代码复制按钮或其子元素
+    if (target.closest('.copy-code-button')) {
+      const button = target.closest('.copy-code-button');
+      const code = decodeURIComponent(button.getAttribute('data-code'));
+
+      try {
+        await navigator.clipboard.writeText(code);
+
+        // 更改按钮文本作为视觉反馈
+        const originalText = button.innerHTML;
+        button.innerHTML = '<i class="el-icon-check"></i> 已复制';
+
+        // 2秒后恢复原文本
+        setTimeout(() => {
+          button.innerHTML = originalText;
+        }, 2000);
+
+        ElMessage.success('代码已复制到剪贴板');
+      } catch (error) {
+        console.error('复制代码失败:', error);
+        ElMessage.error('复制代码失败');
+      }
+    }
+  });
 });
 
 // 监听认证状态变化
@@ -914,6 +1094,18 @@ watch(
         loadUserInfo();
         loadConversations();
       }
+    },
+    { deep: true }
+);
+
+// 监听消息变化，以便更新代码复制按钮
+watch(
+    () => messages.value,
+    () => {
+      // 当消息更新时，重新设置代码复制按钮
+      nextTick(() => {
+        setupCodeCopyButtons();
+      });
     },
     { deep: true }
 );
@@ -1101,6 +1293,32 @@ watch(
   margin-bottom: 16px;
 }
 
+/* 快速提示芯片 */
+.ai-suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 20px;
+  max-width: 600px;
+}
+
+.suggestion-chip {
+  padding: 8px 16px;
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 20px;
+  cursor: pointer;
+  transition: all 0.2s;
+  font-size: 14px;
+}
+
+.suggestion-chip:hover {
+  background-color: var(--primary-color);
+  color: white;
+  border-color: var(--primary-color);
+}
+
 .message-container {
   display: flex;
   margin-bottom: 20px;
@@ -1169,14 +1387,79 @@ watch(
   border-top-left-radius: 2px;
 }
 
+/* 代码块样式 */
+.assistant-message .message-body :deep(pre) {
+  background-color: #f8f8f8;
+  border-radius: 6px;
+  padding: 0;
+  margin: 10px 0;
+  overflow: hidden;
+}
+
+.assistant-message .message-body :deep(code) {
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-size: 14px;
+  tab-size: 2;
+}
+
+.assistant-message .message-body :deep(.code-block-wrapper) {
+  position: relative;
+  margin: 16px 0;
+  border-radius: 6px;
+  overflow: hidden;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.assistant-message .message-body :deep(.code-block-header) {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 12px;
+  background-color: #e8e8e8;
+  color: #333;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.assistant-message .message-body :deep(.code-language) {
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.assistant-message .message-body :deep(.copy-code-button) {
+  background-color: transparent;
+  border: none;
+  color: #666;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.assistant-message .message-body :deep(.copy-code-button:hover) {
+  background-color: rgba(0, 0, 0, 0.1);
+  color: var(--primary-color);
+}
+
+/* 让用户消息中的代码片段更加可读 */
+.user-message .message-body :deep(code) {
+  background-color: rgba(255, 255, 255, 0.2);
+  padding: 2px 4px;
+  border-radius: 3px;
+}
+
 /* 用户消息操作按钮靠右 */
 .user-message .message-actions {
-  justify-content: flex-start;
+  justify-content: flex-end;
 }
 
 .message-actions {
   display: flex;
-  justify-content: flex-end;
+  justify-content: flex-start;
   margin-top: 5px;
 }
 
@@ -1212,6 +1495,14 @@ watch(
 .input-actions .el-button {
   border-radius: 20px;
   padding: 10px 20px;
+}
+
+/* 设置项说明文本 */
+.setting-description {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-top: 4px;
+  line-height: 1.4;
 }
 
 /* Loading indicator */
@@ -1250,92 +1541,56 @@ watch(
   40% { transform: scale(1); }
 }
 
-/* Markdown styling */
-:deep(.message-body) {
-  color: inherit;
-}
-
-:deep(.message-body h1) {
-  font-size: 1.5em;
-  margin-top: 0.5em;
-  margin-bottom: 0.5em;
-}
-
-:deep(.message-body h2) {
-  font-size: 1.3em;
-  margin-top: 0.5em;
-  margin-bottom: 0.5em;
-}
-
-:deep(.message-body h3) {
-  font-size: 1.1em;
-  margin-top: 0.5em;
-  margin-bottom: 0.5em;
-}
-
-:deep(.message-body p) {
-  margin-bottom: 1em;
-}
-
-:deep(.message-body pre) {
-  background-color: #f5f5f5;
-  padding: 10px;
-  border-radius: 4px;
-  overflow-x: auto;
-  margin-bottom: 1em;
-}
-
-:deep(.message-body code) {
-  background-color: #f5f5f5;
-  padding: 2px 4px;
-  border-radius: 3px;
-  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
-  font-size: 0.9em;
-}
-
-:deep(.message-body table) {
+/* Markdown表格样式 */
+.assistant-message .message-body :deep(table) {
   border-collapse: collapse;
   width: 100%;
-  margin-bottom: 1em;
+  margin: 15px 0;
 }
 
-:deep(.message-body th),
-:deep(.message-body td) {
+.assistant-message .message-body :deep(th),
+.assistant-message .message-body :deep(td) {
   border: 1px solid #ddd;
   padding: 8px;
   text-align: left;
 }
 
-:deep(.message-body th) {
-  background-color: #f2f2f2;
+.assistant-message .message-body :deep(th) {
+  background-color: #f2f2f7;
+  font-weight: 600;
 }
 
-:deep(.message-body ul),
-:deep(.message-body ol) {
-  padding-left: 1.5em;
-  margin-bottom: 1em;
+.assistant-message .message-body :deep(tr:nth-child(even)) {
+  background-color: #f9f9f9;
 }
 
-:deep(.message-body blockquote) {
-  border-left: 4px solid #ddd;
-  padding-left: 10px;
-  color: #666;
-  margin-left: 0;
-  margin-right: 0;
+/* 引用块样式 */
+.assistant-message .message-body :deep(blockquote) {
+  border-left: 4px solid var(--primary-color);
+  padding: 8px 16px;
+  background-color: rgba(0, 122, 255, 0.05);
+  margin: 12px 0;
 }
 
-/* Dark theme overrides - to be implemented if needed */
-@media (prefers-color-scheme: dark) {
-  /* Dark theme styling can be added here */
+/* 列表样式 */
+.assistant-message .message-body :deep(ul),
+.assistant-message .message-body :deep(ol) {
+  padding-left: 20px;
+  margin: 10px 0;
 }
 
-/* Responsive adjustments */
+.assistant-message .message-body :deep(li) {
+  margin-bottom: 4px;
+}
+
+/* 响应式调整 */
 @media (max-width: 768px) {
   .chat-sidebar {
     position: absolute;
     height: 100%;
     left: 0;
     top: 0;
+    z-index: 100;
   }
 
   .chat-sidebar.collapsed {
@@ -1353,6 +1608,39 @@ watch(
     background: var(--bg-secondary);
     border-radius: 0 4px 4px 0;
     box-shadow: 2px 0 5px rgba(0,0,0,0.1);
+  }
+
+  .message-container {
+    max-width: 95%;
+  }
+}
+
+/* 暗黑模式主题 */
+@media (prefers-color-scheme: dark) {
+  .assistant-message .message-body :deep(pre) {
+    background-color: #1e1e1e;
+  }
+
+  .assistant-message .message-body :deep(.code-block-header) {
+    background-color: #333;
+    color: #eee;
+  }
+
+  .assistant-message .message-body :deep(.copy-code-button) {
+    color: #aaa;
+  }
+
+  .assistant-message .message-body :deep(.copy-code-button:hover) {
+    background-color: rgba(255, 255, 255, 0.1);
+    color: var(--secondary-color);
+  }
+
+  .assistant-message .message-body :deep(th) {
+    background-color: #2c2c2e;
+  }
+
+  .assistant-message .message-body :deep(tr:nth-child(even)) {
+    background-color: #1c1c1e;
   }
 }
 </style>
