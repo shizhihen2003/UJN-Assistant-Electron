@@ -122,6 +122,10 @@ class AiAssistantService {
             }
 
             console.log('正在收集学生数据...');
+            console.log('当前存储类型:', this.useLocalStorage ? 'localStorage' : 'ipc');
+
+            // 列出所有存储的键名以帮助调试(Debug)
+            await this.listAllStoredKeys();
 
             // 初始化数据对象
             const studentData = {
@@ -135,7 +139,6 @@ class AiAssistantService {
             // 获取基本信息
             const userInfo = authService.getUserInfo();
             if (userInfo) {
-                // 脱敏处理 - 移除学号等敏感信息
                 studentData.basics = {
                     entranceYear: userInfo.entranceYear || null,
                     major: userInfo.major || null,
@@ -143,88 +146,92 @@ class AiAssistantService {
                 };
             }
 
-            // 尝试获取成绩数据 - 修改后的代码
+            // 收集成绩数据 - 从分散的键中获取
             try {
-                // 尝试多个可能的键名
-                let grades = await this.getStoredData('student_grades');
-                if (!grades || !Array.isArray(grades) || grades.length === 0) {
-                    grades = await this.getStoredData('marks'); // 尝试另一个可能的键名
-                }
-                if (!grades || !Array.isArray(grades) || grades.length === 0) {
-                    grades = await this.getStoredData('eas_marks'); // 再尝试另一个可能的键名
-                }
+                let i = 0;
+                while (true) {
+                    const marks = await this.getStoredData(`marks_${i}`);
+                    if (!marks) break;
 
-                // 如果成功获取到成绩数据
-                if (grades && Array.isArray(grades) && grades.length > 0) {
-                    // 脱敏处理
-                    studentData.grades = grades.map(grade => ({
-                        name: grade.name || grade.kcmc || '未知课程',
-                        type: grade.type || grade.ksxz || '未知类型',
-                        credit: grade.credit || grade.xf || 0,
-                        mark: grade.mark || grade.cj || 0,
-                        gpa: grade.gpa || 0
-                    }));
+                    if (Array.isArray(marks)) {
+                        studentData.grades.push(...marks.map(grade => ({
+                            name: grade.name || grade.kcmc || '未知课程',
+                            type: grade.type || grade.ksxz || '未知类型',
+                            credit: grade.credit || grade.xf || 0,
+                            mark: grade.mark || grade.cj || 0,
+                            gpa: grade.gpa || 0
+                        })));
+                    }
+                    i++;
                 }
             } catch (e) {
                 console.warn('获取成绩数据失败:', e);
             }
 
-            // 尝试获取课表数据 - 修改后的代码
+            // 收集考试数据 - 从分散的键中获取
             try {
-                let schedule = await this.getStoredData('student_schedule');
-                if (!schedule || !Array.isArray(schedule) || schedule.length === 0) {
-                    schedule = await this.getStoredData('lessons'); // 尝试另一个可能的键名
-                }
-                if (!schedule || !Array.isArray(schedule) || schedule.length === 0) {
-                    schedule = await this.getStoredData('eas_lessons'); // 再尝试另一个可能的键名
-                }
+                let i = 0;
+                while (true) {
+                    const exams = await this.getStoredData(`exams_${i}`);
+                    if (!exams) break;
 
-                if (schedule && Array.isArray(schedule) && schedule.length > 0) {
-                    // 脱敏处理
-                    studentData.schedule = schedule.map(course => ({
+                    if (Array.isArray(exams)) {
+                        studentData.exams.push(...exams.map(exam => ({
+                            name: exam.name || exam.kcmc || '未知课程',
+                            time: exam.time || exam.kssj || '',
+                            location: exam.location || exam.cdmc || ''
+                        })));
+                    }
+                    i++;
+                }
+            } catch (e) {
+                console.warn('获取考试数据失败:', e);
+            }
+
+            // 获取课表数据
+            try {
+                // 尝试获取常规课表
+                let lessonTable = await this.getStoredData('lesson_table');
+                if (lessonTable && Array.isArray(lessonTable)) {
+                    studentData.schedule.push(...lessonTable.map(course => ({
                         name: course.name || course.kcmc || '未知课程',
                         teacher: course.teacher || course.jsxm || '',
                         location: course.location || course.cdmc || '',
                         weekday: course.weekday || course.xqj || 0,
                         section: course.section || course.jcs || '',
                         weeks: course.weeks || course.zcd || ''
-                    }));
+                    })));
+                }
+
+                // 尝试获取学期小组课表
+                const academicGroups = await this.getStoredData('academic_groups');
+                if (academicGroups && Array.isArray(academicGroups)) {
+                    for (const group of academicGroups) {
+                        const groupLessons = await this.getStoredData(`academic_group_${group.id}_lessons`);
+                        if (groupLessons && Array.isArray(groupLessons)) {
+                            studentData.schedule.push(...groupLessons.map(course => ({
+                                name: course.name || course.kcmc || '未知课程',
+                                teacher: course.teacher || course.jsxm || '',
+                                location: course.location || course.cdmc || '',
+                                weekday: course.weekday || course.xqj || 0,
+                                section: course.section || course.jcs || '',
+                                weeks: course.weeks || course.zcd || ''
+                            })));
+                        }
+                    }
                 }
             } catch (e) {
                 console.warn('获取课表数据失败:', e);
             }
 
-            // 尝试获取考试数据 - 修改后的代码
+            // 尝试获取校历数据
             try {
-                let exams = await this.getStoredData('student_exams');
-                if (!exams || !Array.isArray(exams) || exams.length === 0) {
-                    exams = await this.getStoredData('exams'); // 尝试另一个可能的键名
-                }
-                if (!exams || !Array.isArray(exams) || exams.length === 0) {
-                    exams = await this.getStoredData('eas_exams'); // 再尝试另一个可能的键名
-                }
-
-                if (exams && Array.isArray(exams) && exams.length > 0) {
-                    // 脱敏处理
-                    studentData.exams = exams.map(exam => ({
-                        name: exam.name || exam.kcmc || '未知课程',
-                        time: exam.time || exam.kssj || '',
-                        location: exam.location || exam.cdmc || ''
-                    }));
-                }
-            } catch (e) {
-                console.warn('获取考试数据失败:', e);
-            }
-
-            // 尝试获取校历数据 - 修改后的代码
-            try {
-                let calendar = await this.getStoredData('school_calendar');
+                let calendar = await this.getStoredData('SCHOOL_CALENDAR_DATA');
                 if (!calendar) {
-                    calendar = await this.getStoredData('calendar'); // 尝试另一个可能的键名
+                    calendar = await this.getStoredData('calendar');
                 }
 
                 if (calendar) {
-                    // 脱敏处理
                     studentData.calendar = {
                         year: calendar.year || calendar.semesterInfo?.year || '',
                         semester: calendar.semester || calendar.semesterInfo?.semester || '',
@@ -235,11 +242,46 @@ class AiAssistantService {
                 console.warn('获取校历数据失败:', e);
             }
 
+            // 添加调试信息
+            console.log('成绩数据数量:', studentData.grades.length);
+            console.log('课表数据数量:', studentData.schedule.length);
+            console.log('考试数据数量:', studentData.exams.length);
+            console.log('校历数据:', studentData.calendar);
+
             console.log('学生数据收集完成:', studentData);
             return studentData;
         } catch (error) {
             console.error('收集学生数据失败:', error);
             return null;
+        }
+    }
+
+    // 列出所有存储的键名(Debug专用)
+    async listAllStoredKeys() {
+        try {
+            console.log('列出所有存储的键名:');
+
+            if (this.useLocalStorage) {
+                // 列出 localStorage 中的所有键
+                for (let i = 0; i < localStorage.length; i++) {
+                    const key = localStorage.key(i);
+                    if (key.startsWith('ujn_assistant_')) {
+                        console.log('找到存储键:', key);
+                    }
+                }
+            } else if (this.ipc) {
+                // 如果使用 IPC，需要一个专门的方法来获取所有键
+                if (typeof this.ipc.invoke === 'function') {
+                    try {
+                        const keys = await this.ipc.invoke('store:getAllKeys', 'ujn_assistant_');
+                        console.log('从 IPC 获取的键:', keys);
+                    } catch (e) {
+                        console.error('获取 IPC 键列表失败:', e);
+                    }
+                }
+            }
+        } catch (error) {
+            console.error('列出存储键失败:', error);
         }
     }
 
@@ -250,15 +292,22 @@ class AiAssistantService {
      */
     async getStoredData(key) {
         try {
+            const prefixedKey = `ujn_assistant_${key}`;
+            console.log(`尝试获取数据: ${key} -> ${prefixedKey}`);
+
             if (this.useLocalStorage) {
-                const data = localStorage.getItem(key);
+                const data = localStorage.getItem(prefixedKey);
+                console.log(`localStorage获取结果 (${prefixedKey}):`, data ? '有数据' : '无数据');
                 return data ? JSON.parse(data) : null;
             } else if (this.ipc) {
+                let result = null;
                 if (typeof this.ipc.getStoreValue === 'function') {
-                    return await this.ipc.getStoreValue(key);
+                    result = await this.ipc.getStoreValue(prefixedKey);
                 } else if (typeof this.ipc.invoke === 'function') {
-                    return await this.ipc.invoke('store:get', key);
+                    result = await this.ipc.invoke('store:get', prefixedKey);
                 }
+                console.log(`IPC获取结果 (${prefixedKey}):`, result ? '有数据' : '无数据');
+                return result;
             }
             return null;
         } catch (error) {
