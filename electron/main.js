@@ -68,21 +68,56 @@ function setupIPC() {
         return store.get(key);
     });
 
-    ipcMain.handle('store:set', (event, key, value) => {
+// 改进 main.js 中的 store:set 处理函数
+    ipcMain.handle('store:set', async (event, key, value) => {
         try {
-            // 检查值是否为null或undefined
+            // 详细记录接收数据情况
+            console.log(`[主进程] store:set - 接收键: ${key}`);
+            console.log(`[主进程] store:set - 接收值类型: ${typeof value}`);
+
+            // 空值检查
             if (value === null || value === undefined) {
-                // 如果是null或undefined，使用delete方法删除键
+                console.log(`[主进程] store:set - 收到空值: ${key}`);
                 store.delete(key);
-                console.log(`键 ${key} 的值为空，已删除`);
-            } else {
-                // 否则正常设置值
-                store.set(key, value);
+                return true;
             }
+
+            // 更详细的日志，仅当值是对象时
+            if (typeof value === 'object' && value !== null) {
+                console.log(`[主进程] store:set - 对象键: ${Object.keys(value).join(', ')}`);
+
+                // 对话数据特殊处理
+                if (key.startsWith('ai_conversation_') && value.messages) {
+                    console.log(`[主进程] store:set - 消息数量: ${value.messages.length}`);
+                }
+            }
+
+            // 尝试序列化再反序列化，确保数据可以安全传输
+            let processedValue;
+            try {
+                const serialized = JSON.stringify(value);
+                console.log(`[主进程] store:set - 序列化数据长度: ${serialized.length}`);
+                processedValue = JSON.parse(serialized);
+            } catch (serializeError) {
+                console.error(`[主进程] store:set - 序列化错误: ${serializeError.message}`);
+                return false;
+            }
+
+            // 保存到store
+            store.set(key, processedValue);
+
+            // 验证保存结果
+            const saved = store.get(key);
+            if (saved === undefined) {
+                console.warn(`[主进程] store:set - 验证失败: ${key} 未成功存储`);
+                return false;
+            }
+
+            console.log(`[主进程] store:set - 成功: ${key}`);
             return true;
         } catch (error) {
-            console.error('store:set 错误:', error);
-            throw error;  // 将错误传回渲染进程
+            console.error('[主进程] store:set 错误:', error);
+            return false;
         }
     });
 
@@ -514,11 +549,17 @@ function setupIPC() {
         }
     });
 
-    // 获取所有键名
-    ipcMain.handle('store:getAllKeys', () => {
+    // 获取所有键的处理器
+    ipcMain.handle('store:getAllKeys', async (event, prefix = '') => {
         try {
-            // 获取store中的所有键
-            return Object.keys(store.store);
+            let keys = store.store ? Object.keys(store.store) : [];
+
+            // 如果提供了前缀，进行过滤
+            if (prefix) {
+                keys = keys.filter(key => key.startsWith(prefix));
+            }
+
+            return keys;
         } catch (error) {
             console.error('获取所有键失败:', error);
             return [];

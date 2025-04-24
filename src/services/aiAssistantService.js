@@ -14,6 +14,7 @@ class AiAssistantService {
         this.messages = [];
         this.isStreaming = false;
         this.shareStudentData = false; // 是否分享学生数据
+        this.currentConversationId = null; // 新增：记录当前对话ID
 
         // 存储介质相关
         this.useLocalStorage = false;
@@ -411,59 +412,218 @@ class AiAssistantService {
     /**
      * 保存对话历史到存储
      * @param {string} conversationId 对话ID
+     * @returns {Promise<boolean>} 是否成功保存
      */
     async saveConversation(conversationId) {
         try {
-            // 确保消息中不存在null或undefined值
+            // 记录当前对话ID
+            this.currentConversationId = conversationId;
+            console.log(`开始保存对话: ${conversationId}`);
+
+            // 存储时间戳，确保排序准确
+            const timestamp = new Date().toISOString();
+
+            // 确保消息数据有效
             const safeMessages = this.messages.map(msg => ({
                 role: msg.role || 'user',
                 content: msg.content || '',
-                timestamp: msg.timestamp || new Date().toISOString()
+                timestamp: msg.timestamp || timestamp
             }));
 
+            // 验证消息数据有效性
+            if (!safeMessages.length) {
+                console.warn('保存对话失败：消息为空');
+                return false;
+            }
+
+            console.log(`准备保存的消息数量: ${safeMessages.length}`);
+
+            // 创建对话数据对象 - 保持简单结构
             const conversationData = {
                 id: conversationId,
                 messages: safeMessages,
-                lastUpdated: new Date().toISOString()
+                lastUpdated: timestamp
             };
 
-            if (this.useLocalStorage) {
-                // 使用localStorage保存
+            // 首先保存到localStorage作为备份
+            try {
+                console.log(`首先保存到localStorage备份: ${conversationId}`);
                 localStorage.setItem(`ai_conversation_${conversationId}`, JSON.stringify(conversationData));
-                console.log('对话已保存到localStorage');
-                return true;
-            } else if (this.ipc) {
-                // 使用ipc工具保存到本地存储
-                if (typeof this.ipc.setStoreValue === 'function') {
-                    await this.ipc.setStoreValue(`ai_conversation_${conversationId}`, conversationData);
-                } else if (typeof this.ipc.invoke === 'function') {
-                    await this.ipc.invoke('store:set', `ai_conversation_${conversationId}`, conversationData);
-                }
-                console.log('对话已保存到ipc存储');
-                return true;
-            } else {
-                throw new Error('无可用存储方法');
+            } catch (localStorageError) {
+                console.error(`localStorage备份失败: ${localStorageError.message}`);
             }
+
+            // IPC保存
+            let ipcSaveSuccess = false;
+
+            if (!this.useLocalStorage && window.electronStore) {
+                try {
+                    console.log(`尝试通过IPC保存对话: ${conversationId}`);
+
+                    // 创建一个精简版本的对话数据，减少传输量
+                    const simpleData = {
+                        id: conversationId,
+                        messages: safeMessages.map(msg => ({
+                            role: msg.role,
+                            content: msg.content,
+                            timestamp: msg.timestamp
+                        })),
+                        lastUpdated: timestamp
+                    };
+
+                    // 序列化数据，确保可以安全传输
+                    const serialized = JSON.stringify(simpleData);
+                    console.log(`序列化后数据长度: ${serialized.length}`);
+
+                    // 如果数据过大，使用分片存储
+                    const MAX_CHUNK_SIZE = 500000; // 设置最大分片大小
+
+                    if (serialized.length > MAX_CHUNK_SIZE) {
+                        console.log(`数据过大(${serialized.length}字节)，使用分片存储`);
+
+                        // 存储元数据
+                        const metaData = {
+                            id: conversationId,
+                            messageCount: safeMessages.length,
+                            lastUpdated: timestamp,
+                            isChunked: true,
+                            chunkCount: Math.ceil(serialized.length / MAX_CHUNK_SIZE)
+                        };
+
+                        // 保存元数据
+                        const metaSuccess = await window.electronStore.set(`ai_conversation_${conversationId}_meta`, metaData);
+                        if (!metaSuccess) {
+                            throw new Error('元数据保存失败');
+                        }
+
+                        // 分片保存消息
+                        for (let i = 0; i < safeMessages.length; i++) {
+                            const msgSuccess = await window.electronStore.set(
+                                `ai_conversation_${conversationId}_msg_${i}`,
+                                safeMessages[i]
+                            );
+                            if (!msgSuccess) {
+                                console.warn(`消息 ${i} 保存失败`);
+                            }
+                        }
+
+                        // 验证元数据
+                        const savedMeta = await window.electronStore.get(`ai_conversation_${conversationId}_meta`);
+                        if (!savedMeta || savedMeta.id !== conversationId) {
+                            throw new Error('元数据验证失败');
+                        }
+
+                        console.log(`分片存储成功: ${savedMeta.messageCount} 条消息`);
+                        ipcSaveSuccess = true;
+                    } else {
+                        // 数据不大，直接保存
+                        console.log(`直接保存对话数据: ${serialized.length} 字节`);
+
+                        // 使用JSON解析确保数据格式正确
+                        const safeData = JSON.parse(serialized);
+
+                        // 保存数据
+                        const saveResult = await window.electronStore.set(`ai_conversation_${conversationId}`, safeData);
+                        console.log(`保存结果: ${saveResult}`);
+
+                        if (!saveResult) {
+                            throw new Error('保存失败');
+                        }
+
+                        // 验证数据 - 使用简单检查
+                        const savedData = await window.electronStore.get(`ai_conversation_${conversationId}`);
+                        if (!savedData || !savedData.id || savedData.id !== conversationId) {
+                            throw new Error('验证失败: 数据不完整或ID不匹配');
+                        }
+
+                        console.log(`IPC保存验证成功: ${savedData.messages?.length || 0} 条消息`);
+                        ipcSaveSuccess = true;
+                    }
+
+                    // 更新最近对话列表
+                    if (ipcSaveSuccess) {
+                        try {
+                            let recentIds = await window.electronStore.get('ai_recent_conversations') || [];
+                            if (!Array.isArray(recentIds)) recentIds = [];
+
+                            // 更新列表
+                            recentIds = recentIds.filter(id => id !== conversationId);
+                            recentIds.unshift(conversationId);
+
+                            if (recentIds.length > 50) recentIds = recentIds.slice(0, 50);
+
+                            const listSaveResult = await window.electronStore.set('ai_recent_conversations', recentIds);
+                            console.log(`最近对话列表更新结果: ${listSaveResult}`);
+
+                            if (listSaveResult) {
+                                console.log(`已更新最近对话列表，当前共${recentIds.length}个对话`);
+                            }
+                        } catch (e) {
+                            console.error('更新最近对话列表失败:', e);
+                        }
+                    }
+                } catch (ipcError) {
+                    console.error(`IPC保存失败: ${ipcError.message}`);
+                    ipcSaveSuccess = false;
+                }
+            }
+
+            // 如果IPC失败，使用localStorage
+            if (!ipcSaveSuccess) {
+                console.log('IPC保存失败，使用localStorage作为主要存储');
+                this.useLocalStorage = true; // 切换到localStorage模式
+
+                // 验证localStorage保存情况
+                try {
+                    const savedDataStr = localStorage.getItem(`ai_conversation_${conversationId}`);
+                    if (!savedDataStr) {
+                        // 重新保存
+                        localStorage.setItem(`ai_conversation_${conversationId}`, JSON.stringify(conversationData));
+                    }
+
+                    // 更新localStorage中的最近对话列表
+                    try {
+                        let recentIds = JSON.parse(localStorage.getItem('ai_recent_conversations') || '[]');
+                        if (!Array.isArray(recentIds)) recentIds = [];
+
+                        // 更新列表
+                        recentIds = recentIds.filter(id => id !== conversationId);
+                        recentIds.unshift(conversationId);
+
+                        if (recentIds.length > 50) recentIds = recentIds.slice(0, 50);
+                        localStorage.setItem('ai_recent_conversations', JSON.stringify(recentIds));
+
+                        console.log(`已更新localStorage最近对话列表，当前共${recentIds.length}个对话`);
+                    } catch (e) {
+                        console.error('更新localStorage最近对话列表失败:', e);
+                    }
+                } catch (localStorageError) {
+                    console.error('最终localStorage验证/保存失败:', localStorageError);
+                }
+            }
+
+            console.log(`对话 ${conversationId} 保存完成: IPC=${ipcSaveSuccess}, localStorage=true`);
+            return true; // 至少有一种方法成功
         } catch (error) {
             console.error('保存对话失败:', error);
 
-            // 尝试备选存储方式
+            // 紧急备份
             try {
-                const safeMessages = this.messages.map(msg => ({
-                    role: msg.role || 'user',
-                    content: msg.content || '',
-                    timestamp: msg.timestamp || new Date().toISOString()
-                }));
-
-                localStorage.setItem(`ai_conversation_${conversationId}`, JSON.stringify({
+                const timestamp = new Date().toISOString();
+                const emergencyData = {
                     id: conversationId,
-                    messages: safeMessages,
-                    lastUpdated: new Date().toISOString()
-                }));
-                console.log('对话已保存到备选存储(localStorage)');
+                    messages: this.messages.map(msg => ({
+                        role: msg.role || 'user',
+                        content: msg.content || '',
+                        timestamp: msg.timestamp || timestamp
+                    })),
+                    lastUpdated: timestamp
+                };
+                localStorage.setItem(`ai_conversation_${conversationId}`, JSON.stringify(emergencyData));
+                console.log('紧急备份到localStorage成功');
                 return true;
             } catch (backupError) {
-                console.error('备选存储也失败:', backupError);
+                console.error('最终备份失败:', backupError);
                 return false;
             }
         }
@@ -524,6 +684,7 @@ class AiAssistantService {
     async getConversations() {
         try {
             const conversations = [];
+            const processedIds = new Set(); // 跟踪已处理的对话ID
 
             // 从localStorage收集对话
             for (let i = 0; i < localStorage.length; i++) {
@@ -533,6 +694,7 @@ class AiAssistantService {
                         const conversation = JSON.parse(localStorage.getItem(key));
                         if (conversation && conversation.id) {
                             conversations.push(conversation);
+                            processedIds.add(conversation.id);
                         }
                     } catch (e) {
                         console.error('解析对话失败:', e);
@@ -540,28 +702,74 @@ class AiAssistantService {
                 }
             }
 
-            // 如果有可用的IPC方法，尝试获取所有对话键
+            // 如果有当前对话但未处理，确保添加它
+            if (this.messages.length > 0 && this.currentConversationId && !processedIds.has(this.currentConversationId)) {
+                conversations.push({
+                    id: this.currentConversationId,
+                    messages: this.messages,
+                    lastUpdated: new Date().toISOString()
+                });
+                processedIds.add(this.currentConversationId);
+            }
+
+            // 从IPC获取对话
             if (this.ipc && !this.useLocalStorage) {
                 try {
-                    // 尝试获取所有键（如果实现了此功能）
-                    if (typeof this.ipc.invoke === 'function') {
-                        const storeKeys = await this.ipc.invoke('store:getAllKeys');
-                        if (Array.isArray(storeKeys)) {
-                            for (const key of storeKeys) {
-                                if (key.startsWith('ai_conversation_') && !conversations.some(c => `ai_conversation_${c.id}` === key)) {
-                                    const conversation = await this.ipc.invoke('store:get', key);
-                                    if (conversation && conversation.id) {
-                                        conversations.push(conversation);
-                                    }
-                                }
+                    // 先获取最近对话ID列表
+                    let recentIds = [];
+
+                    try {
+                        if (typeof this.ipc.getStoreValue === 'function') {
+                            recentIds = await this.ipc.getStoreValue('ai_recent_conversations', []);
+                        } else if (typeof this.ipc.invoke === 'function') {
+                            recentIds = await this.ipc.invoke('store:get', 'ai_recent_conversations') || [];
+                        }
+
+                        if (!Array.isArray(recentIds)) recentIds = [];
+                        console.log('从存储获取最近对话列表:', recentIds);
+                    } catch (e) {
+                        console.warn('获取最近对话列表失败:', e);
+                        recentIds = [];
+                    }
+
+                    // 确保当前对话ID在列表中
+                    if (this.currentConversationId && !recentIds.includes(this.currentConversationId)) {
+                        recentIds.unshift(this.currentConversationId);
+                    }
+
+                    // 从ID列表获取对话
+                    for (const id of recentIds) {
+                        if (processedIds.has(id)) continue;
+
+                        try {
+                            let conversation;
+                            const convKey = `ai_conversation_${id}`;
+
+                            if (typeof this.ipc.getStoreValue === 'function') {
+                                conversation = await this.ipc.getStoreValue(convKey);
+                            } else if (typeof this.ipc.invoke === 'function') {
+                                conversation = await this.ipc.invoke('store:get', convKey);
                             }
+
+                            if (conversation && conversation.id) {
+                                conversations.push(conversation);
+                                processedIds.add(id);
+                            }
+                        } catch (e) {
+                            console.warn(`获取对话 ${id} 失败:`, e);
                         }
                     }
                 } catch (error) {
-                    console.warn('从IPC获取所有对话失败:', error);
-                    // 这不是致命错误，至少我们有localStorage中的对话
+                    console.warn('从IPC获取对话失败:', error);
                 }
             }
+
+            // 对对话按最后更新时间排序
+            conversations.sort((a, b) => {
+                const timeA = new Date(a.lastUpdated || 0).getTime();
+                const timeB = new Date(b.lastUpdated || 0).getTime();
+                return timeB - timeA; // 降序排序
+            });
 
             return conversations;
         } catch (error) {

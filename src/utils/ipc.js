@@ -39,30 +39,85 @@ export default {
                 // 确保值是可以被JSON序列化的
                 const serializedValue = JSON.stringify(value);
                 localStorage.setItem(key, serializedValue);
+                console.log(`[IPC] 已保存到localStorage: ${key}, 数据长度: ${serializedValue.length}`);
+                return true;
             } catch (error) {
                 console.error('设置存储值失败:', error);
                 // 尝试简化对象，移除可能导致循环引用的属性
                 if (typeof value === 'object' && value !== null) {
                     const simplifiedValue = this._simplifyObject(value);
+                    console.log(`[IPC] 尝试保存简化对象: ${key}`);
                     localStorage.setItem(key, JSON.stringify(simplifiedValue));
+                    return true;
                 } else {
                     throw error; // 如果不是对象，则无法简化，抛出原始错误
                 }
             }
-            return;
         }
 
         try {
-            await window.electronStore.set(key, value);
+            // 调试日志
+            console.log(`[IPC] 通过IPC保存: ${key}, 值类型: ${typeof value}`);
+            if (typeof value === 'object' && value !== null) {
+                if (Array.isArray(value)) {
+                    console.log(`[IPC] 数组元素数量: ${value.length}`);
+                } else {
+                    console.log(`[IPC] 对象键: ${Object.keys(value).join(', ')}`);
+                }
+            }
+
+            // 序列化、反序列化后再保存，确保数据安全
+            const serialized = JSON.stringify(value);
+            const deserialized = JSON.parse(serialized);
+
+            let result = false;
+            if (typeof window.electronStore.set === 'function') {
+                result = await window.electronStore.set(key, deserialized);
+            } else if (typeof window.ipcRenderer?.invoke === 'function') {
+                result = await window.ipcRenderer.invoke('store:set', key, deserialized);
+            } else {
+                throw new Error('无法找到有效的IPC存储方法');
+            }
+
+            console.log(`[IPC] 保存结果: ${result ? '成功' : '失败'}`);
+
+            // 验证
+            try {
+                let savedValue;
+                if (typeof window.electronStore.get === 'function') {
+                    savedValue = await window.electronStore.get(key);
+                } else if (typeof window.ipcRenderer?.invoke === 'function') {
+                    savedValue = await window.ipcRenderer.invoke('store:get', key);
+                }
+
+                if (savedValue === undefined) {
+                    console.warn(`[IPC] 验证失败: ${key} 未被正确保存`);
+                } else {
+                    console.log(`[IPC] 验证成功: ${key} 已正确保存`);
+                }
+            } catch (validationError) {
+                console.warn(`[IPC] 验证出错: ${validationError.message}`);
+            }
+
+            return result;
         } catch (error) {
-            console.error('设置存储值失败:', error);
+            console.error(`[IPC] 保存失败: ${key}`, error);
             // 尝试简化对象，移除可能导致循环引用的属性
             if (typeof value === 'object' && value !== null) {
-                const simplifiedValue = this._simplifyObject(value);
-                await window.electronStore.set(key, simplifiedValue);
-            } else {
-                throw error; // 如果不是对象，则无法简化，抛出原始错误
+                try {
+                    const simplifiedValue = this._simplifyObject(value);
+                    console.log(`[IPC] 尝试保存简化对象: ${key}`);
+                    if (typeof window.electronStore.set === 'function') {
+                        return await window.electronStore.set(key, simplifiedValue);
+                    } else if (typeof window.ipcRenderer?.invoke === 'function') {
+                        return await window.ipcRenderer.invoke('store:set', key, simplifiedValue);
+                    }
+                } catch (innerError) {
+                    console.error(`[IPC] 简化对象保存失败: ${key}`, innerError);
+                    return false;
+                }
             }
+            return false;
         }
     },
 
@@ -746,6 +801,45 @@ export default {
         } catch (error) {
             console.error('测试VPN访问失败:', error);
             return false;
+        }
+    },
+
+    /**
+     * 获取所有存储键名
+     * @param {string} prefix 键名前缀过滤器（可选）
+     * @returns {Promise<Array<string>>} 键名列表
+     */
+    async getAllStoreKeys(prefix = '') {
+        try {
+            if (!window.electronStore) {
+                console.warn('electronStore不可用，使用localStorage替代');
+
+                // 从localStorage获取所有键
+                const keys = [];
+                for (let i = 0; i < localStorage.length; i++) {
+                    const key = localStorage.key(i);
+                    if (prefix && !key.startsWith(prefix)) continue;
+                    keys.push(key);
+                }
+                return keys;
+            }
+
+            // 通过IPC获取所有键
+            if (window.ipcRenderer) {
+                // Electron 22+支持此方法
+                return await window.ipcRenderer.invoke('store:getAllKeys', prefix);
+            }
+
+            return [];
+        } catch (error) {
+            console.error(`获取所有键失败:`, error);
+
+            // 出错时尝试从localStorage获取
+            if (prefix) {
+                return Object.keys(localStorage).filter(key => key.startsWith(prefix));
+            } else {
+                return Object.keys(localStorage);
+            }
         }
     }
 };

@@ -671,16 +671,71 @@ const sendMessage = async () => {
           scrollToBottom();
           setupCodeCopyButtons();
 
-          // 保存对话历史 - 修复的部分
+          // 保存对话历史
           if (currentConversationId.value) {
-            saveCurrentConversation();
+            // 延迟一小段时间确保UI先更新
+            setTimeout(async () => {
+              try {
+                // 将AIAssistant组件的currentConversationId传递给service
+                aiAssistantService.currentConversationId = currentConversationId.value;
+                const saved = await saveCurrentConversation();
+
+                if (saved) {
+                  console.log('对话保存成功，刷新列表');
+                  // 保存成功后立即刷新对话列表
+                  await loadConversations();
+                } else {
+                  console.warn('对话保存失败');
+                  // 尝试再次保存
+                  setTimeout(async () => {
+                    const retrySaved = await saveCurrentConversation();
+                    if (retrySaved) {
+                      console.log('重试保存成功');
+                      await loadConversations();
+                    } else {
+                      console.error('重试保存仍然失败');
+                      ElMessage.warning('对话保存可能未成功，重启后可能无法恢复');
+                    }
+                  }, 1000); // 1秒后重试
+                }
+              } catch (error) {
+                console.error('保存过程出错:', error);
+              }
+            }, 100);
           } else {
             // 如果是新对话，创建一个ID并保存
             currentConversationId.value = 'conv_' + Date.now();
-            saveCurrentConversation().then(() => {
-              // 保存成功后立即加载对话列表以更新UI
-              loadConversations();
-            });
+            console.log('创建新对话ID:', currentConversationId.value);
+
+            // 延迟一小段时间确保UI先更新
+            setTimeout(async () => {
+              try {
+                // 将新的ID传递给service
+                aiAssistantService.currentConversationId = currentConversationId.value;
+                const saved = await saveCurrentConversation();
+
+                if (saved) {
+                  console.log('新对话保存成功，刷新列表');
+                  // 保存成功后立即加载对话列表以更新UI
+                  await loadConversations();
+                } else {
+                  console.warn('新对话保存失败');
+                  // 尝试再次保存
+                  setTimeout(async () => {
+                    const retrySaved = await saveCurrentConversation();
+                    if (retrySaved) {
+                      console.log('新对话重试保存成功');
+                      await loadConversations();
+                    } else {
+                      console.error('新对话重试保存仍然失败');
+                      ElMessage.warning('对话保存可能未成功，重启后可能无法恢复');
+                    }
+                  }, 1000); // 1秒后重试
+                }
+              } catch (error) {
+                console.error('保存新对话过程出错:', error);
+              }
+            }, 100);
           }
         },
         // 错误处理回调
@@ -748,6 +803,8 @@ const newConversation = () => {
   currentConversationId.value = '';
   currentConversationTitle.value = '';
   messages.value = [];
+  // 重置service中的currentConversationId和messages
+  aiAssistantService.currentConversationId = null;
   aiAssistantService.clearMessages();
 };
 
@@ -756,16 +813,69 @@ const newConversation = () => {
  */
 const loadConversation = async (conversationId) => {
   try {
+    console.log(`尝试加载对话: ${conversationId}`);
+
+    // 检查conversationId是否有效
+    if (!conversationId) {
+      throw new Error('对话ID无效');
+    }
+
+    // 设置aiAssistantService的currentConversationId
+    aiAssistantService.currentConversationId = conversationId;
+
+    // 从service加载对话
     const success = await aiAssistantService.loadConversation(conversationId);
 
     if (success) {
+      console.log(`对话 ${conversationId} 加载成功`);
+
       // 更新UI
       currentConversationId.value = conversationId;
+
+      // 查找对话详情
       const conversation = conversations.value.find(c => c.id === conversationId);
       currentConversationTitle.value = conversation?.title || '';
 
-      // 将aiAssistantService中的消息转换为UI消息格式
+      // 获取消息内容
       const serviceMessages = aiAssistantService.getMessages();
+
+      // 验证消息内容有效性
+      if (!serviceMessages || !serviceMessages.length) {
+        console.warn('从service获取到的消息为空');
+        // 从localStorage再次尝试加载
+        try {
+          const storageKey = `ai_conversation_${conversationId}`;
+          const storedData = localStorage.getItem(storageKey);
+
+          if (storedData) {
+            const parsedData = JSON.parse(storedData);
+            if (parsedData && parsedData.messages && parsedData.messages.length) {
+              console.log(`从localStorage恢复了${parsedData.messages.length}条消息`);
+              messages.value = parsedData.messages.map(msg => ({
+                role: msg.role,
+                content: msg.content,
+                timestamp: msg.timestamp || new Date().toISOString()
+              }));
+
+              // 同步回service
+              aiAssistantService.setMessages(messages.value);
+
+              // 继续处理
+              await scrollToBottom();
+              setupCodeCopyButtons();
+              return;
+            }
+          }
+        } catch (storageError) {
+          console.error('从localStorage恢复失败:', storageError);
+        }
+
+        // 如果仍然失败，显示错误
+        ElMessage.error('对话内容为空，无法加载');
+        return;
+      }
+
+      // 将service中的消息转换为UI消息格式
       messages.value = serviceMessages.map(msg => ({
         role: msg.role,
         content: msg.content,
@@ -778,7 +888,45 @@ const loadConversation = async (conversationId) => {
       // 设置代码复制按钮
       setupCodeCopyButtons();
     } else {
-      ElMessage.error('加载对话失败');
+      console.error(`对话 ${conversationId} 加载失败`);
+
+      // 尝试从localStorage直接加载
+      try {
+        const storageKey = `ai_conversation_${conversationId}`;
+        const storedData = localStorage.getItem(storageKey);
+
+        if (storedData) {
+          const parsedData = JSON.parse(storedData);
+          if (parsedData && parsedData.messages && parsedData.messages.length) {
+            console.log(`从localStorage直接加载了${parsedData.messages.length}条消息`);
+
+            // 更新UI
+            currentConversationId.value = conversationId;
+            currentConversationTitle.value = getConversationTitle(parsedData);
+
+            messages.value = parsedData.messages.map(msg => ({
+              role: msg.role,
+              content: msg.content,
+              timestamp: msg.timestamp || new Date().toISOString()
+            }));
+
+            // 同步回service
+            aiAssistantService.setMessages(messages.value);
+            aiAssistantService.currentConversationId = conversationId;
+
+            // 继续处理
+            await scrollToBottom();
+            setupCodeCopyButtons();
+            return;
+          }
+        }
+
+        // 如果仍然无法加载
+        ElMessage.error('加载对话失败，无法找到对话数据');
+      } catch (directLoadError) {
+        console.error('从localStorage直接加载失败:', directLoadError);
+        ElMessage.error('加载对话失败: ' + directLoadError.message);
+      }
     }
   } catch (error) {
     console.error('加载对话失败:', error);
@@ -790,21 +938,35 @@ const loadConversation = async (conversationId) => {
  * 保存当前对话
  */
 const saveCurrentConversation = async () => {
-  if (!currentConversationId.value) return;
+  if (!currentConversationId.value) return false;
 
   try {
-    // 更新aiAssistantService的消息
-    aiAssistantService.setMessages(messages.value.map(msg => ({
+    console.log('保存对话ID:', currentConversationId.value);
+
+    // 深拷贝消息，避免引用问题
+    const messagesToSave = JSON.parse(JSON.stringify(messages.value.map(msg => ({
       role: msg.role,
       content: msg.content,
-      timestamp: msg.timestamp
-    })));
+      timestamp: msg.timestamp || new Date().toISOString()
+    }))));
+
+    // 确保消息非空
+    if (!messagesToSave.length) {
+      console.warn('保存失败：消息为空');
+      return false;
+    }
+
+    // 更新aiAssistantService的消息和当前对话ID
+    aiAssistantService.currentConversationId = currentConversationId.value;
+    aiAssistantService.setMessages(messagesToSave);
 
     // 保存对话
     const success = await aiAssistantService.saveConversation(currentConversationId.value);
 
     if (success) {
-      // 确保对话列表刷新
+      console.log('保存对话成功');
+
+      // 刷新对话列表
       await loadConversations();
 
       // 如果是新对话，设置标题
@@ -812,12 +974,20 @@ const saveCurrentConversation = async () => {
         const conversation = conversations.value.find(c => c.id === currentConversationId.value);
         if (conversation) {
           currentConversationTitle.value = getConversationTitle(conversation);
+          console.log('已设置对话标题:', currentConversationTitle.value);
         }
       }
+
+      return true;
+    } else {
+      console.error('保存对话失败：aiAssistantService返回失败');
+      ElMessage.error('保存对话失败，请尝试重新发送消息');
+      return false;
     }
   } catch (error) {
     console.error('保存对话失败:', error);
     ElMessage.error('保存对话失败: ' + error.message);
+    return false;
   }
 };
 
@@ -1107,6 +1277,8 @@ onMounted(async () => {
 
   // 加载对话列表
   await loadConversations();
+
+
 
   // 从URL参数加载对话
   try {
