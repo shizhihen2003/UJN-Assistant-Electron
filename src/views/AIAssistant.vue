@@ -97,7 +97,11 @@
               v-for="(message, index) in messages"
               :key="index"
               class="message-container"
-              :class="{ 'user-message': message.role === 'user', 'assistant-message': message.role === 'assistant' }"
+              :class="{
+    'user-message': message.role === 'user',
+    'assistant-message': message.role === 'assistant',
+    'streaming-message': message.role === 'assistant' && index === messages.length - 1 && isLoading
+  }"
           >
             <div class="message-avatar">
               <el-avatar v-if="message.role === 'user'" :size="36">{{ userInitials }}</el-avatar>
@@ -108,8 +112,14 @@
                 <span class="message-sender">{{ message.role === 'user' ? userName : 'AI助手' }}</span>
                 <span class="message-time">{{ formatTime(message.timestamp) }}</span>
               </div>
-              <!-- 使用v-html并应用消息格式化 -->
-              <div class="message-body" v-html="formatMessage(message.content)"></div>
+              <!-- 修改消息体的显示逻辑 -->
+              <div
+                  class="message-body"
+                  :ref="el => message.role === 'assistant' && index === messages.length - 1 && isLoading ? streamingElementRef = el : null"
+                  v-html="(message.role === 'assistant' && isLoading && index === messages.length - 1)
+    ? ''
+    : formatMessage(message.content)">
+              </div>
               <div class="message-actions" v-if="message.role === 'assistant'">
                 <el-button link size="small" @click="copyMessageContent(message.content)">
                   <el-icon><CopyDocument /></el-icon> 复制全部
@@ -236,6 +246,9 @@ const hljs = ref(null);
 
 // 认证状态检查
 const isAuthenticated = ref(false);
+
+const streamingElementRef = ref(null);
+
 
 // 日志记录函数
 function logDebug(...args) {
@@ -616,6 +629,75 @@ const useTemplate = (templateType) => {
 };
 
 /**
+ * 创建实时markdown解析器
+ * @returns {{add: ((function(*): (string|*|undefined|null|undefined))|*), finalize: (function(): string|*)}}
+ */
+const createRealtimeMarkdownRenderer = () => {
+  let buffer = '';
+  let lastRendered = '';
+
+  return {
+    add: (char) => {
+      buffer += char;
+
+      // 尝试解析当前缓冲区的内容
+      try {
+        // 检查是否有未闭合的markdown语法
+        const unclosed = checkUnclosedMarkdown(buffer);
+
+        if (unclosed) {
+          // 如果有未闭合的语法，不渲染最后一部分
+          const safeContent = buffer.slice(0, unclosed.start);
+          if (safeContent !== lastRendered) {
+            lastRendered = safeContent;
+            return formatMessage(safeContent);
+          }
+          return null; // 不需要更新
+        } else {
+          // 完整渲染
+          if (buffer !== lastRendered) {
+            lastRendered = buffer;
+            return formatMessage(buffer);
+          }
+          return null;
+        }
+      } catch (e) {
+        // 解析错误，返回原始文本
+        return buffer.replace(/\n/g, '<br>');
+      }
+    },
+
+    finalize: () => {
+      // 最终渲染，确保所有内容都被正确格式化
+      return formatMessage(buffer);
+    }
+  };
+};
+
+// 检查未闭合的markdown语法
+const checkUnclosedMarkdown = (text) => {
+  const patterns = [
+    { regex: /```(?![\s\S]*```)/g, type: 'codeblock' },
+    { regex: /`(?![^`]*`)/g, type: 'code' },
+    { regex: /\*\*(?![^*]*\*\*)/g, type: 'bold' },
+    { regex: /_(?![^_]*_)/g, type: 'italic' },
+    { regex: /#+\s*$/, type: 'heading' }
+  ];
+
+  for (const pattern of patterns) {
+    const match = text.match(pattern.regex);
+    if (match) {
+      return {
+        type: pattern.type,
+        start: text.lastIndexOf(match[match.length - 1])
+      };
+    }
+  }
+
+  return null;
+};
+
+/**
  * 发送消息
  */
 const sendMessage = async () => {
@@ -649,102 +731,202 @@ const sendMessage = async () => {
     // 添加空白助手消息到聊天记录
     messages.value.push(assistantMessage);
 
+    // 等待DOM更新
+    await nextTick();
+
+    // 存储完整的AI响应（用于保存）
+    let fullResponse = '';
+
+    // 用于DOM操作的变量
+    let streamingElement = null;
+    let pendingContent = '';
+    let typingInterval = null;
+
+    // 创建实时markdown渲染器
+    const markdownRenderer = createRealtimeMarkdownRenderer();
+
+    // 确保有DOM元素
+    const waitForElement = () => {
+      return new Promise((resolve) => {
+        const checkElement = () => {
+          if (streamingElementRef.value) {
+            streamingElement = streamingElementRef.value;
+            resolve();
+          } else {
+            setTimeout(checkElement, 10);
+          }
+        };
+        checkElement();
+      });
+    };
+
+    await waitForElement();
+
+    // 开始打字效果
+    const startTyping = () => {
+      if (typingInterval) return;
+
+      typingInterval = setInterval(() => {
+        if (pendingContent.length > 0) {
+          const char = pendingContent[0];
+          pendingContent = pendingContent.slice(1);
+
+          // 使用markdown渲染器处理字符
+          const renderedContent = markdownRenderer.add(char);
+
+          // 如果有新的渲染内容，更新DOM
+          if (renderedContent && streamingElement) {
+            streamingElement.innerHTML = renderedContent;
+          }
+
+          // 滚动到底部
+          scrollToBottom();
+        } else {
+          // 如果没有待显示的内容了，清理interval
+          clearInterval(typingInterval);
+          typingInterval = null;
+        }
+      }, 30); // 每个字符间隔30ms
+    };
+
     // 发送请求并处理流式响应
     await aiAssistantService.sendStreamingRequest(
         message,
         // 接收块的回调
         (chunk) => {
-          assistantMessage.content += chunk;
+          fullResponse += chunk;
+          pendingContent += chunk;
 
-          // 强制触发DOM更新
-          nextTick(() => {
-            // 滚动到底部
-            scrollToBottom();
-            // 设置代码复制按钮
-            setupCodeCopyButtons();
-          });
+          // 如果还没开始打字，开始
+          if (!typingInterval) {
+            startTyping();
+          }
         },
         // 完成时的回调
-        (fullResponse) => {
-          logDebug('流式响应完成:', fullResponse.substring(0, 50) + '...');
-          isLoading.value = false;
-          scrollToBottom();
-          setupCodeCopyButtons();
+        (finalResponse) => {
+          logDebug('流式响应完成:', finalResponse.substring(0, 50) + '...');
 
-          // 保存对话历史
-          if (currentConversationId.value) {
-            // 延迟一小段时间确保UI先更新
-            setTimeout(async () => {
-              try {
-                // 将AIAssistant组件的currentConversationId传递给service
-                aiAssistantService.currentConversationId = currentConversationId.value;
-                const saved = await saveCurrentConversation();
+          // 等待所有字符显示完成
+          const waitForTypingComplete = () => {
+            if (pendingContent.length === 0 && !typingInterval) {
+              // 完成后更新消息内容
+              assistantMessage.content = fullResponse;
 
-                if (saved) {
-                  console.log('对话保存成功，刷新列表');
-                  // 保存成功后立即刷新对话列表
-                  await loadConversations();
-                } else {
-                  console.warn('对话保存失败');
-                  // 尝试再次保存
-                  setTimeout(async () => {
-                    const retrySaved = await saveCurrentConversation();
-                    if (retrySaved) {
-                      console.log('重试保存成功');
+              // 确保关闭加载状态
+              isLoading.value = false;
+
+              // 最终确保格式正确
+              nextTick(() => {
+                if (streamingElement) {
+                  streamingElement.innerHTML = formatMessage(fullResponse);
+                }
+
+                scrollToBottom();
+                setupCodeCopyButtons();
+              });
+
+              // 保存对话历史
+              if (currentConversationId.value) {
+                // 延迟一小段时间确保UI先更新
+                setTimeout(async () => {
+                  try {
+                    // 将AIAssistant组件的currentConversationId传递给service
+                    aiAssistantService.currentConversationId = currentConversationId.value;
+                    const saved = await saveCurrentConversation();
+
+                    if (saved) {
+                      console.log('对话保存成功，刷新列表');
+                      // 保存成功后立即刷新对话列表
                       await loadConversations();
                     } else {
-                      console.error('重试保存仍然失败');
-                      ElMessage.warning('对话保存可能未成功，重启后可能无法恢复');
+                      console.warn('对话保存失败');
+                      // 尝试再次保存
+                      setTimeout(async () => {
+                        const retrySaved = await saveCurrentConversation();
+                        if (retrySaved) {
+                          console.log('重试保存成功');
+                          await loadConversations();
+                        } else {
+                          console.error('重试保存仍然失败');
+                          ElMessage.warning('对话保存可能未成功，重启后可能无法恢复');
+                        }
+                      }, 1000); // 1秒后重试
                     }
-                  }, 1000); // 1秒后重试
-                }
-              } catch (error) {
-                console.error('保存过程出错:', error);
-              }
-            }, 100);
-          } else {
-            // 如果是新对话，创建一个ID并保存
-            currentConversationId.value = 'conv_' + Date.now();
-            console.log('创建新对话ID:', currentConversationId.value);
+                  } catch (error) {
+                    console.error('保存过程出错:', error);
+                  }
+                }, 100);
+              } else {
+                // 如果是新对话，创建一个ID并保存
+                currentConversationId.value = 'conv_' + Date.now();
+                console.log('创建新对话ID:', currentConversationId.value);
 
-            // 延迟一小段时间确保UI先更新
-            setTimeout(async () => {
-              try {
-                // 将新的ID传递给service
-                aiAssistantService.currentConversationId = currentConversationId.value;
-                const saved = await saveCurrentConversation();
+                // 延迟一小段时间确保UI先更新
+                setTimeout(async () => {
+                  try {
+                    // 将新的ID传递给service
+                    aiAssistantService.currentConversationId = currentConversationId.value;
+                    const saved = await saveCurrentConversation();
 
-                if (saved) {
-                  console.log('新对话保存成功，刷新列表');
-                  // 保存成功后立即加载对话列表以更新UI
-                  await loadConversations();
-                } else {
-                  console.warn('新对话保存失败');
-                  // 尝试再次保存
-                  setTimeout(async () => {
-                    const retrySaved = await saveCurrentConversation();
-                    if (retrySaved) {
-                      console.log('新对话重试保存成功');
+                    if (saved) {
+                      console.log('新对话保存成功，刷新列表');
+                      // 保存成功后立即加载对话列表以更新UI
                       await loadConversations();
                     } else {
-                      console.error('新对话重试保存仍然失败');
-                      ElMessage.warning('对话保存可能未成功，重启后可能无法恢复');
+                      console.warn('新对话保存失败');
+                      // 尝试再次保存
+                      setTimeout(async () => {
+                        const retrySaved = await saveCurrentConversation();
+                        if (retrySaved) {
+                          console.log('新对话重试保存成功');
+                          await loadConversations();
+                        } else {
+                          console.error('新对话重试保存仍然失败');
+                          ElMessage.warning('对话保存可能未成功，重启后可能无法恢复');
+                        }
+                      }, 1000); // 1秒后重试
                     }
-                  }, 1000); // 1秒后重试
-                }
-              } catch (error) {
-                console.error('保存新对话过程出错:', error);
+                  } catch (error) {
+                    console.error('保存新对话过程出错:', error);
+                  }
+                }, 100);
               }
-            }, 100);
-          }
+            } else {
+              // 继续等待
+              setTimeout(waitForTypingComplete, 100);
+            }
+          };
+
+          // 开始等待打字完成
+          waitForTypingComplete();
         },
         // 错误处理回调
         (error) => {
           logDebug('流式响应错误:', error);
-          assistantMessage.content += '\n\n> ⚠️ *错误: ' + error.message + '*';
+
+          // 停止打字
+          if (typingInterval) {
+            clearInterval(typingInterval);
+            typingInterval = null;
+          }
+
+          // 确保关闭加载状态
           isLoading.value = false;
-          scrollToBottom();
-          setupCodeCopyButtons();
+
+          // 显示错误
+          const errorMessage = '\n\n> ⚠️ *错误: ' + error.message + '*';
+          fullResponse += errorMessage;
+          assistantMessage.content = fullResponse;
+
+          if (streamingElement) {
+            streamingElement.innerHTML = formatMessage(fullResponse);
+          }
+
+          nextTick(() => {
+            scrollToBottom();
+            setupCodeCopyButtons();
+          });
+
           ElMessage.error('请求失败: ' + error.message);
         },
         // 系统消息
@@ -1989,5 +2171,39 @@ pre code.hljs {
   .assistant-message .message-body :deep(tr:nth-child(even)) {
     background-color: #1c1c1e;
   }
+}
+
+.message-body {
+  padding: 12px;
+  border-radius: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+  word-break: break-word; /* 确保长单词换行 */
+  transition: none; /* 禁用过渡动画以加快显示 */
+}
+
+/* 修改打字机光标的CSS */
+.streaming-message .message-body::after {
+  content: '|';
+  animation: blink 0.7s infinite;
+  margin-left: 2px;
+  display: inline; /* 改为inline而不是inline-block */
+  vertical-align: baseline; /* 确保垂直对齐 */
+}
+
+/* 确保message-body本身的样式正确 */
+.streaming-message .message-body {
+  display: inline-block; /* 确保内容在同一行 */
+  min-width: 0; /* 避免宽度问题 */
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+@keyframes blink {
+  0% { opacity: 1; }
+  50% { opacity: 0; }
+  100% { opacity: 1; }
 }
 </style>

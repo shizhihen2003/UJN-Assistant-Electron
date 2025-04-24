@@ -387,7 +387,7 @@ class AiAssistantService {
             const decoder = new TextDecoder('utf-8');
             let buffer = '';
 
-            // 处理数据流 - 修改后的代码
+            // 处理数据流
             while (this.isStreaming) {
                 const { done, value } = await reader.read();
 
@@ -417,10 +417,11 @@ class AiAssistantService {
                             const jsonData = JSON.parse(data);
                             const chunk = jsonData.choices[0];
 
-                            // 如果有内容，立即调用回调函数，确保UI更新
+                            // 如果有内容，直接调用回调函数
                             if (chunk.delta?.content) {
                                 fullResponse += chunk.delta.content;
-                                // 立即调用回调以实现流式显示
+                                // 直接传递内容块，不做任何处理
+                                // 逐字显示的逻辑将在sendMessage中处理
                                 onChunk(chunk.delta.content);
                             }
 
