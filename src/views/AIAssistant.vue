@@ -635,43 +635,42 @@ const useTemplate = (templateType) => {
 const createRealtimeMarkdownRenderer = () => {
   let buffer = '';
   let lastRendered = '';
+  let lastRenderResult = null; // 缓存上次渲染结果
 
   return {
     add: (char) => {
       buffer += char;
 
-      // 尝试解析当前缓冲区的内容
+      // 使用缓存避免重复渲染相同内容
+      if (buffer === lastRendered) {
+        return lastRenderResult;
+      }
+
       try {
-        // 检查是否有未闭合的markdown语法
         const unclosed = checkUnclosedMarkdown(buffer);
 
         if (unclosed) {
-          // 如果有未闭合的语法，尝试渲染安全部分
           const safeContent = buffer.slice(0, unclosed.start);
-
-          // 只有当有新内容时才更新
           if (safeContent.length > lastRendered.length) {
             lastRendered = safeContent;
-            // 临时渲染安全部分
-            return formatMessage(safeContent) || safeContent.replace(/\n/g, '<br>');
+            lastRenderResult = formatMessage(safeContent) || safeContent.replace(/\n/g, '<br>');
+            return lastRenderResult;
           }
-          return null; // 不需要更新
+          return null;
         } else {
-          // 完整渲染
           if (buffer !== lastRendered) {
             lastRendered = buffer;
-            return formatMessage(buffer);
+            lastRenderResult = formatMessage(buffer);
+            return lastRenderResult;
           }
           return null;
         }
       } catch (e) {
-        // 解析错误，返回基本格式化
         return buffer.replace(/\n/g, '<br>');
       }
     },
 
     finalize: () => {
-      // 最终渲染，确保所有内容都被正确格式化
       return formatMessage(buffer);
     }
   };
@@ -908,46 +907,72 @@ const sendMessage = async () => {
     const startTyping = () => {
       if (typingInterval) return;
 
+      // 使用批处理来减少DOM更新频率
       typingInterval = setInterval(() => {
         if (pendingContent.length > 0) {
-          const char = pendingContent[0];
-          pendingContent = pendingContent.slice(1);
+          // 批量处理多个字符，减少DOM操作
+          const chunkSize = Math.min(3, pendingContent.length); // 每次处理3个字符
+          const chunk = pendingContent.slice(0, chunkSize);
+          pendingContent = pendingContent.slice(chunkSize);
 
-          // 使用markdown渲染器处理字符
-          const renderedContent = markdownRenderer.add(char);
-
-          // 如果有新的渲染内容，更新DOM
-          if (renderedContent && streamingElement) {
-            // 先设置渲染内容
-            streamingElement.innerHTML = renderedContent;
-
-            // 找到最后一个文本节点并添加光标
-            const lastTextNode = findLastTextNode(streamingElement);
-            if (lastTextNode) {
-              const cursorSpan = document.createElement('span');
-              cursorSpan.className = 'typing-cursor';
-              cursorSpan.textContent = '|';
-              lastTextNode.parentNode.insertBefore(cursorSpan, lastTextNode.nextSibling);
-            } else {
-              // 如果没有文本节点，直接添加到末尾
-              streamingElement.innerHTML += '<span class="typing-cursor">|</span>';
-            }
+          // 批量处理字符
+          let renderedContent = null;
+          for (let i = 0; i < chunk.length; i++) {
+            renderedContent = markdownRenderer.add(chunk[i]);
           }
 
-          // 滚动到底部
-          scrollToBottom();
+          // 只在有渲染内容时更新DOM
+          if (renderedContent && streamingElement) {
+            // 使用requestAnimationFrame来优化渲染
+            requestAnimationFrame(() => {
+              streamingElement.innerHTML = renderedContent;
+
+              // 移除旧光标
+              const oldCursor = streamingElement.querySelector('.typing-cursor');
+              if (oldCursor) {
+                oldCursor.remove();
+              }
+
+              // 添加新光标
+              const cursor = document.createElement('span');
+              cursor.className = 'typing-cursor';
+              cursor.textContent = '|';
+              streamingElement.appendChild(cursor);
+            });
+          }
+
+          // 使用节流来减少滚动频率
+          const throttledScroll = throttle(scrollToBottom, 100);
+          throttledScroll();
         } else {
-          // 如果没有待显示的内容了，清理interval
           clearInterval(typingInterval);
           typingInterval = null;
 
-          // 完成时最终渲染
           if (streamingElement) {
             const finalContent = markdownRenderer.finalize();
-            streamingElement.innerHTML = finalContent;
+            requestAnimationFrame(() => {
+              streamingElement.innerHTML = finalContent;
+              // 移除光标
+              const cursor = streamingElement.querySelector('.typing-cursor');
+              if (cursor) {
+                cursor.remove();
+              }
+            });
           }
         }
       }, 30);
+    };
+
+    // 在组件中添加节流函数
+    const throttle = (func, limit) => {
+      let inThrottle;
+      return function(...args) {
+        if (!inThrottle) {
+          func.apply(this, args);
+          inThrottle = true;
+          setTimeout(() => inThrottle = false, limit);
+        }
+      };
     };
 
     // 添加辅助函数：查找最后一个文本节点
@@ -2364,27 +2389,28 @@ pre code.hljs {
 
 /* 确保message-body本身的样式正确 */
 .streaming-message .message-body {
-  display: inline-block; /* 确保内容在同一行 */
-  min-width: 0; /* 避免宽度问题 */
+  display: inline-block;
+  min-width: 0;
   white-space: pre-wrap;
   word-break: break-word;
-  min-height: 1.5em; /* 防止内容塌陷 */
+  min-height: 1.5em;
+  contain: content; /* 限制重绘范围 */
+  transform: translateZ(0); /* 创建新的渲染层，避免影响其他元素 */
 }
 
-/* 新的光标样式 */
 .typing-cursor {
-  display: inline !important;
-  animation: blink 0.7s infinite;
+  display: inline-block;
+  animation: blink 1s step-end infinite;
   margin: 0 2px;
   color: var(--text-primary);
   font-weight: bold;
   vertical-align: baseline;
   line-height: 1;
+  will-change: opacity; /* 优化动画性能 */
 }
 
 @keyframes blink {
-  0% { opacity: 1; }
+  0%, 100% { opacity: 1; }
   50% { opacity: 0; }
-  100% { opacity: 1; }
 }
 </style>
