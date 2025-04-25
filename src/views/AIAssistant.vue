@@ -646,11 +646,14 @@ const createRealtimeMarkdownRenderer = () => {
         const unclosed = checkUnclosedMarkdown(buffer);
 
         if (unclosed) {
-          // 如果有未闭合的语法，不渲染最后一部分
+          // 如果有未闭合的语法，尝试渲染安全部分
           const safeContent = buffer.slice(0, unclosed.start);
-          if (safeContent !== lastRendered) {
+
+          // 只有当有新内容时才更新
+          if (safeContent.length > lastRendered.length) {
             lastRendered = safeContent;
-            return formatMessage(safeContent);
+            // 临时渲染安全部分
+            return formatMessage(safeContent) || safeContent.replace(/\n/g, '<br>');
           }
           return null; // 不需要更新
         } else {
@@ -662,7 +665,7 @@ const createRealtimeMarkdownRenderer = () => {
           return null;
         }
       } catch (e) {
-        // 解析错误，返回原始文本
+        // 解析错误，返回基本格式化
         return buffer.replace(/\n/g, '<br>');
       }
     },
@@ -676,22 +679,161 @@ const createRealtimeMarkdownRenderer = () => {
 
 // 检查未闭合的markdown语法
 const checkUnclosedMarkdown = (text) => {
-  const patterns = [
-    { regex: /```(?![\s\S]*```)/g, type: 'codeblock' },
-    { regex: /`(?![^`]*`)/g, type: 'code' },
-    { regex: /\*\*(?![^*]*\*\*)/g, type: 'bold' },
-    { regex: /_(?![^_]*_)/g, type: 'italic' },
-    { regex: /#+\s*$/, type: 'heading' }
-  ];
+  let inCodeBlock = false;
+  let codeBlockStart = -1;
+  let codeBlockCount = 0;
 
-  for (const pattern of patterns) {
-    const match = text.match(pattern.regex);
-    if (match) {
-      return {
-        type: pattern.type,
-        start: text.lastIndexOf(match[match.length - 1])
-      };
+  let backtickCount = 0;
+  let lastBacktickIndex = -1;
+
+  let asteriskCount = 0;
+  let lastAsteriskIndex = -1;
+
+  let underscoreCount = 0;
+  let lastUnderscoreIndex = -1;
+
+  let linkStack = [];
+  let imageStack = [];
+
+  let i = 0;
+  while (i < text.length) {
+    // 检查转义字符
+    if (text[i] === '\\') {
+      i += 2;
+      continue;
     }
+
+    // 检查代码块
+    if (text.slice(i, i + 3) === '```') {
+      if (!inCodeBlock) {
+        inCodeBlock = true;
+        codeBlockStart = i;
+        codeBlockCount++;
+      } else {
+        inCodeBlock = false;
+        codeBlockCount--;
+      }
+      i += 3;
+      continue;
+    }
+
+    // 如果在代码块中，不处理其他语法
+    if (inCodeBlock) {
+      i++;
+      continue;
+    }
+
+    // 检查内联代码
+    if (text[i] === '`') {
+      backtickCount++;
+      lastBacktickIndex = i;
+    }
+
+    // 检查加粗（两个星号）
+    if (text.slice(i, i + 2) === '**') {
+      asteriskCount++;
+      lastAsteriskIndex = i;
+      i += 2;
+      continue;
+    }
+
+    // 检查斜体（单个星号）
+    if (text[i] === '*' && text[i + 1] !== '*' && text[i - 1] !== '*') {
+      underscoreCount++;
+      lastUnderscoreIndex = i;
+    }
+
+    // 检查斜体（下划线）
+    if (text[i] === '_') {
+      underscoreCount++;
+      lastUnderscoreIndex = i;
+    }
+
+    // 检查链接和图片
+    if (text[i] === '[') {
+      if (i > 0 && text[i - 1] === '!') {
+        imageStack.push(i - 1);
+      } else {
+        linkStack.push(i);
+      }
+    }
+
+    if (text[i] === ']') {
+      // 检查是否有对应的(url)
+      let nextChar = i + 1 < text.length ? text[i + 1] : '';
+      if (nextChar === '(') {
+        let j = i + 2;
+        let parenCount = 1;
+        while (j < text.length && parenCount > 0) {
+          if (text[j] === '(') parenCount++;
+          if (text[j] === ')') parenCount--;
+          j++;
+        }
+        if (parenCount === 0) {
+          // 正确闭合的链接或图片
+          if (imageStack.length > 0 && imageStack[imageStack.length - 1] < linkStack[linkStack.length - 1]) {
+            imageStack.pop();
+          } else if (linkStack.length > 0) {
+            linkStack.pop();
+          }
+          i = j - 1;
+        }
+      }
+    }
+
+    i++;
+  }
+
+  // 检查未闭合的标题
+  const headingMatch = text.match(/#+\s*$/);
+  if (headingMatch) {
+    return {
+      type: 'heading',
+      start: text.lastIndexOf(headingMatch[0])
+    };
+  }
+
+  // 返回未闭合的语法
+  if (codeBlockCount > 0) {
+    return {
+      type: 'codeblock',
+      start: codeBlockStart
+    };
+  }
+
+  if (backtickCount % 2 !== 0) {
+    return {
+      type: 'code',
+      start: lastBacktickIndex
+    };
+  }
+
+  if (asteriskCount % 2 !== 0) {
+    return {
+      type: 'bold',
+      start: lastAsteriskIndex
+    };
+  }
+
+  if (underscoreCount % 2 !== 0) {
+    return {
+      type: 'italic',
+      start: lastUnderscoreIndex
+    };
+  }
+
+  if (linkStack.length > 0) {
+    return {
+      type: 'link',
+      start: linkStack[linkStack.length - 1]
+    };
+  }
+
+  if (imageStack.length > 0) {
+    return {
+      type: 'image',
+      start: imageStack[imageStack.length - 1]
+    };
   }
 
   return null;
@@ -776,7 +918,20 @@ const sendMessage = async () => {
 
           // 如果有新的渲染内容，更新DOM
           if (renderedContent && streamingElement) {
+            // 先设置渲染内容
             streamingElement.innerHTML = renderedContent;
+
+            // 找到最后一个文本节点并添加光标
+            const lastTextNode = findLastTextNode(streamingElement);
+            if (lastTextNode) {
+              const cursorSpan = document.createElement('span');
+              cursorSpan.className = 'typing-cursor';
+              cursorSpan.textContent = '|';
+              lastTextNode.parentNode.insertBefore(cursorSpan, lastTextNode.nextSibling);
+            } else {
+              // 如果没有文本节点，直接添加到末尾
+              streamingElement.innerHTML += '<span class="typing-cursor">|</span>';
+            }
           }
 
           // 滚动到底部
@@ -785,8 +940,33 @@ const sendMessage = async () => {
           // 如果没有待显示的内容了，清理interval
           clearInterval(typingInterval);
           typingInterval = null;
+
+          // 完成时最终渲染
+          if (streamingElement) {
+            const finalContent = markdownRenderer.finalize();
+            streamingElement.innerHTML = finalContent;
+          }
         }
-      }, 30); // 每个字符间隔30ms
+      }, 30);
+    };
+
+    // 添加辅助函数：查找最后一个文本节点
+    const findLastTextNode = (element) => {
+      const walker = document.createTreeWalker(
+          element,
+          NodeFilter.SHOW_TEXT,
+          null,
+          false
+      );
+
+      let lastNode = null;
+      while (walker.nextNode()) {
+        if (walker.currentNode.textContent.trim().length > 0) {
+          lastNode = walker.currentNode;
+        }
+      }
+
+      return lastNode;
     };
 
     // 发送请求并处理流式响应
@@ -815,7 +995,7 @@ const sendMessage = async () => {
               // 确保关闭加载状态
               isLoading.value = false;
 
-              // 最终确保格式正确
+              // 显示最终格式化的内容
               nextTick(() => {
                 if (streamingElement) {
                   streamingElement.innerHTML = formatMessage(fullResponse);
@@ -2174,24 +2354,13 @@ pre code.hljs {
 }
 
 .message-body {
-  padding: 12px;
-  border-radius: 12px;
-  line-height: 1.5;
+  display: block;
   white-space: pre-wrap;
+  word-break: break-word;
+  position: relative;
   overflow-wrap: break-word;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
-  word-break: break-word; /* 确保长单词换行 */
-  transition: none; /* 禁用过渡动画以加快显示 */
 }
 
-/* 修改打字机光标的CSS */
-.streaming-message .message-body::after {
-  content: '|';
-  animation: blink 0.7s infinite;
-  margin-left: 2px;
-  display: inline; /* 改为inline而不是inline-block */
-  vertical-align: baseline; /* 确保垂直对齐 */
-}
 
 /* 确保message-body本身的样式正确 */
 .streaming-message .message-body {
@@ -2199,6 +2368,18 @@ pre code.hljs {
   min-width: 0; /* 避免宽度问题 */
   white-space: pre-wrap;
   word-break: break-word;
+  min-height: 1.5em; /* 防止内容塌陷 */
+}
+
+/* 新的光标样式 */
+.typing-cursor {
+  display: inline !important;
+  animation: blink 0.7s infinite;
+  margin: 0 2px;
+  color: var(--text-primary);
+  font-weight: bold;
+  vertical-align: baseline;
+  line-height: 1;
 }
 
 @keyframes blink {
