@@ -53,9 +53,9 @@
       <!-- 周次选择 -->
       <div class="week-selector">
         <el-radio-group v-model="weekViewMode" size="large" @change="changeWeekView">
-          <el-radio-button label="current">当前周</el-radio-button>
-          <el-radio-button label="select">选择周次</el-radio-button>
-          <el-radio-button label="all">完整校历</el-radio-button>
+          <el-radio-button value="current">当前周</el-radio-button>
+          <el-radio-button value="select">选择周次</el-radio-button>
+          <el-radio-button value="all">完整校历</el-radio-button>
         </el-radio-group>
 
         <el-select
@@ -65,7 +65,7 @@
             style="margin-left: 10px;"
         >
           <el-option
-              v-for="week in calendarData.weeks"
+              v-for="week in weekOptions"
               :key="week.id"
               :label="week.name"
               :value="week.number"
@@ -123,6 +123,8 @@ import { ref, computed, onMounted } from 'vue';
 import { ElMessage } from 'element-plus';
 import { Refresh } from '@element-plus/icons-vue';
 import calendarService from '@/services/calendarService';
+import store from '@/utils/store';
+
 
 // 状态变量
 const loading = ref(true);
@@ -137,6 +139,19 @@ const selectedWeek = ref(1);
 // 当前日期和周几
 const today = new Date();
 const currentDay = ref(today.getDay() || 7); // 1-7 表示周一到周日
+
+// 周次选项
+const weekOptions = computed(() => {
+  const options = [];
+  for (let i = 1; i <= 19; i++) {
+    options.push({
+      id: i,
+      name: `第${i}周`,
+      number: i
+    });
+  }
+  return options;
+});
 
 // 格式化时间
 const formatTime = (time) => {
@@ -167,47 +182,79 @@ const getCurrentWeekDates = () => {
 };
 
 // 计算当前周次
-const calculateCurrentWeek = (data) => {
-  // 从注释部分获取开学日期
-  if (data.htmlContent) {
-    const notesMatch = data.htmlContent.match(/注：[^。]*(\d+)月(\d+)日[^。]*上课/);
-    if (notesMatch && notesMatch.length >= 3) {
-      try {
+const calculateCurrentWeek = async (data) => {
+  try {
+    // 首先尝试从HTML内容获取开学日期
+    let startDate = null;
+
+    if (data.htmlContent) {
+      const notesMatch = data.htmlContent.match(/注：[^。]*?(\d+)月(\d+)日[^。]*?上课/);
+      if (notesMatch && notesMatch.length >= 3) {
         const startMonth = parseInt(notesMatch[1]);
         const startDay = parseInt(notesMatch[2]);
-
-        // 获取当前年份
         const currentYear = new Date().getFullYear();
 
         // 创建开学日期对象
-        const startDate = new Date(currentYear, startMonth - 1, startDay);
+        startDate = new Date(currentYear, startMonth - 1, startDay);
 
-        // 如果开学日期在未来，可能是去年的日期
-        if (startDate > new Date() && startMonth > 6) {
-          startDate.setFullYear(currentYear - 1);
+        // 处理年份问题：如果开学日期在未来且是第一学期（8月以后），可能是去年的日期
+        const now = new Date();
+        if (startDate > now && startMonth <= 6) {
+          // 春季学期，如果开学日期在未来，使用当前年份
+          // 不做调整
+        } else if (startDate < now && startMonth >= 8) {
+          // 秋季学期，如果开学日期在过去，使用当前年份
+          // 不做调整
         }
 
-        // 计算周数
-        const timeDiff = new Date() - startDate;
-        const dayDiff = Math.floor(timeDiff / (24 * 60 * 60 * 1000));
-        const weekDiff = Math.floor(dayDiff / 7) + 1;
-
-        return Math.max(1, weekDiff);
-      } catch (e) {
-        console.error('解析开学日期失败:', e);
+        console.log('从HTML内容提取到开学日期:', startDate.toLocaleDateString());
       }
     }
-  }
 
-  // 如果无法从注释中获取，使用默认逻辑
-  if (data.weeks && data.weeks.length > 0) {
-    // 确保周数不超过总周数
-    const maxWeek = Math.max(...data.weeks.map(w => w.number));
-    return Math.min(maxWeek, 10); // 假设现在大约是第10周
-  }
+    // 如果从HTML提取失败，尝试从设置中获取自定义开学日期
+    if (!startDate) {
+      try {
+        const customOpeningDate = await store.getString('CUSTOM_OPENING_DATE', '');
+        if (customOpeningDate) {
+          startDate = new Date(customOpeningDate);
+          console.log('从自定义设置获取开学日期:', startDate.toLocaleDateString());
+        }
+      } catch (error) {
+        console.error('从自定义设置获取开学日期失败:', error);
+      }
+    }
 
-  // 如果无法计算，默认返回第1周
-  return 1;
+    // 如果都没有获取到，使用合理的默认值
+    if (!startDate) {
+      const currentYear = new Date().getFullYear();
+      const currentMonth = new Date().getMonth();
+
+      // 如果当前月份在1-7月，说明是春季学期，开学日期应该是当年2月
+      // 如果当前月份在8-12月，说明是秋季学期，开学日期应该是当年9月
+      if (currentMonth < 7) {
+        startDate = new Date(currentYear, 1, 24); // 当年2月24日
+      } else {
+        startDate = new Date(currentYear, 8, 1); // 当年9月1日
+      }
+
+      console.log('使用默认开学日期:', startDate.toLocaleDateString());
+    }
+
+    // 计算当前是第几周
+    const now = new Date();
+    const timeDiff = now - startDate;
+    const dayDiff = Math.floor(timeDiff / (24 * 60 * 60 * 1000));
+    const weekDiff = Math.floor(dayDiff / 7) + 1;
+
+    // 确保周数在合理范围内（1-20周）
+    const calculatedWeek = Math.max(1, Math.min(weekDiff, 20));
+
+    console.log('计算得到当前周次:', calculatedWeek);
+    return calculatedWeek;
+  } catch (error) {
+    console.error('计算当前周次失败:', error);
+    return 1; // 出错时返回第1周
+  }
 };
 
 // 改变周视图
@@ -221,91 +268,59 @@ const changeWeekView = () => {
 
 // 获取周视图表格数据
 const getWeekTableData = () => {
-  // 从实际数据中根据所选周次生成表格数据
   const weekNum = weekViewMode.value === 'select' ? selectedWeek.value : currentWeek.value;
-
-  // 从校历中找出对应的周次（中文"一"、"二"、"三"等）
-  const weekChinese = ['一', '二', '三', '四', '五', '六', '七', '八', '九', '十',
-    '十一', '十二', '十三', '十四', '十五', '十六', '十七', '十八', '十九', '二十'][weekNum - 1];
-
-  // 查找对应的数据行
   const content = calendarData.value.htmlContent || '';
 
-  // 创建基本表格结构
-  let result = [{
-    date: '日期',
-    monday: '周一',
-    tuesday: '周二',
-    wednesday: '周三',
-    thursday: '周四',
-    friday: '周五',
-    saturday: '周六',
-    sunday: '周日'
-  }];
+  // 创建基本表格结构 - 只保留一个表头
+  let result = [];
 
   try {
-    // 尝试从HTML内容中提取周次对应的日期
-    // 查找包含当前周次的行
-    const weekRowPattern = new RegExp(`<b><span[^>]*>${weekChinese}</span></b>`, 'i');
-    const weekRowMatch = content.match(weekRowPattern);
+    // 使用更精确的方法来查找对应周次的数据
+    const weekData = extractWeekData(weekNum, content);
 
-    if (weekRowMatch) {
-      // 找到周次所在位置
-      const rowStartPos = weekRowMatch.index;
-      // 寻找一行包含7个日期的内容（一周的数据）
-      const rowContent = content.substring(Math.max(0, rowStartPos - 500), rowStartPos + 2000);
+    if (weekData) {
+      // 日期行
+      result.push({
+        date: `${weekData.month}月`,
+        monday: weekData.dates[0] || '',
+        tuesday: weekData.dates[1] || '',
+        wednesday: weekData.dates[2] || '',
+        thursday: weekData.dates[3] || '',
+        friday: weekData.dates[4] || '',
+        saturday: weekData.dates[5] || '',
+        sunday: weekData.dates[6] || ''
+      });
 
-      // 查找这行中的日期数字
-      const datePattern = /<span[^>]*>(\d+)<\/span>/g;
-      const dates = [];
-      let match;
-
-      while ((match = datePattern.exec(rowContent)) !== null && dates.length < 7) {
-        dates.push(match[1]);
-      }
-
-      // 从HTML中提取当前月份
-      const monthPattern = /<b><span[^>]*>(\d+)<\/span><\/b><b><span[^>]*>月<\/span><\/b>/i;
-      const monthMatch = rowContent.match(monthPattern) || content.match(monthPattern);
-      const month = monthMatch ? monthMatch[1] : '';
-
-      // 创建带有日期的表格行
-      if (dates.length > 0 && month) {
-        result.push({
-          date: `${month}月`,
-          monday: dates[0] || '',
-          tuesday: dates[1] || '',
-          wednesday: dates[2] || '',
-          thursday: dates[3] || '',
-          friday: dates[4] || '',
-          saturday: dates[5] || '',
-          sunday: dates[6] || ''
-        });
-      }
-
-      // 添加事件行 - 从注释中提取该周的重要事件
-      const events = extractEventsForWeek(weekNum);
-      if (events.length > 0) {
+      // 事件行
+      if (weekData.events.some(e => e !== '')) {
         result.push({
           date: '事件',
-          monday: events[0] || '',
-          tuesday: events[1] || '',
-          wednesday: events[2] || '',
-          thursday: events[3] || '',
-          friday: events[4] || '',
-          saturday: events[5] || '',
-          sunday: events[6] || ''
+          monday: weekData.events[0] || '',
+          tuesday: weekData.events[1] || '',
+          wednesday: weekData.events[2] || '',
+          thursday: weekData.events[3] || '',
+          friday: weekData.events[4] || '',
+          saturday: weekData.events[5] || '',
+          sunday: weekData.events[6] || ''
         });
       }
+    } else {
+      // 如果没有找到具体周数据，显示周次信息
+      result.push({
+        date: `第${weekNum}周`,
+        monday: '',
+        tuesday: '',
+        wednesday: '',
+        thursday: '',
+        friday: '',
+        saturday: '',
+        sunday: ''
+      });
     }
   } catch (error) {
     console.error('解析周次数据失败:', error);
-  }
-
-  // 如果没有成功提取数据，返回基本结构
-  if (result.length === 1) {
     result.push({
-      date: '第' + weekNum + '周',
+      date: `第${weekNum}周`,
       monday: '',
       tuesday: '',
       wednesday: '',
@@ -319,118 +334,129 @@ const getWeekTableData = () => {
   return result;
 };
 
-// 从注释中提取特定周的事件
-const extractEventsForWeek = (weekNum) => {
-  // 注释通常会提到开学、放假、考试周等信息
-  const events = ['', '', '', '', '', '', '']; // 周一到周日
+// 从HTML内容中提取特定周的数据
+const extractWeekData = (weekNum, content) => {
+  try {
+    // 处理周次的中文数字
+    const weekChinese = ['一', '二', '三', '四', '五', '六', '七', '八', '九', '十',
+      '十一', '十二', '十三', '十四', '十五', '十六', '十七', '十八', '十九', '二十'][weekNum - 1];
 
-  const content = calendarData.value.htmlContent || '';
-  const notes = content.match(/注：([\s\S]*?)<\/p>/g) || [];
+    // 查找包含当前周次的行 - 修正正则表达式，添加全局标志
+    const weekRowPattern = new RegExp(`<b><span[^>]*>${weekChinese}</span></b>`, 'gi');
+    const rowMatches = content.match(weekRowPattern);
 
-  // 解析注释内容
-  notes.forEach(note => {
-    // 提取特定周的信息
-    if (note.includes(`第${weekNum}周`) || note.includes(`${weekNum}周`)) {
-      // 如果注释特别提到了这周，提取信息
-      const eventMatch = note.match(/第\d+周[^，。]*([^，。]+)/);
-      if (eventMatch) {
-        // 将事件添加到对应的日期
-        events[0] = eventMatch[1];
+    if (!rowMatches) {
+      console.log(`未找到第${weekNum}周的数据`);
+      return null;
+    }
+
+    // 获取该周所在的表格行
+    const rowIndex = content.indexOf(rowMatches[0]);
+
+    // 截取该行所在的table row
+    const rowStartIndex = content.lastIndexOf('<tr', rowIndex);
+    const rowEndIndex = content.indexOf('</tr>', rowIndex) + 5;
+    const rowContent = content.substring(rowStartIndex, rowEndIndex);
+
+    // 提取该行的所有单元格
+    const cellPattern = /<td[^>]*>[\s\S]*?<\/td>/g;
+    const cells = rowContent.match(cellPattern) || [];
+
+    // 提取日期
+    const dates = [];
+    for (let i = 0; i < cells.length; i++) {
+      const cell = cells[i];
+      const dateMatch = cell.match(/<span[^>]*>(\d+)<\/span>/);
+      if (dateMatch && dateMatch[1]) {
+        const date = parseInt(dateMatch[1]);
+        if (date > 0 && date <= 31) {
+          dates.push(date.toString());
+        } else {
+          dates.push('');
+        }
+      } else {
+        dates.push('');
       }
     }
 
-    // 检查是否为考试周
-    if (note.includes('考试周') && note.includes(`${weekNum}`)) {
-      events[0] = '考试周';
-    }
+    // 改进月份提取方法 - 先在当前行寻找月份
+    let month = '';
 
-    // 检查特殊日期，如开学、放假等
-    const datePatterns = [
-      { pattern: /(\d+)月(\d+)日[^，。]*上课/,       event: '上课' },
-      { pattern: /(\d+)月(\d+)日[^，。]*报到/,       event: '报到' },
-      { pattern: /(\d+)月(\d+)日[^，。]*放假/,       event: '放假' },
-      { pattern: /(\d+)月(\d+)日[^，。]*清明节/,     event: '清明节' },
-      { pattern: /(\d+)月(\d+)日[^，。]*劳动节/,     event: '劳动节' },
-      { pattern: /(\d+)月(\d+)日[^，。]*端午节/,     event: '端午节' }
-    ];
-
-    datePatterns.forEach(({ pattern, event }) => {
-      const matches = [...note.matchAll(pattern)];
-
-      for (const match of matches) {
-        if (match && match.length >= 3) {
-          const month = parseInt(match[1]);
-          const day = parseInt(match[2]);
-
-          // 简单检查该日期是否可能落在当前周
-          const dateCell = getDateCellForWeek(weekNum, month, day);
-          if (dateCell !== -1) {
-            events[dateCell] = event;
-          }
+    // 方法1: 检查第一个单元格是否包含月份
+    const firstCellMonth = cells[0] && cells[0].match(/<span[^>]*>(\d+)<\/span>[^<]*<span[^>]*>月<\/span>/);
+    if (firstCellMonth && firstCellMonth[1]) {
+      month = firstCellMonth[1];
+      console.log(`在当前行第一个单元格找到月份: ${month}月`);
+    } else {
+      // 方法2: 向前搜索包含月份的行
+      let prevRowContent = content.substring(0, rowStartIndex);
+      const prevRowStart = prevRowContent.lastIndexOf('<tr');
+      if (prevRowStart >= 0) {
+        const prevRow = prevRowContent.substring(prevRowStart);
+        const monthMatch = prevRow.match(/<span[^>]*>(\d+)<\/span>[^<]*<span[^>]*>月<\/span>/);
+        if (monthMatch && monthMatch[1]) {
+          month = monthMatch[1];
+          console.log(`在前一行找到月份: ${month}月`);
         }
       }
-    });
-  });
 
-  return events;
-};
-
-// 简化的日期比较函数
-const getDateCellForWeek = (weekNum, month, day) => {
-  // 这是一个简化的实现，实际应用中应该基于日期范围计算
-  const content = calendarData.value.htmlContent || '';
-
-  // 找到相应周次对应的日期格
-  const weekChinese = ['一', '二', '三', '四', '五', '六', '七', '八', '九', '十',
-    '十一', '十二', '十三', '十四', '十五', '十六', '十七', '十八', '十九', '二十'][weekNum - 1];
-
-  // 查找包含当前周次的行
-  const weekRowPattern = new RegExp(`<b><span[^>]*>${weekChinese}</span></b>`, 'i');
-  const weekRowMatch = content.match(weekRowPattern);
-
-  if (weekRowMatch) {
-    // 找到周次所在位置
-    const rowStartPos = weekRowMatch.index;
-
-    // 在该行附近查找月份和日期
-    const nearbyContent = content.substring(Math.max(0, rowStartPos - 500), rowStartPos + 500);
-
-    // 查找月份
-    const monthPattern = /<b><span[^>]*>(\d+)<\/span><\/b><b><span[^>]*>月<\/span><\/b>/i;
-    const monthMatch = nearbyContent.match(monthPattern);
-    const rowMonth = monthMatch ? parseInt(monthMatch[1]) : -1;
-
-    // 如果月份匹配
-    if (rowMonth === month) {
-      // 查找所有日期单元格
-      const datePattern = /<span[^>]*>(\d+)<\/span>/g;
-      let match;
-      let index = 0;
-      let dates = [];
-
-      while ((match = datePattern.exec(nearbyContent)) !== null && index < 7) {
-        dates.push(parseInt(match[1]));
-        index++;
-      }
-
-      // 查找日期匹配的单元格
-      const dayIndex = dates.findIndex(d => d === day);
-      if (dayIndex !== -1) {
-        return dayIndex;
+      // 方法3: 最后尝试搜索整个文档
+      if (!month) {
+        const monthSearchContent = content.substring(0, rowIndex);
+        const monthPattern = /<span[^>]*>(\d+)<\/span>[^<]*<span[^>]*>月<\/span>/g;
+        const allMonthMatches = [...monthSearchContent.matchAll(monthPattern)];
+        if (allMonthMatches.length > 0) {
+          const lastMonthMatch = allMonthMatches[allMonthMatches.length - 1];
+          month = lastMonthMatch[1];
+          console.log(`在整个文档中找到最接近的月份: ${month}月`);
+        }
       }
     }
-  }
 
-  return -1; // 未找到对应的日期单元格
+    // 提取事件（节假日等）
+    const events = [];
+    for (let i = 0; i < cells.length; i++) {
+      const cell = cells[i];
+      const eventMatch = cell.match(/<span[^>]*?color:red[^>]*>([^<]+)<\/span>/);
+      if (eventMatch && eventMatch[1] &&
+          !['校训', '校风', '弘毅', '博学', '求真', '至善', '勤奋', '严谨', '团结', '创新'].includes(eventMatch[1].trim())) {
+        events.push(eventMatch[1].trim());
+      } else {
+        events.push('');
+      }
+    }
+
+    // 确保数组长度为7
+    while (dates.length < 7) dates.push('');
+    while (events.length < 7) events.push('');
+
+    return {
+      month: month,
+      dates: dates.slice(0, 7),
+      events: events.slice(0, 7)
+    };
+  } catch (error) {
+    console.error('提取周数据失败:', error);
+    return null;
+  }
 };
 
 // 处理HTML内容
 const processHtmlContent = (html) => {
   if (!html) return '';
 
-  // 移除无用的样式属性，保留基本结构
+  // 保留颜色样式，移除其他无用样式
   return html
-      .replace(/style="[^"]*"/g, '')
+      .replace(/style="[^"]*"/g, function(match) {
+        // 只保留包含color属性的样式
+        if (match.includes('color:')) {
+          const colorMatch = match.match(/color:\s*([^;"}]+)/);
+          if (colorMatch) {
+            return `style="color:${colorMatch[1]}"`;
+          }
+        }
+        return '';
+      })
       .replace(/class="[^"]*"/g, '')
       .replace(/lang="[^"]*"/g, '')
       .replace(/mso-[^=]*="[^"]*"/g, '')
@@ -440,124 +466,10 @@ const processHtmlContent = (html) => {
 
 // 获取重要日期
 const getImportantDates = () => {
-  const dates = [];
-
-  // 如果有导入日期数据，使用它
-  if (calendarData.value.importantDates && calendarData.value.importantDates.length > 0) {
-    return calendarData.value.importantDates.map(date => {
-      if (date.type === 'exam') {
-        return {
-          name: date.name,
-          type: date.type,
-          timeString: `第${date.startWeek}-${date.endWeek}周`
-        };
-      } else {
-        return {
-          name: date.name,
-          type: date.type,
-          timeString: `${date.month}月${date.day}日`
-        };
-      }
-    });
-  }
-
-  // 从HTML内容中提取重要日期
-  const content = calendarData.value.htmlContent || '';
-  if (!content) return dates;
-
-  // 查找注释部分
-  const notesMatch = content.match(/<p[^>]*>注：([\s\S]*?)<\/p>/);
-  if (notesMatch && notesMatch[1]) {
-    const notesText = notesMatch[1];
-
-    // 提取开学日期
-    const classRegex = /(\d+)月(\d+)日[^，。]*上课/g;
-    let classMatch;
-    while ((classMatch = classRegex.exec(notesText)) !== null) {
-      if (classMatch.length >= 3) {
-        dates.push({
-          name: '上课',
-          type: 'primary',
-          timeString: `${classMatch[1]}月${classMatch[2]}日`
-        });
-      }
-    }
-
-    // 提取报到日期
-    const reportRegex = /(\d+)月(\d+)日[^，。]*报到/g;
-    let reportMatch;
-    while ((reportMatch = reportRegex.exec(notesText)) !== null) {
-      if (reportMatch.length >= 3) {
-        dates.push({
-          name: '报到',
-          type: 'primary',
-          timeString: `${reportMatch[1]}月${reportMatch[2]}日`
-        });
-      }
-    }
-
-    // 提取考试周信息
-    const examRegex = /(\d+)[—-](\d+)周为(?:集中)?考试周/g;
-    let examMatch;
-    while ((examMatch = examRegex.exec(notesText)) !== null) {
-      if (examMatch.length >= 3) {
-        dates.push({
-          name: '考试周',
-          type: 'exam',
-          timeString: `第${examMatch[1]}-${examMatch[2]}周`
-        });
-      }
-    }
-  }
-
-  // 查找红色标记的节假日
-  const holidayRegex = /<b><span[^>]*color:red[^>]*>(\d+)<\/span><\/b>[\s\S]*?<b><span[^>]*color:red[^>]*>([^<]+)<\/span><\/b>/g;
-  let holidayMatch;
-
-  while ((holidayMatch = holidayRegex.exec(content)) !== null) {
-    if (holidayMatch.length >= 3) {
-      // 从周围文本中提取月份
-      const monthSearch = content.substring(Math.max(0, holidayMatch.index - 200), holidayMatch.index);
-      const monthMatch = monthSearch.match(/<b><span[^>]*>(\d+)<\/span><\/b><b><span[^>]*>月<\/span><\/b>/);
-
-      const month = monthMatch ? monthMatch[1] : '';
-      const day = holidayMatch[1];
-      const name = holidayMatch[2].trim();
-
-      if (month && day && name) {
-        dates.push({
-          name,
-          type: 'holiday',
-          timeString: `${month}月${day}日`
-        });
-      }
-    }
-  }
-
-  // 按时间顺序排序
-  return dates.sort((a, b) => {
-    // 提取月和日
-    const aMonthMatch = a.timeString.match(/(\d+)月/);
-    const aDayMatch = a.timeString.match(/月(\d+)日/);
-    const bMonthMatch = b.timeString.match(/(\d+)月/);
-    const bDayMatch = b.timeString.match(/月(\d+)日/);
-
-    // 如果都有月份和日期信息，按日期排序
-    if (aMonthMatch && aDayMatch && bMonthMatch && bDayMatch) {
-      const aMonth = parseInt(aMonthMatch[1]);
-      const aDay = parseInt(aDayMatch[1]);
-      const bMonth = parseInt(bMonthMatch[1]);
-      const bDay = parseInt(bDayMatch[1]);
-
-      if (aMonth !== bMonth) {
-        return aMonth - bMonth;
-      }
-      return aDay - bDay;
-    }
-
-    // 默认排序
-    return 0;
-  });
+  // 直接使用calendarService提取的重要日期
+  const dates = calendarData.value.importantDates || [];
+  console.log('Vue组件中的重要日期:', dates);  // 添加调试日志
+  return dates;
 };
 
 // 刷新校历数据
@@ -572,7 +484,7 @@ const refreshCalendar = async () => {
     updateTime.value = data.updateTime;
 
     // 计算当前周次
-    currentWeek.value = calculateCurrentWeek(data);
+    currentWeek.value = await calculateCurrentWeek(data);
     selectedWeek.value = currentWeek.value;
 
     ElMessage.success('校历数据已更新');
@@ -594,7 +506,7 @@ onMounted(async () => {
     updateTime.value = data.updateTime;
 
     // 计算当前周次
-    currentWeek.value = calculateCurrentWeek(data);
+    currentWeek.value = await calculateCurrentWeek(data);
     selectedWeek.value = currentWeek.value;
   } catch (err) {
     console.error('加载校历数据失败:', err);
@@ -703,5 +615,10 @@ onMounted(async () => {
 
 .html-content table td[colspan] {
   text-align: center;
+}
+
+/* 添加颜色样式支持 */
+.html-content :deep(span[style*="color:red"]) {
+  color: red !important;
 }
 </style>

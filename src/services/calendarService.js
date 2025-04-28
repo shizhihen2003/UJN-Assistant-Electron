@@ -286,7 +286,7 @@ class CalendarService {
                 htmlContent: htmlContent,
                 semesterInfo: this.extractSemesterInfo(calendarDetail[0].PIM_TITLE || '', calendarContent),
                 weeks: this.extractWeeks(calendarContent),
-                importantDates: this.extractImportantDates(calendarContent)
+                importantDates: this.extractImportantDates(calendarContent)  // 确保这行正确
             };
             this.log('数据组装完成');
 
@@ -885,89 +885,177 @@ class CalendarService {
 
             const importantDates = [];
 
-            // 查找红色标记的日期（节假日）
-            this.log('查找红色标记的节假日');
-            const holidayRegex = /<b><span[^>]*color:red[^>]*>(\d+)<\/span><\/b>[\s\S]*?<b><span[^>]*color:red[^>]*>([^<]+)<\/span><\/b>/gi;
-            let holidayMatch;
-
-            while ((holidayMatch = holidayRegex.exec(htmlContent)) !== null) {
-                if (holidayMatch.length >= 3) {
-                    // 从周围文本中提取月份
-                    const monthSearch = htmlContent.substring(Math.max(0, holidayMatch.index - 200), holidayMatch.index);
-                    const monthMatch = monthSearch.match(/<b><span[^>]*>(\d+)<\/span><\/b><b><span[^>]*>月<\/span><\/b>/i);
-
-                    const month = monthMatch ? monthMatch[1] : '';
-                    const day = holidayMatch[1];
-                    const name = holidayMatch[2].trim();
-
-                    if (month && day && name) {
-                        importantDates.push({
-                            name,
-                            month,
-                            day,
-                            type: 'holiday'
-                        });
-                        this.log(`找到节假日: ${month}月${day}日 ${name}`);
-                    }
-                }
-            }
-
-            // 从注释部分提取重要日期信息
-            this.log('从注释部分提取重要日期');
-            const notesMatch = htmlContent.match(/<p[^>]*>注：([\s\S]*?)<\/p>/i);
+            // 首先提取注释部分的日期
+            const notesMatch = htmlContent.match(/注：([\s\S]*?)<\/p>/i);
             if (notesMatch && notesMatch[1]) {
-                const notesText = notesMatch[1];
-                this.log('找到注释部分:', notesText);
+                const notesText = notesMatch[1].replace(/<[^>]+>/g, '');
+
+                // 提取开学日期
+                const classMatch = notesText.match(/(\d+)月(\d+)日[^，。]*?上课/);
+                if (classMatch) {
+                    importantDates.push({
+                        name: '上课',
+                        type: 'event',
+                        timeString: `${classMatch[1]}月${classMatch[2]}日`
+                    });
+                }
 
                 // 提取报到日期
-                const reportRegex = /(\d+)月(\d+)日[^，。]*报到/g;
-                let reportMatch;
-                while ((reportMatch = reportRegex.exec(notesText)) !== null) {
-                    if (reportMatch.length >= 3) {
-                        importantDates.push({
-                            name: '报到',
-                            month: reportMatch[1],
-                            day: reportMatch[2],
-                            type: 'event'
-                        });
-                        this.log(`找到报到日期: ${reportMatch[1]}月${reportMatch[2]}日`);
-                    }
-                }
-
-                // 提取上课日期
-                const classRegex = /(\d+)月(\d+)日[^，。]*上课/g;
-                let classMatch;
-                while ((classMatch = classRegex.exec(notesText)) !== null) {
-                    if (classMatch.length >= 3) {
-                        importantDates.push({
-                            name: '上课',
-                            month: classMatch[1],
-                            day: classMatch[2],
-                            type: 'event'
-                        });
-                        this.log(`找到上课日期: ${classMatch[1]}月${classMatch[2]}日`);
-                    }
+                const reportMatch = notesText.match(/(\d+)月(\d+)日[^，。]*?报到/);
+                if (reportMatch) {
+                    importantDates.push({
+                        name: '报到',
+                        type: 'event',
+                        timeString: `${reportMatch[1]}月${reportMatch[2]}日`
+                    });
                 }
 
                 // 提取考试周信息
-                const examRegex = /(\d+)[—-](\d+)周为(?:集中)?考试周/g;
-                let examMatch;
-                while ((examMatch = examRegex.exec(notesText)) !== null) {
-                    if (examMatch.length >= 3) {
-                        importantDates.push({
-                            name: '考试周',
-                            startWeek: examMatch[1],
-                            endWeek: examMatch[2],
-                            type: 'exam'
-                        });
-                        this.log(`找到考试周: 第${examMatch[1]}-${examMatch[2]}周`);
-                    }
+                const examMatch = notesText.match(/(\d+)[—-](\d+)周[^，。]*?考试周/);
+                if (examMatch) {
+                    const startWeek = parseInt(examMatch[1]);
+                    const endWeek = parseInt(examMatch[2]);
+
+                    // 需要从表格中找到对应的日期
+                    const chineseNumbers = ['一', '二', '三', '四', '五', '六', '七', '八', '九', '十',
+                        '十一', '十二', '十三', '十四', '十五', '十六', '十七', '十八', '十九', '二十'];
+                    const startWeekChinese = chineseNumbers[startWeek - 1];
+                    const endWeekChinese = chineseNumbers[endWeek - 1];
+
+                    this.log(`查找考试周日期: 第${startWeekChinese}周 到 第${endWeekChinese}周`);
                 }
-            } else {
-                this.log('未找到注释部分');
             }
 
+            // 基于表格结构提取节假日和考试周日期
+            const parser = new DOMParser();
+            const doc = parser.parseFromString(htmlContent, 'text/html');
+            const tableRows = doc.querySelectorAll('table tr');
+
+            let currentMonth = '';
+            let monthRowsRemaining = 0;
+            let examStartDate = null;
+            let examEndDate = null;
+            let examStartMonth = '';
+            let examEndMonth = '';
+
+            tableRows.forEach(row => {
+                // 检查月份信息
+                const cells = row.querySelectorAll('td');
+                let cellIndex = 0;
+
+                // 先处理第一个单元格，可能是月份
+                const firstCell = cells[0];
+                if (firstCell) {
+                    const monthText = firstCell.textContent;
+                    const monthMatch = monthText.match(/(\d+)\s*月/);
+                    if (monthMatch) {
+                        currentMonth = monthMatch[1];
+                        const rowspan = firstCell.getAttribute('rowspan');
+                        monthRowsRemaining = rowspan ? parseInt(rowspan) : 1;
+                        cellIndex = 1; // 跳过月份单元格
+                    } else if (monthRowsRemaining > 0) {
+                        monthRowsRemaining--;
+                    }
+                }
+
+                // 检查是否是周次行
+                let weekText = '';
+                if (cells[cellIndex]) {
+                    weekText = cells[cellIndex].textContent.trim();
+                }
+
+                // 查找十八周和十九周的日期
+                if (weekText.includes('十八')) {
+                    this.log('找到第十八周行');
+                    // 找到十八周，获取这一行的第一个日期
+                    for (let i = cellIndex + 1; i < cells.length; i++) {
+                        const cellContent = cells[i].textContent.trim();
+                        const dateMatch = cellContent.match(/\d+/);
+                        if (dateMatch) {
+                            examStartDate = parseInt(dateMatch[0]);
+                            examStartMonth = currentMonth;
+                            this.log(`十八周开始日期: ${examStartMonth}月${examStartDate}日`);
+                            break;
+                        }
+                    }
+                } else if (weekText.includes('十九')) {
+                    this.log('找到第十九周行');
+                    // 找到十九周，获取这一行的最后一个日期
+                    for (let i = cells.length - 1; i > cellIndex; i--) {
+                        const cellContent = cells[i].textContent.trim();
+                        const dateMatch = cellContent.match(/\d+/);
+                        if (dateMatch) {
+                            examEndDate = parseInt(dateMatch[0]);
+                            examEndMonth = currentMonth;
+                            this.log(`十九周结束日期: ${examEndMonth}月${examEndDate}日`);
+                            break;
+                        }
+                    }
+                }
+
+                // 检查节假日（红色文本）
+                for (let i = cellIndex; i < cells.length; i++) {
+                    const cell = cells[i];
+                    const redSpans = cell.querySelectorAll('span[style*="color:red"], span[style*="color: red"]');
+
+                    let dayNumber = '';
+                    let holidayName = '';
+
+                    redSpans.forEach(span => {
+                        const text = span.textContent.trim();
+                        if (/^\d+$/.test(text)) {
+                            dayNumber = text;
+                        } else if (text && !['校训', '校风', '弘毅', '博学', '求真', '至善', '勤奋', '严谨', '团结', '创新'].includes(text)) {
+                            if (/^(正月|二月|三月|四月|五月|六月|七月|八月|九月|十月|冬月|十一月|腊月|十二月)(初一|初二|初三|初四|初五|初六|初七|初八|初九|初十|廿[一二三四五六七八九十])/.test(text)) {
+                                holidayName = text;
+                            } else {
+                                holidayName = text;
+                            }
+                        }
+                    });
+
+                    if (currentMonth && dayNumber && holidayName) {
+                        importantDates.push({
+                            name: holidayName,
+                            type: 'holiday',
+                            timeString: `${currentMonth}月${dayNumber}日`
+                        });
+                    }
+                }
+            });
+
+            // 添加考试周日期
+            if (examStartDate && examEndDate && examStartMonth && examEndMonth) {
+                importantDates.push({
+                    name: '考试周',
+                    type: 'exam',
+                    timeString: `${examStartMonth}月${examStartDate}日-${examEndMonth}月${examEndDate}日`
+                });
+                this.log(`考试周日期: ${examStartMonth}月${examStartDate}日-${examEndMonth}月${examEndDate}日`);
+            }
+
+            // 按时间顺序排序
+            importantDates.sort((a, b) => {
+                const aMatch = a.timeString.match(/(\d+)月(\d+)日/);
+                const bMatch = b.timeString.match(/(\d+)月(\d+)日/);
+
+                if (aMatch && bMatch) {
+                    const aMonth = parseInt(aMatch[1]);
+                    const aDay = parseInt(aMatch[2]);
+                    const bMonth = parseInt(bMatch[1]);
+                    const bDay = parseInt(bMatch[2]);
+
+                    if (aMonth !== bMonth) {
+                        return aMonth - bMonth;
+                    }
+                    return aDay - bDay;
+                }
+
+                return 0;
+            });
+
             this.log(`总共找到${importantDates.length}个重要日期`);
+            this.log('所有重要日期:', importantDates);
             return importantDates;
         } catch (error) {
             this.error('提取重要日期失败:', error);
