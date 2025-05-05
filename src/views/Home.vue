@@ -1,12 +1,28 @@
 <template>
-  <div class="home-container">
+  <div class="home-container" :class="{ 'dark-mode': isDarkMode }">
+    <!-- 背景动画装饰 -->
+    <div class="bg-decoration">
+      <div class="bg-particles" v-for="n in 8" :key="n"></div>
+      <div class="bg-gradient"></div>
+    </div>
+
+    <!-- 顶部操作栏 -->
+    <div class="top-actions">
+      <div class="theme-toggle" @click="toggleTheme">
+        <el-icon v-if="isDarkMode"><Sunny /></el-icon>
+        <el-icon v-else><Moon /></el-icon>
+      </div>
+    </div>
+
     <!-- 状态卡片 -->
     <div class="status-cards">
-      <el-row :gutter="16">
-        <el-col :span="8">
-          <el-card class="status-card today-card" shadow="hover">
+      <el-row :gutter="20">
+        <el-col :xs="24" :sm="8">
+          <el-card class="status-card today-card" shadow="never">
             <template v-if="isLoading">
-              <el-skeleton :rows="3" animated />
+              <div class="card-loading">
+                <div class="loading-spinner"></div>
+              </div>
             </template>
             <template v-else>
               <div class="card-icon">
@@ -20,10 +36,12 @@
             </template>
           </el-card>
         </el-col>
-        <el-col :span="8">
-          <el-card class="status-card classes-card" shadow="hover">
+        <el-col :xs="24" :sm="8">
+          <el-card class="status-card classes-card" shadow="never">
             <template v-if="isLoading">
-              <el-skeleton :rows="3" animated />
+              <div class="card-loading">
+                <div class="loading-spinner"></div>
+              </div>
             </template>
             <template v-else>
               <div class="card-icon">
@@ -37,10 +55,12 @@
             </template>
           </el-card>
         </el-col>
-        <el-col :span="8">
-          <el-card class="status-card exams-card" shadow="hover">
+        <el-col :xs="24" :sm="8">
+          <el-card class="status-card exams-card" shadow="never">
             <template v-if="isLoading">
-              <el-skeleton :rows="3" animated />
+              <div class="card-loading">
+                <div class="loading-spinner"></div>
+              </div>
             </template>
             <template v-else>
               <div class="card-icon">
@@ -77,10 +97,10 @@
       </div>
     </div>
 
-    <el-row :gutter="16">
+    <el-row :gutter="20" class="content-row">
       <!-- 今日课程 -->
-      <el-col :xs="24" :md="12">
-        <el-card class="content-card">
+      <el-col :xs="24" :md="12" ref="classPanelCol">
+        <el-card class="content-card" ref="classPanel">
           <template #header>
             <div class="card-header">
               <h2>今日课程</h2>
@@ -91,7 +111,9 @@
           </template>
           <div class="today-classes">
             <template v-if="isLoading">
-              <el-skeleton :rows="5" animated />
+              <div class="content-loading">
+                <div class="loading-spinner"></div>
+              </div>
             </template>
             <template v-else-if="todayLessons.length">
               <div class="lesson-table">
@@ -118,7 +140,15 @@
               </div>
             </template>
             <template v-else>
-              <el-empty description="今日无课" />
+              <div class="empty-state">
+                <el-empty description="今日无课">
+                  <template #image>
+                    <div class="custom-empty-icon">
+                      <el-icon :size="40" color="var(--text-hint)"><Calendar /></el-icon>
+                    </div>
+                  </template>
+                </el-empty>
+              </div>
             </template>
           </div>
         </el-card>
@@ -126,7 +156,7 @@
 
       <!-- 通知公告 -->
       <el-col :xs="24" :md="12">
-        <el-card class="content-card">
+        <el-card class="content-card" ref="noticePanel">
           <template #header>
             <div class="card-header">
               <h2>通知公告</h2>
@@ -135,30 +165,52 @@
               </router-link>
             </div>
           </template>
-          <div class="notice-list">
+          <div class="notice-list" ref="noticeList">
             <template v-if="isNoticeLoading">
-              <el-skeleton :rows="5" animated />
+              <div class="content-loading">
+                <div class="loading-spinner"></div>
+              </div>
             </template>
             <template v-else-if="notices.length">
-              <div
-                  v-for="(notice, index) in notices.slice(0, 5)"
-                  :key="index"
-                  class="notice-item"
-                  @click="viewNoticeDetail(notice)"
-              >
-                <div class="notice-title">{{ notice.title || '无标题通知' }}</div>
-                <div class="notice-content-preview">{{ getNoticePreview(notice.content) }}</div>
-                <div class="notice-meta">
-                  <span class="notice-source">{{ notice.source || '教务系统' }}</span>
-                  <span class="notice-date">{{ formatNoticeDate(notice.time) }}</span>
+              <transition-group name="list" tag="div" class="notice-items">
+                <div
+                    v-for="(notice, index) in notices.slice(0, visibleNoticeCount)"
+                    :key="index"
+                    class="notice-item"
+                    @click="viewNoticeDetail(notice)"
+                >
+                  <div class="notice-title">{{ notice.title || '无标题通知' }}</div>
+                  <div class="notice-content-preview">{{ getNoticePreview(notice.content) }}</div>
+                  <div class="notice-meta">
+                    <span class="notice-source">{{ notice.source || '教务系统' }}</span>
+                    <span class="notice-date">{{ formatNoticeDate(notice.time) }}</span>
+                  </div>
                 </div>
+              </transition-group>
+              <div v-if="notices.length > visibleNoticeCount" class="more-notices">
+                <router-link to="/eas/notice" class="more-link">
+                  查看更多通知 ({{ notices.length - visibleNoticeCount }}+)
+                </router-link>
               </div>
             </template>
             <template v-else>
-              <el-empty v-if="!needLogin" description="暂无通知" />
-              <el-empty v-else description="请先登录教务系统">
-                <el-button type="primary" @click="goToLogin">去登录</el-button>
-              </el-empty>
+              <div class="empty-state">
+                <el-empty v-if="!needLogin" description="暂无通知">
+                  <template #image>
+                    <div class="custom-empty-icon">
+                      <el-icon :size="40" color="var(--text-hint)"><Bell /></el-icon>
+                    </div>
+                  </template>
+                </el-empty>
+                <el-empty v-else description="请先登录教务系统">
+                  <template #image>
+                    <div class="custom-empty-icon">
+                      <el-icon :size="40" color="var(--text-hint)"><Key /></el-icon>
+                    </div>
+                  </template>
+                  <el-button type="primary" @click="goToLogin" class="login-btn">去登录</el-button>
+                </el-empty>
+              </div>
             </template>
           </div>
         </el-card>
@@ -168,7 +220,7 @@
     <!-- 全部功能 -->
     <div class="all-features">
       <h2 class="section-title">全部功能</h2>
-      <el-row :gutter="16">
+      <el-row :gutter="20">
         <el-col
             v-for="(feature, index) in features"
             :key="index"
@@ -195,11 +247,11 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, watch, onUnmounted } from 'vue'
+import { ref, computed, onMounted, watch, onUnmounted, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import {
   Calendar, Monitor, Bell, Document, DataLine, Collection,
-  AlarmClock, User, Timer, Key
+  AlarmClock, User, Timer, Key, Moon, Sunny
 } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus';
 import authService from '@/services/authService';
@@ -207,6 +259,15 @@ import store from '@/utils/store';
 import EASAccount from '@/models/EASAccount';
 
 const router = useRouter();
+
+// DOM引用
+const classPanel = ref(null);
+const noticePanel = ref(null);
+const noticeList = ref(null);
+const classPanelCol = ref(null);
+
+// 可见通知数量
+const visibleNoticeCount = ref(3); // 默认显示3条，实际会根据高度动态调整
 
 // 状态变量
 const isLoading = ref(true);
@@ -216,10 +277,13 @@ const currentWeek = ref(1);
 const currentDayOfWeek = ref(new Date().getDay() || 7); // 1-7 表示周一到周日
 const showTeacher = ref(false);
 
+// 主题切换
+const isDarkMode = ref(false);
+
+// 日期信息
 const dayOfWeekMap = ['周日', '周一', '周二', '周三', '周四', '周五', '周六', '周日'];
 const dayOfWeekText = computed(() => dayOfWeekMap[currentDayOfWeek.value]);
 
-// 日期信息
 const dateInfo = computed(() => {
   const date = new Date();
   return `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日`;
@@ -285,18 +349,33 @@ const features = [
   }
 ];
 
-// 今日课程数据
+// 数据状态
 const todayLessons = ref([]);
 const nextLesson = ref(null);
-
-// 通知数据
 const notices = ref([]);
-
-// 考试数据
 const upcomingExams = ref([]);
-
-// 时间设置 - 初始为空，从设置中加载
 const timeSlots = ref([]);
+
+// 主题切换功能
+const loadThemePreference = () => {
+  const savedTheme = localStorage.getItem('theme_preference');
+  isDarkMode.value = savedTheme === 'dark';
+  applyTheme();
+};
+
+const toggleTheme = () => {
+  isDarkMode.value = !isDarkMode.value;
+  localStorage.setItem('theme_preference', isDarkMode.value ? 'dark' : 'light');
+  applyTheme();
+};
+
+const applyTheme = () => {
+  if (isDarkMode.value) {
+    document.documentElement.classList.add('dark-theme');
+  } else {
+    document.documentElement.classList.remove('dark-theme');
+  }
+};
 
 // 监听设置变更事件
 const handleSettingsChanged = async (event) => {
@@ -690,10 +769,53 @@ const loadNotices = async () => {
   }
 };
 
+// 调整显示的通知数量
+const adjustVisibleNoticeCount = () => {
+  if (!noticePanel.value || !classPanel.value || notices.value.length === 0) return;
+
+  // 获取课程面板的高度
+  const classPanelHeight = classPanel.value.$el.clientHeight;
+
+  // 获取通知面板头部的高度
+  const noticeHeaderHeight = noticePanel.value.$el.querySelector('.card-header').clientHeight;
+
+  // 计算通知列表可用高度
+  const availableHeight = classPanelHeight - noticeHeaderHeight - 40; // 40px是内边距
+
+  if (availableHeight <= 0) return;
+
+  // 重置通知数量
+  visibleNoticeCount.value = 0;
+
+  // 延迟执行，确保DOM已更新
+  nextTick(() => {
+    // 获取单个通知的高度，如果没有通知则使用默认高度
+    const noticeItemHeight = notices.value.length > 0 ?
+        document.querySelector('.notice-item')?.clientHeight || 120 : 120;
+
+    // 如果没有通知项，默认显示3条
+    if (!noticeItemHeight) {
+      visibleNoticeCount.value = 3;
+      return;
+    }
+
+    // 计算可以显示的通知数量（保留"查看更多"的空间）
+    const maxNotices = Math.floor((availableHeight - 40) / noticeItemHeight);
+
+    // 设置可见通知数量（至少显示1条）
+    visibleNoticeCount.value = Math.max(1, maxNotices);
+
+    console.log(`调整通知显示数量: ${visibleNoticeCount.value}，可用高度: ${availableHeight}，单条高度: ${noticeItemHeight}`);
+  });
+};
+
 // 加载所有数据
 const loadAllData = async () => {
   try {
     isLoading.value = true;
+
+    // 加载主题偏好
+    loadThemePreference();
 
     // 加载设置 - 显示教师信息
     showTeacher.value = await store.getBoolean('SHOW_TEACHER', false);
@@ -726,6 +848,11 @@ const loadAllData = async () => {
 
     // 设置下一节课信息
     updateNextLesson();
+
+    // 延迟调整通知显示数量
+    setTimeout(() => {
+      adjustVisibleNoticeCount();
+    }, 100);
   } catch (error) {
     console.error('加载数据失败:', error);
     ElMessage.error('加载数据失败，请重试');
@@ -763,6 +890,11 @@ const updateNextLesson = () => {
   }
 };
 
+// 监听窗口大小变化
+const handleResize = () => {
+  adjustVisibleNoticeCount();
+};
+
 // 自动刷新功能
 let refreshTimer = null;
 const startAutoRefresh = () => {
@@ -785,6 +917,9 @@ onMounted(async () => {
   // 注册设置变更事件监听器
   window.addEventListener('ujn_settings_changed', handleSettingsChanged);
 
+  // 监听窗口大小变化
+  window.addEventListener('resize', handleResize);
+
   // 启动自动刷新
   startAutoRefresh();
 
@@ -796,94 +931,325 @@ onMounted(async () => {
 onUnmounted(() => {
   // 移除事件监听器
   window.removeEventListener('ujn_settings_changed', handleSettingsChanged);
+  window.removeEventListener('resize', handleResize);
 
   // 停止自动刷新
   stopAutoRefresh();
 });
 </script>
 
+<style>
+:root {
+  /* 主色调 */
+  --primary-color: #5c6cff;
+  --primary-color-rgb: 92, 108, 255;
+  --primary-light: #8a96ff;
+  --primary-dark: #4155e2;
+
+  /* 功能色 */
+  --success-color: #34C759;
+  --warning-color: #FF9500;
+  --danger-color: #FF3B30;
+  --info-color: #5AC8FA;
+
+  /* 中性色 */
+  --bg-color: #f5f7fa;
+  --card-bg: #ffffff;
+  --text-primary: #303133;
+  --text-secondary: #606266;
+  --text-hint: #909399;
+  --border-color: #EBEEF5;
+
+  /* 阴影 */
+  --shadow-light: 0 2px 12px 0 rgba(0, 0, 0, 0.05);
+  --shadow-medium: 0 4px 16px 0 rgba(0, 0, 0, 0.08);
+  --shadow-dark: 0 8px 24px 0 rgba(0, 0, 0, 0.12);
+
+  /* 过渡 */
+  --transition-normal: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+}
+
+:root.dark-theme {
+  --primary-color: #7c8aff;
+  --primary-light: #a5afff;
+  --primary-dark: #5c6cff;
+
+  --bg-color: #121212;
+  --card-bg: #242424;
+  --text-primary: rgba(255, 255, 255, 0.9);
+  --text-secondary: rgba(255, 255, 255, 0.7);
+  --text-hint: rgba(255, 255, 255, 0.5);
+  --border-color: #3e3e3e;
+
+  --shadow-light: 0 2px 12px 0 rgba(0, 0, 0, 0.2);
+  --shadow-medium: 0 4px 16px 0 rgba(0, 0, 0, 0.3);
+  --shadow-dark: 0 8px 24px 0 rgba(0, 0, 0, 0.4);
+}
+</style>
+
 <style scoped>
+/* 全局容器样式 */
 .home-container {
-  padding: 16px;
+  padding: 20px;
   max-width: 1200px;
   margin: 0 auto;
+  position: relative;
+  min-height: 100vh;
+  background-color: var(--bg-color);
+  color: var(--text-primary);
+  transition: var(--transition-normal);
 }
 
-/* 状态卡片样式 */
-.status-cards {
-  margin-bottom: 24px;
-}
-
-.status-card {
-  height: 120px;
-  display: flex;
-  border-radius: 8px;
+/* 背景装饰 */
+.bg-decoration {
+  position: fixed;
+  width: 100%;
+  height: 100%;
+  top: 0;
+  left: 0;
   overflow: hidden;
-  transition: transform 0.3s, box-shadow 0.3s;
+  z-index: 0;
+  pointer-events: none;
 }
 
-.status-card:hover {
-  transform: translateY(-3px);
-  box-shadow: var(--shadow-medium);
+.bg-particles {
+  position: absolute;
+  border-radius: 50%;
+  background: radial-gradient(circle, var(--primary-color) 0%, transparent 70%);
+  opacity: 0.1;
+  filter: blur(10px);
+  animation: float 30s linear infinite;
 }
 
-.today-card {
-  background: linear-gradient(135deg, #007AFF, #5AC8FA);
-  color: white;
+.bg-particles:nth-child(1) {
+  width: 300px;
+  height: 300px;
+  top: 10%;
+  left: 5%;
+  animation-duration: 45s;
 }
 
-.classes-card {
-  background: linear-gradient(135deg, #34C759, #00C7BE);
-  color: white;
+.bg-particles:nth-child(2) {
+  width: 200px;
+  height: 200px;
+  top: 40%;
+  right: 10%;
+  animation-duration: 35s;
+  animation-delay: 2s;
 }
 
-.exams-card {
-  background: linear-gradient(135deg, #FF9500, #FF3B30);
-  color: white;
+.bg-particles:nth-child(3) {
+  width: 100px;
+  height: 100px;
+  bottom: 30%;
+  left: 20%;
+  animation-duration: 25s;
+  animation-delay: 5s;
 }
 
-.card-icon {
+.bg-particles:nth-child(4) {
+  width: 150px;
+  height: 150px;
+  bottom: 10%;
+  right: 15%;
+  animation-duration: 40s;
+  animation-delay: 10s;
+}
+
+.bg-particles:nth-child(5) {
+  width: 180px;
+  height: 180px;
+  top: 20%;
+  right: 30%;
+  animation-duration: 50s;
+  animation-delay: 7s;
+}
+
+.bg-particles:nth-child(6) {
+  width: 120px;
+  height: 120px;
+  bottom: 40%;
+  right: 40%;
+  animation-duration: 55s;
+  animation-delay: 3s;
+}
+
+.bg-particles:nth-child(7) {
+  width: 250px;
+  height: 250px;
+  top: 60%;
+  left: 10%;
+  animation-duration: 60s;
+  animation-delay: 15s;
+}
+
+.bg-particles:nth-child(8) {
+  width: 200px;
+  height: 200px;
+  bottom: 20%;
+  left: 40%;
+  animation-duration: 45s;
+  animation-delay: 8s;
+}
+
+.bg-gradient {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(135deg, rgba(92, 108, 255, 0.03) 0%, rgba(92, 108, 255, 0) 50%);
+}
+
+@keyframes float {
+  0% { transform: translate(0, 0) rotate(0deg) scale(1); }
+  25% { transform: translate(20px, 30px) rotate(90deg) scale(1.1); }
+  50% { transform: translate(40px, 20px) rotate(180deg) scale(1.2); }
+  75% { transform: translate(20px, -10px) rotate(270deg) scale(1.1); }
+  100% { transform: translate(0, 0) rotate(360deg) scale(1); }
+}
+
+/* 顶部操作栏 */
+.top-actions {
+  display: flex;
+  justify-content: flex-end;
+  padding: 10px 0;
+  position: relative;
+  z-index: 10;
+}
+
+.theme-toggle {
   display: flex;
   align-items: center;
   justify-content: center;
   width: 40px;
   height: 40px;
-  margin-bottom: 12px;
+  border-radius: 50%;
+  background-color: var(--card-bg);
+  box-shadow: var(--shadow-light);
+  cursor: pointer;
+  transition: var(--transition-normal);
+}
+
+.theme-toggle:hover {
+  transform: rotate(30deg);
+  box-shadow: var(--shadow-medium);
+}
+
+.theme-toggle .el-icon {
+  font-size: 20px;
+  color: var(--primary-color);
+}
+
+/* 状态卡片样式 */
+.status-cards {
+  margin-bottom: 30px;
+  position: relative;
+  z-index: 1;
+}
+
+.status-card {
+  height: 150px; /* 统一卡片高度 */
+  display: flex;
+  border-radius: 16px;
+  overflow: hidden;
+  transition: var(--transition-normal);
+  position: relative;
+  color: white;
+  margin-bottom: 20px;
+}
+
+.status-card:hover {
+  transform: translateY(-5px);
+  box-shadow: var(--shadow-medium);
+}
+
+.today-card {
+  background: linear-gradient(135deg, #5c6cff, #7c8aff);
+}
+
+.classes-card {
+  background: linear-gradient(135deg, #34C759, #00C7BE);
+}
+
+.exams-card {
+  background: linear-gradient(135deg, #FF9500, #FF3B30);
+}
+
+.card-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  width: 100%;
+}
+
+.loading-spinner {
+  width: 30px;
+  height: 30px;
+  border: 3px solid rgba(255, 255, 255, 0.3);
+  border-radius: 50%;
+  border-top: 3px solid #ffffff;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+.card-icon {
+  position: absolute;
+  top: 15px;
+  right: 15px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
 }
 
 .card-icon .el-icon {
-  font-size: 30px;
+  font-size: 26px;
+  color: rgba(255, 255, 255, 0.8);
 }
 
 .card-content {
-  padding: 16px;
+  padding: 25px 20px;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  height: 100%;
 }
 
 .card-content h3 {
-  font-size: 16px;
-  margin: 0 0 8px 0;
-  font-weight: 500;
+  font-size: 20px;
+  margin: 0 0 12px 0;
+  font-weight: 600;
   opacity: 0.9;
 }
 
 .card-value {
-  font-size: 20px;
+  font-size: 26px;
   font-weight: 600;
-  margin-bottom: 6px;
+  margin-bottom: 15px;
+  line-height: 1.2;
 }
 
 .card-subtitle {
-  font-size: 13px;
+  font-size: 15px;
   opacity: 0.8;
 }
 
 /* 标题样式 */
 .section-title {
-  font-size: 18px;
+  font-size: 20px;
   font-weight: 600;
-  margin: 24px 0 16px;
-  padding-bottom: 8px;
+  margin: 30px 0 20px;
+  padding-bottom: 10px;
   position: relative;
+  color: var(--text-primary);
 }
 
 .section-title::after {
@@ -899,13 +1265,15 @@ onUnmounted(() => {
 
 /* 快捷入口 */
 .quick-access {
-  margin-bottom: 24px;
+  margin-bottom: 30px;
+  position: relative;
+  z-index: 1;
 }
 
 .feature-grid {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
-  gap: 16px;
+  gap: 20px;
 }
 
 .feature-link {
@@ -914,18 +1282,20 @@ onUnmounted(() => {
 }
 
 .feature-card {
-  height: 100px;
+  height: 130px; /* 增加高度 */
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: 16px;
-  border-radius: 8px;
-  transition: transform 0.3s, box-shadow 0.3s;
+  padding: 20px;
+  border-radius: 16px;
+  background-color: var(--card-bg);
+  transition: var(--transition-normal);
+  box-shadow: var(--shadow-light);
 }
 
 .feature-card:hover {
-  transform: translateY(-3px);
+  transform: translateY(-5px);
   box-shadow: var(--shadow-medium);
 }
 
@@ -933,199 +1303,472 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 40px;
-  height: 40px;
-  border-radius: 8px;
-  margin-bottom: 8px;
+  width: 50px;
+  height: 50px;
+  border-radius: 12px;
+  margin-bottom: 20px; /* 增加间距 */
+  transition: all 0.3s ease;
+}
+
+.feature-card:hover .feature-icon {
+  transform: scale(1.1) rotate(5deg);
 }
 
 .feature-icon .el-icon {
-  font-size: 20px;
+  font-size: 24px;
   color: white;
 }
 
 .feature-title {
-  font-size: 14px;
+  font-size: 16px;
   font-weight: 500;
+  color: var(--text-primary);
+  text-align: center;
+}
+
+/* 内容卡片行 */
+.content-row {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-wrap: wrap;
 }
 
 /* 内容卡片 */
 .content-card {
-  margin-bottom: 24px;
-  border-radius: 8px;
+  margin-bottom: 30px;
+  border-radius: 16px;
+  background-color: var(--card-bg);
+  box-shadow: var(--shadow-light);
+  transition: var(--transition-normal);
+  overflow: hidden;
+  position: relative;
+  z-index: 1;
+  height: 100%; /* 确保两个卡片高度相同 */
+  display: flex;
+  flex-direction: column;
+}
+
+.content-card:hover {
+  box-shadow: var(--shadow-medium);
 }
 
 .card-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  padding: 15px 20px;
+  border-bottom: 1px solid var(--border-color);
+  min-height: 60px; /* 设置最小高度 */
 }
 
 .card-header h2 {
-  font-size: 16px;
+  font-size: 18px;
   margin: 0;
   font-weight: 600;
   color: var(--text-primary);
 }
 
-/* 今日课程 */
 .today-classes {
-  min-height: 300px;
+  flex: 1; /* 让内容区域填充剩余高度 */
+  padding: 20px;
+  overflow-y: auto;
 }
 
+.notice-list {
+  flex: 1; /* 让内容区域填充剩余高度 */
+  padding: 20px;
+  overflow: hidden; /* 隐藏溢出部分 */
+  display: flex;
+  flex-direction: column;
+}
+
+.notice-items {
+  overflow-y: auto; /* 允许内容滚动 */
+}
+
+.content-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 200px;
+}
+
+/* 今日课程 */
 .lesson-table {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 12px;
 }
 
 .lesson-row {
   display: flex;
-  padding: 12px;
-  background-color: #F8F9FA;
-  border-radius: 6px;
-  transition: background-color 0.3s;
+  padding: 16px;
+  background-color: var(--bg-color);
+  border-radius: 12px;
+  transition: var(--transition-normal);
+  box-shadow: var(--shadow-light);
+  position: relative;
+  overflow: hidden;
+}
+
+.lesson-row::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  height: 100%;
+  width: 4px;
+  background-color: var(--primary-color);
+  opacity: 0;
+  transition: opacity 0.3s ease;
 }
 
 .lesson-row:hover {
-  background-color: #EDF2FC;
+  transform: translateY(-3px);
+  box-shadow: var(--shadow-medium);
+}
+
+.lesson-row:hover::before {
+  opacity: 1;
 }
 
 .lesson-row.current-lesson {
-  background-color: #E6F7FF;
-  border-left: 3px solid #007AFF;
+  background-color: rgba(var(--primary-color-rgb), 0.1);
+  box-shadow: var(--shadow-medium);
+}
+
+.lesson-row.current-lesson::before {
+  opacity: 1;
+  width: 6px;
 }
 
 .lesson-time {
-  min-width: 90px;
-  padding-right: 12px;
+  min-width: 100px;
+  padding-right: 15px;
   border-right: 1px solid var(--border-color);
 }
 
 .time-slot {
-  font-size: 14px;
-  font-weight: 500;
-  color: var(--text-primary);
-  margin-bottom: 4px;
-}
-
-.lesson-count {
-  font-size: 12px;
-  color: var(--text-secondary);
-}
-
-.lesson-info {
-  flex: 1;
-  padding-left: 12px;
-}
-
-.lesson-title {
   font-size: 15px;
   font-weight: 500;
   color: var(--text-primary);
   margin-bottom: 6px;
 }
 
-.lesson-details {
-  display: flex;
-  gap: 8px;
-}
-
-/* 通知公告 */
-.notice-list {
-  min-height: 300px;
-}
-
-.notice-item {
-  padding: 12px;
-  border-bottom: 1px solid var(--border-color);
-  cursor: pointer;
-  transition: background-color 0.2s;
-}
-
-.notice-item:hover {
-  background-color: #F8F9FA;
-}
-
-.notice-item:last-child {
-  border-bottom: none;
-}
-
-.notice-title {
-  font-size: 14px;
-  color: var(--text-primary);
-  margin-bottom: 6px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.notice-meta {
-  display: flex;
-  justify-content: space-between;
-  font-size: 12px;
+.lesson-count {
+  font-size: 13px;
   color: var(--text-secondary);
 }
 
-/* 全部功能 */
-.all-features {
-  margin-bottom: 24px;
-}
-
-.all-feature-card {
-  height: 80px;
-  padding: 12px;
+.lesson-info {
+  flex: 1;
+  padding-left: 15px;
   display: flex;
-  align-items: center;
-  gap: 12px;
-  border-radius: 8px;
-  transition: transform 0.3s, box-shadow 0.3s;
-  margin-bottom: 16px;
+  flex-direction: column;
+  justify-content: center;
 }
 
-.all-feature-card:hover {
+.lesson-title {
+  font-size: 16px;
+  font-weight: 500;
+  color: var(--text-primary);
+  margin-bottom: 8px;
+  line-height: 1.4;
+}
+
+.lesson-details {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+/* 通知公告 */
+.notice-item {
+  padding: 16px;
+  margin-bottom: 12px;
+  border-radius: 12px;
+  background-color: var(--bg-color);
+  cursor: pointer;
+  transition: var(--transition-normal);
+  box-shadow: var(--shadow-light);
+}
+
+.notice-item:hover {
   transform: translateY(-3px);
   box-shadow: var(--shadow-medium);
 }
 
-.all-feature-card .feature-icon {
-  min-width: 40px;
-  margin-bottom: 0;
-}
-
-.all-feature-card .feature-content {
-  flex: 1;
-}
-
-.all-feature-card .feature-title {
-  font-size: 14px;
+.notice-title {
+  font-size: 16px;
   font-weight: 500;
-  margin-bottom: 4px;
-}
-
-.all-feature-card .feature-desc {
-  font-size: 12px;
-  color: var(--text-secondary);
+  color: var(--text-primary);
+  margin-bottom: 10px;
+  line-height: 1.4;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .notice-content-preview {
-  font-size: 13px;
-  color: #606266;
-  margin: 5px 0;
+  font-size: 14px;
+  color: var(--text-secondary);
+  margin-bottom: 12px;
+  line-height: 1.5;
   overflow: hidden;
   text-overflow: ellipsis;
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
+  min-height: 42px;
+}
+
+.notice-meta {
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+  color: var(--text-hint);
+}
+
+/* 查看更多通知 */
+.more-notices {
+  margin-top: 10px;
+  padding: 12px;
+  text-align: center;
+  border-top: 1px dashed var(--border-color);
+}
+
+.more-link {
+  color: var(--primary-color);
+  font-size: 14px;
+  text-decoration: none;
+  font-weight: 500;
+  transition: var(--transition-normal);
+  display: block;
+  padding: 8px;
+  border-radius: 8px;
+}
+
+.more-link:hover {
+  background-color: rgba(var(--primary-color-rgb), 0.05);
+  transform: translateY(-2px);
+}
+
+/* 全部功能 */
+.all-features {
+  margin-bottom: 40px;
+  position: relative;
+  z-index: 1;
+}
+
+.all-feature-card {
+  height: 110px; /* 统一高度 */
+  padding: 16px;
+  display: flex;
+  align-items: center;
+  gap: 15px;
+  border-radius: 16px;
+  background-color: var(--card-bg);
+  transition: var(--transition-normal);
+  margin-bottom: 20px;
+  box-shadow: var(--shadow-light);
+}
+
+.all-feature-card:hover {
+  transform: translateY(-5px);
+  box-shadow: var(--shadow-medium);
+}
+
+.all-feature-card .feature-icon {
+  min-width: 50px;
+  height: 50px;
+  margin-bottom: 0;
+  border-radius: 12px;
+}
+
+.all-feature-card:hover .feature-icon {
+  transform: scale(1.1) rotate(5deg);
+}
+
+.all-feature-card .feature-content {
+  flex: 1;
+  min-width: 0; /* 确保内容可以压缩 */
+  padding: 5px 0; /* 添加内边距 */
+}
+
+.all-feature-card .feature-title {
+  font-size: 16px;
+  font-weight: 500;
+  margin-bottom: 8px;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.all-feature-card .feature-desc {
+  font-size: 14px;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 空状态样式 */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 20px;
+  text-align: center;
+  height: 100%;
+  min-height: 250px;
+}
+
+.custom-empty-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100px;
+  height: 100px;
+  margin-bottom: 20px;
+  background-color: rgba(var(--primary-color-rgb), 0.05);
+  border-radius: 50%;
+  opacity: 0.7;
+}
+
+.login-btn {
+  margin-top: 20px;
+  padding: 8px 24px;
+  border-radius: 8px;
+  font-weight: 500;
+  transition: var(--transition-normal);
+}
+
+/* 列表动画 */
+.list-enter-active,
+.list-leave-active {
+  transition: all 0.5s ease;
+}
+
+.list-enter-from,
+.list-leave-to {
+  opacity: 0;
+  transform: translateY(30px);
 }
 
 /* 响应式调整 */
-@media screen and (max-width: 768px) {
+@media screen and (max-width: 992px) {
   .feature-grid {
     grid-template-columns: repeat(2, 1fr);
+    gap: 16px;
+  }
+}
+
+@media screen and (max-width: 768px) {
+  .home-container {
+    padding: 16px;
+  }
+
+  .status-card {
+    height: auto;
+    min-height: 140px;
+    margin-bottom: 16px;
+  }
+
+  .card-content {
+    padding: 20px;
+  }
+
+  .card-content h3 {
+    margin-bottom: 10px;
+    font-size: 18px;
+  }
+
+  .card-value {
+    font-size: 22px;
+    margin-bottom: 10px;
+  }
+
+  .feature-grid {
+    gap: 12px;
+  }
+
+  .feature-card {
+    height: 110px;
+    padding: 16px;
+  }
+
+  .feature-icon {
+    width: 45px;
+    height: 45px;
+    margin-bottom: 15px;
+  }
+
+  .lesson-row, .notice-item {
+    padding: 14px;
+  }
+
+  .all-feature-card {
+    margin-bottom: 16px;
+    padding: 14px;
+    height: 100px;
+  }
+
+  /* 在移动设备上让通知区域有自己的高度 */
+  .content-card {
+    height: auto;
+    margin-bottom: 20px;
+  }
+
+  .notice-list {
+    max-height: 350px;
+  }
+}
+
+@media screen and (max-width: 576px) {
+  .feature-grid {
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+  }
+
+  .feature-card {
+    height: 100px;
+    padding: 12px;
+  }
+
+  .feature-title {
+    font-size: 14px;
+  }
+
+  .lesson-time {
+    min-width: 90px;
+  }
+
+  .time-slot {
+    font-size: 14px;
+  }
+
+  .lesson-title {
+    font-size: 15px;
+  }
+
+  .all-feature-card .feature-icon {
+    min-width: 40px;
+    height: 40px;
+  }
+
+  .all-feature-card .feature-title {
+    font-size: 15px;
+  }
+
+  .all-feature-card .feature-desc {
+    font-size: 13px;
+  }
+
+  .empty-state {
+    padding: 30px 15px;
   }
 }
 </style>
