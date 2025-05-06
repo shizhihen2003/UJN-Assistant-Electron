@@ -1149,7 +1149,7 @@ onUnmounted(() => {
 }
 
 .status-card {
-  height: 150px; /* 统一卡片高度 */
+  height: auto; /* 卡片高度随内容变化 */
   display: flex;
   border-radius: 16px;
   overflow: hidden;
@@ -1562,7 +1562,7 @@ onUnmounted(() => {
 }
 
 .all-feature-card {
-  height: 110px; /* 统一高度 */
+  height: auto; /* 卡片高度随内容变化 */
   padding: 16px;
   display: flex;
   align-items: center;
@@ -1713,7 +1713,7 @@ onUnmounted(() => {
   .all-feature-card {
     margin-bottom: 16px;
     padding: 14px;
-    height: 100px;
+    height: auto; /* 卡片高度随内容变化 */
   }
 
   /* 在移动设备上让通知区域有自己的高度 */
