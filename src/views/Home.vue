@@ -1282,7 +1282,7 @@ onUnmounted(() => {
 }
 
 .feature-card {
-  height: 130px; /* 增加高度 */
+  height: auto; /* 卡片高度随内容变化 */
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -1564,7 +1564,6 @@ onUnmounted(() => {
 .all-feature-card {
   height: auto; /* 卡片高度随内容变化 */
   padding: 16px;
-  display: flex;
   align-items: center;
   gap: 15px;
   border-radius: 16px;
@@ -1600,7 +1599,7 @@ onUnmounted(() => {
   font-size: 16px;
   font-weight: 500;
   margin-bottom: 8px;
-  text-align: left;
+  text-align: center;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1658,6 +1657,13 @@ onUnmounted(() => {
   transform: translateY(30px);
 }
 
+/* 全部功能卡片内部居中 */
+.all-feature-card :deep(.el-card__body) {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
 /* 响应式调整 */
 @media screen and (max-width: 992px) {
   .feature-grid {
@@ -1696,7 +1702,7 @@ onUnmounted(() => {
   }
 
   .feature-card {
-    height: 110px;
+    height: auto; /* 卡片高度随内容变化 */
     padding: 16px;
   }
 
@@ -1734,7 +1740,7 @@ onUnmounted(() => {
   }
 
   .feature-card {
-    height: 100px;
+    height: auto; /* 卡片高度随内容变化 */
     padding: 12px;
   }
 
