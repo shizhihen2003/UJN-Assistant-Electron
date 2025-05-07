@@ -70,6 +70,12 @@
               <el-icon><Delete /></el-icon>
             </el-button>
           </el-tooltip>
+          <!-- 添加语音设置按钮 -->
+          <el-tooltip content="语音设置">
+            <el-button link @click="showSpeechSettings = true">
+              <el-icon><Headset /></el-icon>
+            </el-button>
+          </el-tooltip>
           <el-tooltip content="设置">
             <el-button link @click="showSettings = true">
               <el-icon><Setting /></el-icon>
@@ -98,10 +104,10 @@
               :key="index"
               class="message-container"
               :class="{
-    'user-message': message.role === 'user',
-    'assistant-message': message.role === 'assistant',
-    'streaming-message': message.role === 'assistant' && index === messages.length - 1 && isLoading
-  }"
+                'user-message': message.role === 'user',
+                'assistant-message': message.role === 'assistant',
+                'streaming-message': message.role === 'assistant' && index === messages.length - 1 && isLoading
+              }"
           >
             <div class="message-avatar">
               <el-avatar v-if="message.role === 'user'" :size="36">{{ userInitials }}</el-avatar>
@@ -112,17 +118,26 @@
                 <span class="message-sender">{{ message.role === 'user' ? userName : 'AI助手' }}</span>
                 <span class="message-time">{{ formatTime(message.timestamp) }}</span>
               </div>
-              <!-- 修改消息体的显示逻辑 -->
               <div
                   class="message-body"
                   :ref="el => message.role === 'assistant' && index === messages.length - 1 && isLoading ? streamingElementRef = el : null"
                   v-html="(message.role === 'assistant' && isLoading && index === messages.length - 1)
-    ? ''
-    : formatMessage(message.content)">
-              </div>
+                    ? ''
+                    : formatMessage(message.content)"
+              ></div>
               <div class="message-actions" v-if="message.role === 'assistant'">
                 <el-button link size="small" @click="copyMessageContent(message.content)">
                   <el-icon><CopyDocument /></el-icon> 复制全部
+                </el-button>
+                <!-- 添加朗读按钮 -->
+                <el-button
+                    link
+                    size="small"
+                    @click="speakMessage(message.content, index)"
+                    :class="{ 'speaking': isSpeaking && currentSpeakingIndex === index }"
+                >
+                  <el-icon><Headset /></el-icon>
+                  {{ isSpeaking && currentSpeakingIndex === index ? '朗读中...(点击停止)' : '朗读' }}
                 </el-button>
               </div>
             </div>
@@ -147,9 +162,21 @@
             :autosize="{ minRows: 1, maxRows: 4 }"
             placeholder="输入消息，按Enter发送，Shift+Enter换行"
             @keydown.enter.prevent="handleEnterKey"
-            :disabled="isLoading"
+            :disabled="isLoading || isRecognizing"
         />
         <div class="input-actions">
+          <!-- 添加语音输入按钮 -->
+          <el-button
+              @click="toggleVoiceInput"
+              :type="isRecognizing ? 'danger' : 'default'"
+              :disabled="isVoiceButtonDisabled || isLoading"
+              class="voice-btn"
+              :class="{ 'recording': isRecognizing }"
+          >
+            <el-icon><Microphone v-if="!isRecognizing" /><Close v-else /></el-icon>
+            {{ isRecognizing ? '停止录音' : '语音输入' }}
+          </el-button>
+
           <el-button type="primary" @click="sendMessage" :loading="isLoading" :disabled="!inputMessage.trim()">
             <el-icon><Position /></el-icon>
             发送
@@ -200,6 +227,56 @@
       </template>
     </el-dialog>
 
+    <!-- 语音设置对话框 -->
+    <el-dialog v-model="showSpeechSettings" title="语音设置" width="500px">
+      <el-form label-position="top">
+        <el-form-item label="讯飞开放平台 AppID">
+          <el-input v-model="speechSettings.appId" placeholder="输入讯飞开放平台AppID" />
+        </el-form-item>
+        <el-form-item label="语音识别 API Key">
+          <el-input v-model="speechSettings.iatApiKey" placeholder="输入语音识别API Key" show-password />
+        </el-form-item>
+        <el-form-item label="语音识别 API Secret">
+          <el-input v-model="speechSettings.iatApiSecret" placeholder="输入语音识别API Secret" show-password />
+        </el-form-item>
+        <el-form-item label="语音合成 API Key">
+          <el-input v-model="speechSettings.ttsApiKey" placeholder="输入语音合成API Key" show-password />
+        </el-form-item>
+        <el-form-item label="语音合成 API Secret">
+          <el-input v-model="speechSettings.ttsApiSecret" placeholder="输入语音合成API Secret" show-password />
+        </el-form-item>
+        <el-form-item label="发音人">
+          <el-select v-model="speechSettings.voice" style="width: 100%">
+            <el-option label="讯飞小燕" value="xiaoyan" />
+            <el-option label="讯飞小宇" value="xiaoyu" />
+            <el-option label="讯飞小思" value="xiaoice" />
+            <el-option label="讯飞小梅" value="xiaomei" />
+            <el-option label="讯飞小莉" value="xiaolin" />
+            <el-option label="讯飞小蓉" value="xiaorong" />
+            <el-option label="讯飞小芸" value="xiaoyun" />
+            <el-option label="讯飞小坤" value="xiaokun" />
+            <el-option label="讯飞小强" value="xiaoqiang" />
+            <el-option label="讯飞小莹" value="xiaoying" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="语速">
+          <el-slider v-model="speechSettings.speed" :min="0" :max="100" />
+        </el-form-item>
+        <el-form-item label="音量">
+          <el-slider v-model="speechSettings.volume" :min="0" :max="100" />
+        </el-form-item>
+        <el-form-item label="音调">
+          <el-slider v-model="speechSettings.pitch" :min="0" :max="100" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <span class="dialog-footer">
+          <el-button @click="showSpeechSettings = false">取消</el-button>
+          <el-button type="primary" @click="saveSpeechSettings">保存</el-button>
+        </span>
+      </template>
+    </el-dialog>
+
     <!-- 重命名对话框 -->
     <el-dialog v-model="showRenameDialog" title="重命名对话" width="400px">
       <el-input v-model="renameTitle" placeholder="输入新标题" />
@@ -225,16 +302,20 @@
 </template>
 
 <script setup>
-import { ref, onMounted, computed, nextTick, watch } from 'vue';
+import { ref, onMounted, computed, nextTick, watch, onBeforeUnmount } from 'vue';
 import { useRoute } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import {
   Plus, ArrowLeft, ArrowRight, Delete, Setting,
-  CopyDocument, Position, More, ChatRound, Lock
+  CopyDocument, Position, More, ChatRound, Lock,
+  Microphone, Close, Headset // 添加语音相关图标
 } from '@element-plus/icons-vue';
+import { debounce } from 'lodash';
 import aiAssistantService from '@/services/aiAssistantService';
 import authService from '@/services/authService';
+import speechService from '@/services/speechService';
 import ipc from '@/utils/ipc';
+import store from '@/utils/store';
 
 // 路由在setup顶层获取
 const route = useRoute();
@@ -248,7 +329,6 @@ const hljs = ref(null);
 const isAuthenticated = ref(false);
 
 const streamingElementRef = ref(null);
-
 
 // 日志记录函数
 function logDebug(...args) {
@@ -417,6 +497,28 @@ const showRenameDialog = ref(false);
 const showDeleteDialog = ref(false);
 const renameTitle = ref('');
 const actionTargetId = ref('');
+
+// 语音识别状态
+const isRecognizing = ref(false);
+const recognitionResult = ref('');
+
+// 语音合成状态
+const isSpeaking = ref(false);
+const currentSpeakingIndex = ref(-1);
+
+// 语音设置对话框
+const showSpeechSettings = ref(false);
+const speechSettings = ref({
+  appId: '',
+  iatApiKey: '',
+  iatApiSecret: '',
+  ttsApiKey: '',
+  ttsApiSecret: '',
+  voice: 'xiaoyan', // 默认发音人
+  speed: 50, // 语速
+  volume: 50, // 音量
+  pitch: 50, // 音调
+});
 
 /**
  * 检查用户认证状态
@@ -1639,6 +1741,290 @@ const loadUserInfo = async () => {
   }
 };
 
+/**
+ * 加载语音设置
+ */
+const loadSpeechSettings = async () => {
+  try {
+    // 从存储加载语音识别配置
+    const iatConfig = await store.getObject('speech_iat_config');
+    if (iatConfig) {
+      speechSettings.value.appId = iatConfig.appId || '';
+      speechSettings.value.iatApiKey = iatConfig.apiKey || '';
+      speechSettings.value.iatApiSecret = iatConfig.apiSecret || '';
+    }
+
+    // 从存储加载语音合成配置
+    const ttsConfig = await store.getObject('speech_tts_config');
+    if (ttsConfig) {
+      // 如果appId在iatConfig中没有，尝试从ttsConfig中获取
+      if (!speechSettings.value.appId && ttsConfig.appId) {
+        speechSettings.value.appId = ttsConfig.appId;
+      }
+      speechSettings.value.ttsApiKey = ttsConfig.apiKey || '';
+      speechSettings.value.ttsApiSecret = ttsConfig.apiSecret || '';
+
+      // 加载语音合成偏好设置
+      const ttsPrefs = await store.getObject('speech_tts_prefs');
+      if (ttsPrefs) {
+        speechSettings.value.voice = ttsPrefs.voice || 'xiaoyan';
+        speechSettings.value.speed = ttsPrefs.speed || 50;
+        speechSettings.value.volume = ttsPrefs.volume || 50;
+        speechSettings.value.pitch = ttsPrefs.pitch || 50;
+      }
+    }
+
+    console.log('语音设置加载完成');
+  } catch (error) {
+    console.error('加载语音设置失败:', error);
+  }
+};
+
+/**
+ * 保存语音设置
+ */
+const saveSpeechSettings = async () => {
+  try {
+    // 保存语音识别配置
+    await speechService.setConfig('iat', {
+      appId: speechSettings.value.appId,
+      apiKey: speechSettings.value.iatApiKey,
+      apiSecret: speechSettings.value.iatApiSecret
+    });
+
+    // 保存语音合成配置
+    await speechService.setConfig('tts', {
+      appId: speechSettings.value.appId,
+      apiKey: speechSettings.value.ttsApiKey,
+      apiSecret: speechSettings.value.ttsApiSecret
+    });
+
+    // 保存语音合成偏好设置
+    await store.putObject('speech_tts_prefs', {
+      voice: speechSettings.value.voice,
+      speed: speechSettings.value.speed,
+      volume: speechSettings.value.volume,
+      pitch: speechSettings.value.pitch
+    });
+
+    showSpeechSettings.value = false;
+    ElMessage.success('语音设置已保存');
+  } catch (error) {
+    console.error('保存语音设置失败:', error);
+    ElMessage.error('保存语音设置失败: ' + error.message);
+  }
+};
+
+// 防抖动函数
+const debouncedToggleVoiceInput = debounce(async () => {
+  if (isRecognizing.value) {
+    // 停止语音识别
+    isRecognizing.value = false;
+    try {
+      await speechService.stopRecognize();
+      console.log('语音识别已停止');
+    } catch (error) {
+      console.error('停止语音识别失败:', error);
+      ElMessage.error('停止语音识别失败: ' + error.message);
+    }
+  } else {
+    try {
+      // 开始语音识别
+      isRecognizing.value = true;
+
+      // 启动语音识别
+      await speechService.startRecognize(
+          // 结果回调
+          (text, isLast, result) => {
+            // 更新输入框
+            recognitionResult.value = text;
+            inputMessage.value = recognitionResult.value;
+
+            // 如果是最后一帧，结束识别
+            if (isLast) {
+              isRecognizing.value = false;
+            }
+          },
+          // 错误回调
+          (error) => {
+            console.error('语音识别错误:', error);
+            ElMessage.error('语音识别失败: ' + error.message);
+            isRecognizing.value = false;
+          }
+      );
+    } catch (error) {
+      console.error('启动语音识别失败:', error);
+      ElMessage.error('启动语音识别失败: ' + error.message);
+      isRecognizing.value = false;
+    }
+  }
+}, 300, { leading: true, trailing: false });
+
+// 添加一个新的状态变量用于禁用按钮
+const isVoiceButtonDisabled = ref(false);
+
+/**
+ * 切换语音输入 - 使用锁机制防止重复触发
+ */
+const toggleVoiceInput = async () => {
+  // 如果按钮已禁用，直接返回
+  if (isVoiceButtonDisabled.value) {
+    console.log('操作进行中，请等待完成');
+    ElMessage.warning('操作进行中，请等待完成');
+    return;
+  }
+
+  // 立即禁用按钮，防止重复点击
+  isVoiceButtonDisabled.value = true;
+
+  try {
+    if (isRecognizing.value) {
+      console.log('开始停止语音识别...');
+      // 先更新UI状态
+      isRecognizing.value = false;
+
+      // 然后执行停止操作
+      await speechService.stopRecognize();
+      console.log('语音识别已完全停止');
+
+      // 停止后等待额外时间，确保所有资源都释放完毕
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      console.log('等待完成，资源已完全释放');
+    } else {
+      // 检查语音服务状态
+      if (speechService.recognitionState !== 'idle') {
+        console.warn(`语音服务状态不是空闲(${speechService.recognitionState})，等待变为空闲...`);
+
+        // 等待服务状态变为空闲
+        await new Promise((resolveState) => {
+          const checkState = () => {
+            if (speechService.recognitionState === 'idle') {
+              resolveState();
+            } else {
+              setTimeout(checkState, 100);
+            }
+          };
+          checkState();
+        });
+
+        console.log('语音服务状态已变为空闲，可以开始新录音');
+
+        // 额外等待确保资源完全释放
+        await new Promise(resolve => setTimeout(resolve, 500));
+      }
+
+      console.log('开始启动语音识别...');
+      // 先更新UI状态
+      isRecognizing.value = true;
+
+      // 启动语音识别
+      await speechService.startRecognize(
+          // 结果回调
+          (text, isLast) => {
+            // 更新输入框
+            recognitionResult.value = text;
+            inputMessage.value = recognitionResult.value;
+
+            // 如果是最后一帧，结束识别
+            if (isLast) {
+              isRecognizing.value = false;
+              // 在回调中不释放按钮禁用状态，让主函数统一处理
+            }
+          },
+          // 错误回调
+          (error) => {
+            console.error('语音识别错误:', error);
+            ElMessage.error('语音识别失败: ' + error.message);
+            isRecognizing.value = false;
+            // 在回调中不释放按钮禁用状态，让主函数统一处理
+          }
+      );
+    }
+  } catch (error) {
+    console.error('语音操作失败:', error);
+    ElMessage.error(error.message || '操作失败');
+    // 恢复正确状态
+    isRecognizing.value = false;
+  } finally {
+    // 操作完成后延长禁用时间，确保所有状态都已同步完成
+    setTimeout(() => {
+      isVoiceButtonDisabled.value = false;
+      console.log('操作完成，按钮已启用');
+    }, 500); // 延迟0.5秒，确保完全同步
+  }
+};
+
+/**
+ * 朗读消息
+ * @param {string} text 要朗读的文本
+ * @param {number} index 消息索引
+ */
+const speakMessage = async (text, index) => {
+  try {
+    // 如果当前正在朗读这条消息，点击停止
+    if (isSpeaking.value && currentSpeakingIndex.value === index) {
+      console.log('停止当前消息朗读');
+      speechService.stopPlayback();
+
+      // 确保UI状态立即更新
+      isSpeaking.value = false;
+      currentSpeakingIndex.value = -1;
+      return;
+    }
+
+    // 如果正在朗读其他消息，先停止
+    if (isSpeaking.value) {
+      console.log('停止其他消息朗读');
+      speechService.stopPlayback();
+
+      // 确保UI状态立即更新
+      isSpeaking.value = false;
+      currentSpeakingIndex.value = -1;
+
+      // 添加足够的延迟确保所有资源都被清理
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+
+    // 设置状态
+    isSpeaking.value = true;
+    currentSpeakingIndex.value = index;
+
+    // 启动语音合成
+    await speechService.startSynthesize(
+        text,
+        // 开始回调
+        () => {
+          console.log('开始朗读');
+        },
+        // 结束回调
+        () => {
+          console.log('朗读结束');
+          isSpeaking.value = false;
+          currentSpeakingIndex.value = -1;
+        },
+        // 错误回调
+        (error) => {
+          console.error('语音合成错误:', error);
+          ElMessage.error('语音合成失败: ' + error.message);
+          isSpeaking.value = false;
+          currentSpeakingIndex.value = -1;
+        },
+        // 合成选项
+        {
+          voice: speechSettings.value.voice,
+          speed: speechSettings.value.speed,
+          volume: speechSettings.value.volume,
+          pitch: speechSettings.value.pitch
+        }
+    );
+  } catch (error) {
+    console.error('启动语音合成失败:', error);
+    ElMessage.error('启动语音合成失败: ' + error.message);
+    isSpeaking.value = false;
+    currentSpeakingIndex.value = -1;
+  }
+};
+
 // 初始化
 onMounted(async () => {
   // 检查用户认证状态
@@ -1665,7 +2051,8 @@ onMounted(async () => {
   // 加载对话列表
   await loadConversations();
 
-
+  // 加载语音设置
+  await loadSpeechSettings();
 
   // 从URL参数加载对话
   try {
@@ -1742,6 +2129,19 @@ watch(
     },
     { deep: true }
 );
+
+// 在组件卸载时清理语音资源
+onBeforeUnmount(async () => {
+  // 停止语音识别
+  if (isRecognizing.value) {
+    await speechService.stopRecognize();
+  }
+
+  // 停止语音合成
+  if (isSpeaking.value) {
+    speechService.stopPlayback();
+  }
+});
 </script>
 
 <style>
@@ -1891,6 +2291,23 @@ pre code.hljs {
 .assistant-message .message-body .copy-code-button:hover {
   background-color: rgba(0, 122, 255, 0.1);
   color: var(--primary-color);
+}
+
+/* 朗读中的按钮样式 */
+.message-actions .el-button.speaking {
+  color: var(--primary-color);
+  font-weight: 500;
+}
+
+/* 播放中的动画效果 */
+@keyframes pulse {
+  0% { opacity: 0.7; }
+  50% { opacity: 1; }
+  100% { opacity: 0.7; }
+}
+
+.message-actions .el-button.speaking {
+  animation: pulse 2s infinite;
 }
 
 /* 添加代码块动画效果 */
@@ -2408,6 +2825,96 @@ pre code.hljs {
   vertical-align: baseline;
   line-height: 1;
   will-change: opacity;
+}
+
+/* 语音按钮样式 */
+.voice-btn {
+  margin-right: 10px;
+  transition: all 0.3s ease;
+}
+
+.voice-btn:hover {
+  transform: translateY(-1px);
+}
+
+/* 录音中动画效果 */
+@keyframes pulse {
+  0% { transform: scale(1); }
+  50% { transform: scale(1.1); }
+  100% { transform: scale(1); }
+}
+
+.voice-btn.recording {
+  animation: pulse 1.5s infinite;
+  background-color: #f56c6c;
+  color: white;
+}
+
+/* 朗读中动画效果 */
+@keyframes wave {
+  0% { opacity: 0.6; }
+  50% { opacity: 1; }
+  100% { opacity: 0.6; }
+}
+
+.speaking {
+  animation: wave 2s infinite;
+}
+
+/* 语音设置对话框 */
+.el-dialog__body .el-slider {
+  width: 100%;
+}
+
+/* 播放控制按钮 */
+.playback-controls {
+  display: flex;
+  align-items: center;
+  margin-top: 5px;
+}
+
+.playback-controls .el-button {
+  padding: 4px 8px;
+  margin-right: 8px;
+}
+
+/* 音量指示器 */
+.volume-indicator {
+  display: flex;
+  height: 20px;
+  align-items: flex-end;
+  margin-left: 10px;
+}
+
+.volume-bar {
+  width: 3px;
+  background-color: var(--primary-color);
+  margin: 0 1px;
+  transition: height 0.1s ease;
+}
+
+/* 改进消息操作按钮 */
+.message-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.message-actions .el-button {
+  padding: 2px 8px;
+  font-size: 12px;
+}
+
+/* 响应式优化 */
+@media (max-width: 600px) {
+  .input-actions {
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .input-actions .el-button {
+    width: 100%;
+  }
 }
 
 @keyframes blink {

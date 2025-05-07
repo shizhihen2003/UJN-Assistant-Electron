@@ -14,11 +14,14 @@
   "dependencies": {
     "axios": "^1.6.0",
     "crypto-js": "^4.2.0",
+    "dompurify": "^3.2.5",
     "electron-store": "^8.1.0",
     "element-plus": "^2.5.3",
     "form-data": "^4.0.0",
+    "highlight.js": "^11.11.1",
     "jsbn": "^1.1.0",
     "jsencrypt": "^3.3.2",
+    "marked": "^15.0.11",
     "node-fetch": "^2.6.7",
     "vue": "^3.5.13",
     "vue-router": "^4.2.5"
