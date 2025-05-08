@@ -5,7 +5,7 @@ import CryptoJS from 'crypto-js';
 
 /**
  * 讯飞语音服务
- * 提供语音识别和语音合成功能
+ * 提供语音识别和语音合成功能，优化语音对话体验
  */
 class SpeechService {
     constructor() {
@@ -64,6 +64,13 @@ class SpeechService {
 
         // 添加一个防抖锁
         this.transitionLock = false;
+
+        // 语音流式合成相关
+        this.streamingMode = false;
+        this.audioChunkQueue = [];
+        this.isPlayingChunk = false;
+        this.audioChunkCallbacks = [];
+        this.streamingAudioContext = null;
 
         // 初始化
         this.init();
@@ -186,7 +193,38 @@ class SpeechService {
                 this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
                 console.log('使用默认配置创建音频上下文, 状态:', this.audioContext.state, '采样率:', this.audioContext.sampleRate);
             }
+        } else if (this.audioContext.state === 'suspended') {
+            // 如果上下文已经存在但处于暂停状态，尝试恢复
+            try {
+                await this.audioContext.resume();
+                console.log('恢复已存在的音频上下文, 新状态:', this.audioContext.state);
+            } catch (error) {
+                console.warn('恢复已存在的音频上下文失败:', error);
+            }
         }
+    }
+
+    /**
+     * 初始化流式合成音频上下文
+     * @returns {Promise<AudioContext>} 音频上下文
+     */
+    async initStreamingAudioContext() {
+        if (!this.streamingAudioContext || this.streamingAudioContext.state === 'closed') {
+            try {
+                this.streamingAudioContext = new (window.AudioContext || window.webkitAudioContext)();
+
+                if (this.streamingAudioContext.state === 'suspended') {
+                    await this.streamingAudioContext.resume();
+                }
+            } catch (error) {
+                console.error('初始化流式音频上下文失败:', error);
+                throw error;
+            }
+        } else if (this.streamingAudioContext.state === 'suspended') {
+            await this.streamingAudioContext.resume();
+        }
+
+        return this.streamingAudioContext;
     }
 
     /**
@@ -1024,6 +1062,274 @@ class SpeechService {
     }
 
     /**
+     * 按照句子分割文本
+     * @param {string} text 输入文本
+     * @returns {string[]} 句子数组
+     */
+    splitIntoSentences(text) {
+        // 定义句子终止符
+        const sentenceEndings = ['.', '?', '!', '。', '？', '！', ';', '；', '\n'];
+
+        // 存储句子
+        const sentences = [];
+        let currentSentence = '';
+
+        // 遍历字符
+        for (let i = 0; i < text.length; i++) {
+            currentSentence += text[i];
+
+            // 检查是否是句子结束
+            if (sentenceEndings.includes(text[i]) ||
+                i === text.length - 1 ||
+                currentSentence.length >= 100) { // 最大句子长度限制
+
+                if (currentSentence.trim()) {
+                    sentences.push(currentSentence.trim());
+                }
+                currentSentence = '';
+            }
+        }
+
+        // 添加最后一个句子（如果有）
+        if (currentSentence.trim()) {
+            sentences.push(currentSentence.trim());
+        }
+
+        return sentences;
+    }
+
+    /**
+     * 开始流式语音合成
+     * @param {string} text 要合成的文本
+     * @param {Function} onAudioChunk 收到音频块的回调
+     * @param {Function} onComplete 完成时的回调
+     * @param {Function} onError 错误回调
+     * @param {Object} options 合成选项
+     */
+    async startStreamingSynthesize(text, onAudioChunk, onComplete, onError, options = {}) {
+        try {
+            // 检查配置是否完整
+            if (!this.config.tts.appId || !this.config.tts.apiKey || !this.config.tts.apiSecret) {
+                throw new Error('语音合成配置不完整，请在设置中配置appId、apiKey和apiSecret');
+            }
+
+            if (!text || text.trim() === '') {
+                throw new Error('合成文本不能为空');
+            }
+
+            // 设置流式模式
+            this.streamingMode = true;
+
+            // 初始化音频上下文（如果需要)
+            await this.initStreamingAudioContext();
+
+            // 按句子分割文本
+            const sentences = this.splitIntoSentences(text);
+            console.log(`文本已分成${sentences.length}个句子，将依次合成`);
+
+            // 保存回调
+            this.audioChunkCallbacks = {
+                onAudioChunk,
+                onComplete,
+                onError
+            };
+
+            // 重置音频队列
+            this.audioChunkQueue = [];
+            this.isPlayingChunk = false;
+
+            // 逐句进行合成
+            for (let i = 0; i < sentences.length; i++) {
+                const sentence = sentences[i];
+                if (!sentence.trim()) continue;
+
+                try {
+                    console.log(`正在合成第 ${i + 1}/${sentences.length} 个句子: ${sentence}`);
+
+                    // 等待句子合成完成
+                    const audioData = await this.synthesizeSentence(sentence, options);
+
+                    // 如果流式模式被取消，退出循环
+                    if (!this.streamingMode) {
+                        console.log('流式合成已取消，不再处理后续句子');
+                        break;
+                    }
+
+                    // 将音频数据添加到队列
+                    this.queueAudioChunk(audioData);
+
+                } catch (error) {
+                    console.error(`第 ${i + 1} 个句子合成失败:`, error);
+
+                    if (onError) {
+                        onError(error);
+                    }
+
+                    // 继续处理下一个句子，不中断
+                }
+            }
+
+            // 所有句子已加入队列
+            console.log('所有句子已加入合成队列');
+
+            // 等待所有音频播放完成
+            if (this.isPlayingChunk || this.audioChunkQueue.length > 0) {
+                console.log('等待所有音频播放完成...');
+                // 最后一个音频块播放完成时会自动调用onComplete回调
+            } else {
+                // 如果没有任何音频块，立即调用完成回调
+                console.log('没有音频需要播放，直接调用完成回调');
+                if (onComplete) {
+                    onComplete();
+                }
+            }
+
+            // 重置流式模式
+            this.streamingMode = false;
+
+        } catch (error) {
+            console.error('启动流式语音合成失败:', error);
+            this.streamingMode = false;
+
+            if (onError) {
+                onError(error);
+            }
+        }
+    }
+
+    /**
+     * 将音频块添加到队列并开始播放
+     * @param {ArrayBuffer} audioData 音频数据
+     */
+    queueAudioChunk(audioData) {
+        // 添加到队列
+        this.audioChunkQueue.push(audioData);
+
+        // 如果不在播放中，开始播放
+        if (!this.isPlayingChunk) {
+            this.playNextAudioChunk();
+        }
+    }
+
+    /**
+     * 播放队列中的下一个音频块
+     */
+    async playNextAudioChunk() {
+        // 如果队列为空，结束播放
+        if (this.audioChunkQueue.length === 0) {
+            this.isPlayingChunk = false;
+
+            // 如果所有音频都已播放完成，且还在流式模式中，调用完成回调
+            if (this.streamingMode === false && this.audioChunkCallbacks.onComplete) {
+                this.audioChunkCallbacks.onComplete();
+            }
+
+            return;
+        }
+
+        // 设置播放状态
+        this.isPlayingChunk = true;
+
+        // 获取下一个音频块
+        const audioData = this.audioChunkQueue.shift();
+
+        try {
+            // 初始化上下文
+            const context = await this.initStreamingAudioContext();
+
+            // 解码音频
+            const audioBuffer = await context.decodeAudioData(audioData);
+
+            // 创建源
+            const source = context.createBufferSource();
+            source.buffer = audioBuffer;
+
+            // 连接到输出
+            source.connect(context.destination);
+
+            // 设置播放结束回调
+            source.onended = () => {
+                // 播放下一个
+                this.playNextAudioChunk();
+            };
+
+            // 通知收到音频块
+            if (this.audioChunkCallbacks.onAudioChunk) {
+                this.audioChunkCallbacks.onAudioChunk(audioData);
+            }
+
+            // 开始播放
+            source.start(0);
+
+        } catch (error) {
+            console.error('播放音频块失败:', error);
+
+            // 即使出错也继续播放下一个
+            this.playNextAudioChunk();
+
+            if (this.audioChunkCallbacks.onError) {
+                this.audioChunkCallbacks.onError(error);
+            }
+        }
+    }
+
+    /**
+     * 取消流式合成
+     */
+    cancelStreamingSynthesize() {
+        this.streamingMode = false;
+        this.audioChunkQueue = [];
+
+        // 停止当前播放
+        if (this.isPlayingChunk && this.streamingAudioContext) {
+            try {
+                this.streamingAudioContext.suspend();
+            } catch (e) {
+                console.warn('暂停音频上下文失败:', e);
+            }
+        }
+
+        this.isPlayingChunk = false;
+    }
+
+    /**
+     * 合成单个句子
+     * @param {string} sentence 句子文本
+     * @param {Object} options 合成选项
+     * @returns {Promise<ArrayBuffer>} 音频数据
+     */
+    async synthesizeSentence(sentence, options) {
+        return new Promise((resolve, reject) => {
+            let audioData = null;
+
+            this.startSynthesize(
+                sentence,
+                // 开始回调 - 可以忽略
+                () => {},
+                // 完成回调
+                () => {
+                    if (audioData) {
+                        resolve(audioData);
+                    } else {
+                        reject(new Error('未收到音频数据'));
+                    }
+                },
+                // 错误回调
+                (error) => {
+                    reject(error);
+                },
+                // 合成选项
+                options
+            );
+
+            // 覆盖onTtsResult回调，以捕获音频数据
+            this.onTtsResult = (audio) => {
+                audioData = audio;
+            };
+        });
+    }
+
+    /**
      * 开始语音合成
      * @param {string} text 要合成的文本
      * @param {Function} onStart 开始播放回调
@@ -1546,6 +1852,9 @@ class SpeechService {
         // 设置取消标志
         this.isCanceled = true;
 
+        // 取消流式合成
+        this.cancelStreamingSynthesize();
+
         // 停止当前音频播放
         if (this.audioSource) {
             try {
@@ -1669,12 +1978,25 @@ class SpeechService {
             this.audioContext = null;
         }
 
+        // 关闭流式音频上下文
+        if (this.streamingAudioContext && this.streamingAudioContext.state !== 'closed') {
+            try {
+                this.streamingAudioContext.close();
+            } catch (e) {
+                console.warn('关闭流式音频上下文失败:', e);
+            }
+            this.streamingAudioContext = null;
+        }
+
         // 重置变量
         this.audioChunks = [];
         this.recognitionText = '';
         this.resultTextTemp = '';
         this.audioQueue = [];
         this.processingAudio = false;
+        this.streamingMode = false;
+        this.audioChunkQueue = [];
+        this.isPlayingChunk = false;
 
         console.log('语音服务资源已清理');
     }

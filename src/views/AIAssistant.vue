@@ -76,6 +76,14 @@
               <el-icon><Headset /></el-icon>
             </el-button>
           </el-tooltip>
+          <el-tooltip content="语音对话模式">
+            <el-switch
+                v-model="voiceConversationMode"
+                @change="handleVoiceConversationModeChange"
+                active-color="#13ce66"
+                inactive-color="#909399">
+            </el-switch>
+          </el-tooltip>
           <el-tooltip content="设置">
             <el-button link @click="showSettings = true">
               <el-icon><Setting /></el-icon>
@@ -137,7 +145,14 @@
                     :class="{ 'speaking': isSpeaking && currentSpeakingIndex === index }"
                 >
                   <el-icon><Headset /></el-icon>
-                  {{ isSpeaking && currentSpeakingIndex === index ? '朗读中...(点击停止)' : '朗读' }}
+                  <span v-if="isSpeaking && currentSpeakingIndex === index">
+                    <span class="reading-progress-text">朗读中</span>
+                    <span class="reading-dots">
+                      <span>.</span><span>.</span><span>.</span>
+                    </span>
+                    <span>(点击停止)</span>
+                  </span>
+                  <span v-else>朗读</span>
                 </el-button>
               </div>
             </div>
@@ -164,6 +179,16 @@
             @keydown.enter.prevent="handleEnterKey"
             :disabled="isLoading || isRecognizing"
         />
+        <div v-if="isRecognizing" class="voice-wave-container">
+          <div class="voice-wave">
+            <span></span>
+            <span></span>
+            <span></span>
+            <span></span>
+            <span></span>
+          </div>
+          <div class="recognition-text">{{ recognitionResult || '正在聆听...' }}</div>
+        </div>
         <div class="input-actions">
           <!-- 添加语音输入按钮 -->
           <el-button
@@ -259,6 +284,13 @@
             <el-option label="讯飞小莹" value="xiaoying" />
           </el-select>
         </el-form-item>
+        <el-form-item label="自动朗读设置">
+          <el-switch
+              v-model="autoReadMessages"
+              active-text="自动朗读AI回复"
+              inactive-text="手动朗读">
+          </el-switch>
+        </el-form-item>
         <el-form-item label="语速">
           <el-slider v-model="speechSettings.speed" :min="0" :max="100" />
         </el-form-item>
@@ -298,6 +330,18 @@
         </span>
       </template>
     </el-dialog>
+
+    <!-- 语音对话模式覆盖层 -->
+    <voice-chat
+        ref="voiceChatRef"
+        :active="voiceChatMode"
+        @start-listening="startVoiceRecognition"
+        @stop-listening="stopVoiceRecognition"
+        @speech-result="handleVoiceCommand"
+        @stop-speaking="stopAllSpeechActivities"
+        @exit-voice-mode="exitVoiceChatMode"
+        @prepare-next-turn="handlePrepareTurn"
+    />
   </div>
 </template>
 
@@ -317,6 +361,9 @@ import speechService from '@/services/speechService';
 import ipc from '@/utils/ipc';
 import store from '@/utils/store';
 
+// 导入语音聊天组件
+import VoiceChat from './VoiceChat.vue';
+
 // 路由在setup顶层获取
 const route = useRoute();
 
@@ -329,6 +376,7 @@ const hljs = ref(null);
 const isAuthenticated = ref(false);
 
 const streamingElementRef = ref(null);
+const voiceChatRef = ref(null);
 
 // 日志记录函数
 function logDebug(...args) {
@@ -501,6 +549,7 @@ const actionTargetId = ref('');
 // 语音识别状态
 const isRecognizing = ref(false);
 const recognitionResult = ref('');
+const isVoiceButtonDisabled = ref(false);
 
 // 语音合成状态
 const isSpeaking = ref(false);
@@ -519,6 +568,861 @@ const speechSettings = ref({
   volume: 50, // 音量
   pitch: 50, // 音调
 });
+
+// 语音对话模式
+const voiceConversationMode = ref(false);
+const voiceConversationActive = ref(false);
+const autoListeningTimeout = ref(null);
+const autoReadMessages = ref(false);
+const pauseAutoReading = ref(false);
+
+// 语音识别增强
+const silenceTimer = ref(null);
+const speechTimeout = ref(null);
+const lastSpeechTimestamp = ref(Date.now());
+const silenceThreshold = 3000; // 3秒静音自动结束
+
+// 新增: 语音对话模式覆盖层状态
+const voiceChatMode = ref(false);
+const streamingSpeech = ref(false);
+const speechSynthesizer = ref(null);
+const currentAudioQueue = ref([]);
+const isAudioPlaying = ref(false);
+const pendingAudioChunks = ref([]);
+
+// 语音对话管理器
+const voiceConversationManager = {
+  // 状态变量
+  active: false,
+  listening: false,
+  speaking: false,
+  waitingForAI: false,
+
+  // 超时计时器
+  silenceTimer: null,
+  inactivityTimer: null,
+
+  // 配置参数
+  config: {
+    silenceThreshold: 3000,   // 静音检测阈值（毫秒）
+    inactivityTimeout: 60000, // 无活动自动关闭（毫秒）
+    minTextLength: 5,         // 最小文本长度，短于此长度不发送
+    endPunctuations: ['.', '。', '?', '？', '!', '！'] // 结束标点
+  },
+
+  // 初始化
+  init() {
+    this.resetTimers();
+  },
+
+  // 开始语音对话
+  start() {
+    this.active = true;
+    this.resetTimers();
+
+    // 设置无活动自动关闭定时器
+    this.inactivityTimer = setTimeout(() => {
+      if (this.active && !this.speaking && !this.listening && !this.waitingForAI) {
+        console.log('检测到长时间无活动，自动关闭语音对话模式');
+        this.stop();
+        voiceConversationMode.value = false;
+        ElMessage.info('检测到长时间无活动，已自动关闭语音对话模式');
+      }
+    }, this.config.inactivityTimeout);
+
+    return this.startListening();
+  },
+
+  // 停止语音对话
+  stop() {
+    this.active = false;
+    this.resetTimers();
+
+    // 如果正在朗读，停止朗读
+    if (this.speaking) {
+      speechService.stopPlayback();
+      this.speaking = false;
+    }
+
+    // 如果正在收听，停止收听
+    if (this.listening) {
+      return this.stopListening();
+    }
+
+    return Promise.resolve();
+  },
+
+  // 开始语音识别
+  async startListening() {
+    if (this.speaking) {
+      // 如果正在朗读，先停止
+      speechService.stopPlayback();
+      this.speaking = false;
+    }
+
+    this.listening = true;
+
+    // 重置识别文本
+    recognitionResult.value = '';
+    inputMessage.value = '';
+
+    // 播放开始识别的音频反馈
+    playAudioFeedback('start');
+
+    try {
+      // 开始语音识别
+      await toggleVoiceInput();
+
+      // 启动静音检测定时器
+      this.silenceTimer = setTimeout(() => {
+        if (this.listening && !this.waitingForAI) {
+          console.log('检测到长时间静音，自动停止语音识别');
+          this.stopListening().then(() => {
+            // 如果语音识别文本太少，不发送，而是重新开始收听
+            if (inputMessage.value.length < this.config.minTextLength) {
+              setTimeout(() => {
+                if (this.active) {
+                  this.startListening();
+                }
+              }, 1000);
+            }
+          });
+        }
+      }, this.config.silenceThreshold);
+
+      return true;
+    } catch (error) {
+      console.error('开始语音识别失败:', error);
+      this.listening = false;
+      return false;
+    }
+  },
+
+  // 停止语音识别
+  async stopListening() {
+    this.listening = false;
+
+    // 清除静音检测定时器
+    if (this.silenceTimer) {
+      clearTimeout(this.silenceTimer);
+      this.silenceTimer = null;
+    }
+
+    // 播放停止识别的音频反馈
+    playAudioFeedback('stop');
+
+    try {
+      await toggleVoiceInput();
+
+      // 如果有足够长的识别文本，发送消息
+      if (inputMessage.value.length >= this.config.minTextLength) {
+        this.waitingForAI = true;
+        await sendMessage();
+      }
+
+      return true;
+    } catch (error) {
+      console.error('停止语音识别失败:', error);
+      return false;
+    }
+  },
+
+  // 开始朗读 AI 回复
+  async startSpeaking(text, onComplete) {
+    if (this.listening) {
+      // 如果正在识别语音，先停止
+      await this.stopListening();
+    }
+
+    this.speaking = true;
+
+    try {
+      // 预处理文本以获得更好的朗读效果
+      const processedText = preprocessTextForTTS(text);
+
+      // 获取动态调整的TTS参数
+      const ttsParams = dynamicAdjustTtsParams(processedText);
+
+      // 开始朗读
+      await speechService.startSynthesize(
+          processedText,
+          // 开始回调
+          () => {
+            console.log('开始朗读AI回复');
+          },
+          // 结束回调
+          () => {
+            console.log('AI回复朗读完成');
+            this.speaking = false;
+
+            // 如果语音对话仍然活跃，等待一小段时间后重新开始收听
+            if (this.active && !this.waitingForAI) {
+              setTimeout(() => {
+                if (this.active && !this.listening && !this.speaking && !this.waitingForAI) {
+                  this.startListening();
+                }
+              }, 1000);
+            }
+
+            if (onComplete) onComplete();
+          },
+          // 错误回调
+          (error) => {
+            console.error('语音合成错误:', error);
+            ElMessage.error('语音合成失败: ' + error.message);
+            this.speaking = false;
+
+            // 出错时也尝试继续对话
+            if (this.active && !this.waitingForAI) {
+              setTimeout(() => {
+                if (this.active && !this.listening && !this.speaking && !this.waitingForAI) {
+                  this.startListening();
+                }
+              }, 1000);
+            }
+
+            if (onComplete) onComplete();
+          },
+          // 合成选项
+          ttsParams
+      );
+
+      return true;
+    } catch (error) {
+      console.error('开始AI回复朗读失败:', error);
+      this.speaking = false;
+
+      if (onComplete) onComplete();
+      return false;
+    }
+  },
+
+  // 处理AI回复完成事件
+  handleAIResponseComplete(response) {
+    this.waitingForAI = false;
+
+    // 如果不再活跃，不做任何处理
+    if (!this.active) return;
+
+    // 如果启用了自动朗读，开始朗读回复
+    if (autoReadMessages.value && !pauseAutoReading.value) {
+      this.startSpeaking(response);
+    } else {
+      // 否则直接重新开始语音识别
+      setTimeout(() => {
+        if (this.active && !this.listening && !this.speaking) {
+          this.startListening();
+        }
+      }, 1000);
+    }
+  },
+
+  // 重置所有计时器
+  resetTimers() {
+    if (this.silenceTimer) {
+      clearTimeout(this.silenceTimer);
+      this.silenceTimer = null;
+    }
+
+    if (this.inactivityTimer) {
+      clearTimeout(this.inactivityTimer);
+      this.inactivityTimer = null;
+    }
+  }
+};
+
+/**
+ * 初始化语音合成器
+ */
+const initSpeechSynthesizer = async () => {
+  try {
+    speechSynthesizer.value = {
+      // 存储加载的语音上下文
+      audioContext: null,
+
+      // 初始化
+      async init() {
+        if (!this.audioContext) {
+          this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+          if (this.audioContext.state === 'suspended') {
+            await this.audioContext.resume();
+          }
+        }
+        return this.audioContext;
+      },
+
+      // 播放音频数据
+      async play(audioBuffer) {
+        const context = await this.init();
+        const source = context.createBufferSource();
+        source.buffer = audioBuffer;
+        source.connect(context.destination);
+        source.start(0);
+        return new Promise(resolve => {
+          source.onended = resolve;
+        });
+      },
+
+      // 解码音频数据
+      async decode(audioData) {
+        const context = await this.init();
+        return context.decodeAudioData(audioData);
+      }
+    };
+
+    // 初始化音频上下文
+    await speechSynthesizer.value.init();
+    console.log('语音合成器初始化成功');
+    return true;
+  } catch (error) {
+    console.error('初始化语音合成器失败:', error);
+    return false;
+  }
+};
+
+/**
+ * 进入语音对话模式
+ */
+const enterVoiceChatMode = async () => {
+  try {
+    // 初始化语音合成器
+    await initSpeechSynthesizer();
+
+    // 激活语音对话模式
+    voiceChatMode.value = true;
+
+    console.log('已进入语音对话模式');
+
+    // 显示欢迎消息
+    ElMessage.success({
+      message: '已进入语音对话模式，点击麦克风开始',
+      duration: 3000
+    });
+  } catch (error) {
+    console.error('进入语音对话模式失败:', error);
+    ElMessage.error('启动语音对话模式失败: ' + error.message);
+  }
+};
+
+/**
+ * 退出语音对话模式
+ */
+const exitVoiceChatMode = () => {
+  // 停止所有语音活动
+  stopAllSpeechActivities();
+
+  // 退出语音对话模式
+  voiceChatMode.value = false;
+  voiceConversationMode.value = false;
+  streamingSpeech.value = false;
+  pendingAudioChunks.value = [];
+
+  console.log('已退出语音对话模式');
+  ElMessage.success('已退出语音对话模式');
+};
+
+/**
+ * 处理下一轮准备的方法
+ */
+const handlePrepareTurn = (wasSilence) => {
+  console.log('准备开始下一轮对话', { wasSilence });
+
+  // 如果还在语音模式，延迟后自动开始下一轮
+  if (voiceChatMode.value && !isLoading.value) {
+    setTimeout(() => {
+      if (voiceChatMode.value && !isLoading.value && voiceChatRef.value) {
+        console.log('自动开始下一轮对话');
+        voiceChatRef.value.startListening();
+      }
+    }, 1500);
+  }
+};
+
+
+/**
+ * 停止所有语音活动
+ */
+const stopAllSpeechActivities = () => {
+  // 停止语音识别
+  if (isRecognizing.value) {
+    speechService.stopRecognize();
+    isRecognizing.value = false;
+  }
+
+  // 停止语音合成
+  speechService.stopPlayback();
+
+  // 清空音频队列
+  currentAudioQueue.value = [];
+  isAudioPlaying.value = false;
+
+  console.log('已停止所有语音活动');
+};
+
+/**
+ * 开始语音识别 (用于语音对话覆盖层)
+ */
+const startVoiceRecognition = async () => {
+  // 确保不在处理中
+  if (isRecognizing.value || isLoading.value) {
+    console.log('语音识别或AI处理进行中，无法启动新识别');
+    return;
+  }
+
+  try {
+    // 重置识别结果
+    recognitionResult.value = '';
+    inputMessage.value = '';
+
+    // 更新UI状态
+    if (voiceChatRef.value) {
+      voiceChatRef.value.listening = true;
+      voiceChatRef.value.thinking = false;
+      voiceChatRef.value.speaking = false;
+    }
+
+    // 启动语音识别
+    isRecognizing.value = true;
+
+    await speechService.startRecognize(
+        // 识别结果回调
+        (text, isLast) => {
+          recognitionResult.value = text;
+          // 更新最后说话时间
+          lastSpeechTimestamp.value = Date.now();
+
+          // 重置静音检测定时器
+          if (silenceTimer.value) {
+            clearTimeout(silenceTimer.value);
+          }
+
+          // 设置静音检测
+          silenceTimer.value = setTimeout(() => {
+            // 超过静音阈值时自动停止
+            if (isRecognizing.value && Date.now() - lastSpeechTimestamp.value > silenceThreshold) {
+              console.log('检测到静音，自动停止录音');
+              // 使用静音停止方式
+              stopVoiceRecognitionBySilence();
+            }
+          }, silenceThreshold);
+
+          if (isLast && text) {
+            // 处理完整的识别结果
+            handleVoiceCommand(text);
+          }
+        },
+        // 错误回调
+        (error) => {
+          console.error('语音识别错误:', error);
+          isRecognizing.value = false;
+
+          // 更新UI状态
+          if (voiceChatRef.value) {
+            voiceChatRef.value.listening = false;
+            voiceChatRef.value.showError('无法识别语音');
+          }
+        }
+    );
+
+    console.log('语音识别已启动');
+  } catch (error) {
+    console.error('启动语音识别失败:', error);
+    isRecognizing.value = false;
+
+    if (voiceChatRef.value) {
+      voiceChatRef.value.listening = false;
+    }
+
+    ElMessage.error('启动语音识别失败: ' + error.message);
+  }
+};
+
+const stopVoiceRecognitionBySilence = async () => {
+  if (!isRecognizing.value) return;
+
+  try {
+    // 清除静音检测定时器
+    if (silenceTimer.value) {
+      clearTimeout(silenceTimer.value);
+      silenceTimer.value = null;
+    }
+
+    // 更新UI状态
+    if (voiceChatRef.value) {
+      // 通知组件这是静音触发的停止
+      voiceChatRef.value.stopListeningByTimeout();
+    }
+
+    await speechService.stopRecognize();
+    isRecognizing.value = false;
+
+    // 如果识别到的文本很短或为空，则不处理
+    if (!recognitionResult.value || recognitionResult.value.length < 3) {
+      console.log('识别文本过短，不处理');
+      // 重新开始语音识别
+      setTimeout(() => {
+        if (voiceChatMode.value && !isLoading.value) {
+          startVoiceRecognition();
+        }
+      }, 1000);
+      return;
+    }
+
+    // 否则处理识别文本
+    handleVoiceCommand(recognitionResult.value);
+
+    console.log('静音触发语音识别停止');
+  } catch (error) {
+    console.error('静音停止语音识别失败:', error);
+    isRecognizing.value = false;
+  }
+};
+
+/**
+ * 停止语音识别 (用于语音对话覆盖层)
+ */
+const stopVoiceRecognition = async () => {
+  if (!isRecognizing.value) return;
+
+  try {
+    // 清除静音检测定时器
+    if (silenceTimer.value) {
+      clearTimeout(silenceTimer.value);
+      silenceTimer.value = null;
+    }
+
+    // 更新UI状态
+    if (voiceChatRef.value) {
+      voiceChatRef.value.stopListening();
+    }
+
+    await speechService.stopRecognize();
+    isRecognizing.value = false;
+
+    console.log('语音识别已停止');
+  } catch (error) {
+    console.error('停止语音识别失败:', error);
+    isRecognizing.value = false;
+  }
+};
+
+/**
+ * 处理语音命令 (用于语音对话覆盖层)
+ */
+const handleVoiceCommand = async (text) => {
+  if (!text || !text.trim()) {
+    // 如果没有识别到文本，重新开始聆听
+    if (voiceChatRef.value && voiceChatMode.value) {
+      setTimeout(() => {
+        if (voiceChatMode.value && !isLoading.value) {
+          voiceChatRef.value.startListening();
+        }
+      }, 1000);
+    }
+    return;
+  }
+
+  console.log('处理语音命令:', text);
+
+  // 检查是否是退出命令
+  if (['退出', '结束', '退出语音模式', '关闭语音模式'].includes(text.toLowerCase().trim())) {
+    exitVoiceChatMode();
+    return;
+  }
+
+  // 添加用户消息到历史
+  addMessageToHistory('user', text);
+
+  // 设置思考状态
+  if (voiceChatRef.value) {
+    voiceChatRef.value.thinking = true;
+  }
+
+  // 发送到AI处理并直接流式合成语音
+  await sendToAIWithStreamingSpeech(text);
+};
+
+/**
+ * 向AI发送消息并流式合成语音
+ */
+const sendToAIWithStreamingSpeech = async (message) => {
+  try {
+    // 设置处理中状态
+    isLoading.value = true;
+    streamingSpeech.value = true;
+
+    // 准备接收流式响应
+    let assistantMessage = {
+      role: 'assistant',
+      content: '',
+      timestamp: new Date().toISOString()
+    };
+
+    // 清空并重置所有语音相关状态
+    pendingAudioChunks.value = [];
+
+    // 确保停止任何正在播放的音频
+    speechService.stopPlayback();
+
+    // 更新UI状态
+    if (voiceChatRef.value) {
+      voiceChatRef.value.thinking = true;
+      voiceChatRef.value.listening = false;
+      voiceChatRef.value.speaking = false;
+    }
+
+    // 发送请求并处理流式响应
+    await aiAssistantService.sendStreamingRequest(
+        message,
+        // 接收文本块的回调
+        async (chunk) => {
+          // 累积响应文本
+          assistantMessage.content += chunk;
+
+          // 收集这个块用于显示
+          if (streamingElementRef.value) {
+            streamingElementRef.value.innerHTML = formatMessage(assistantMessage.content);
+          }
+
+          // 不在这里收集单个小文本块，等完整响应
+        },
+        // 完成时的回调
+        async (finalResponse) => {
+          console.log('AI响应完成，准备播放语音');
+
+          // 更新UI
+          if (voiceChatRef.value) {
+            voiceChatRef.value.thinking = false;
+            voiceChatRef.value.speaking = true;
+          }
+
+          // 更新消息历史
+          addMessageToHistory('assistant', assistantMessage.content);
+
+          // 播放完整响应的语音
+          await playCompleteResponse(assistantMessage.content);
+
+          // 重置状态
+          isLoading.value = false;
+          streamingSpeech.value = false;
+
+          // 完成对话轮次
+          if (voiceChatRef.value) {
+            // 通知语音组件完成对话轮次
+            voiceChatRef.value.completeTurn();
+          }
+        },
+        // 错误处理回调
+        (error) => {
+          console.error('AI处理错误:', error);
+          isLoading.value = false;
+          streamingSpeech.value = false;
+
+          // 显示错误
+          if (voiceChatRef.value) {
+            voiceChatRef.value.speaking = false;
+            voiceChatRef.value.showError('AI处理失败');
+          }
+        },
+        // 系统提示
+        settings.value.systemPrompt
+    );
+  } catch (error) {
+    console.error('流式处理失败:', error);
+    isLoading.value = false;
+    streamingSpeech.value = false;
+
+    if (voiceChatRef.value) {
+      voiceChatRef.value.speaking = false;
+      voiceChatRef.value.showError('处理失败: ' + error.message);
+    }
+  }
+};
+
+/**
+ * 处理语音对话完整响应的语音播放
+ */
+const playCompleteResponse = async (text) => {
+  try {
+    // 预处理文本以获得更好的朗读效果
+    const processedText = preprocessTextForTTS(text);
+
+    console.log('开始朗读完整AI响应');
+
+    // 使用与朗读功能相同的方式直接调用语音合成服务
+    await speechService.startSynthesize(
+        processedText,
+        // 开始回调
+        () => {
+          console.log('AI响应朗读开始');
+          if (voiceChatRef.value) {
+            voiceChatRef.value.speaking = true;
+          }
+        },
+        // 结束回调
+        () => {
+          console.log('AI响应朗读结束');
+          if (voiceChatRef.value) {
+            // 朗读结束后，需要手动触发对话完成
+            voiceChatRef.value.speaking = false;
+
+            // 短暂延迟后开始下一轮
+            setTimeout(() => {
+              if (voiceChatMode.value && voiceChatRef.value) {
+                voiceChatRef.value.startListening();
+              }
+            }, 1500);
+          }
+        },
+        // 错误回调
+        (error) => {
+          console.error('AI响应朗读错误:', error);
+          if (voiceChatRef.value) {
+            voiceChatRef.value.speaking = false;
+            voiceChatRef.value.showError('语音合成失败');
+          }
+        },
+        // 合成选项
+        {
+          voice: speechSettings.value.voice,
+          speed: speechSettings.value.speed,
+          volume: speechSettings.value.volume,
+          pitch: speechSettings.value.pitch
+        }
+    );
+  } catch (error) {
+    console.error('AI响应朗读失败:', error);
+    if (voiceChatRef.value) {
+      voiceChatRef.value.speaking = false;
+    }
+  }
+};
+
+/**
+ * 合成并播放文本块
+ */
+const synthesizeAndPlayChunk = async (text) => {
+  try {
+    // 处理文本预处理
+    const processedText = preprocessTextForTTS(text);
+
+    // 创建一个Promise来跟踪这个音频块的完成
+    const audioPromise = new Promise((resolve, reject) => {
+      // 使用讯飞语音合成
+      speechService.startSynthesize(
+          processedText,
+          // 开始回调
+          () => {
+            console.log('音频块开始播放, 长度:', text.length);
+          },
+          // 完成回调
+          () => {
+            console.log('音频块播放完成');
+            resolve();
+          },
+          // 错误回调
+          (error) => {
+            console.error('语音合成错误:', error);
+            // 即使出错也要解决Promise，以继续流程
+            resolve();
+          },
+          // 合成选项
+          {
+            voice: speechSettings.value.voice,
+            speed: speechSettings.value.speed,
+            volume: speechSettings.value.volume,
+            pitch: speechSettings.value.pitch
+          }
+      );
+    });
+
+    // 将这个Promise添加到队列中
+    currentAudioQueue.value.push(audioPromise);
+
+    // 如果当前没有播放，开始播放流程
+    if (!isAudioPlaying.value) {
+      await playNextInQueue();
+    }
+  } catch (error) {
+    console.error('合成和播放文本块失败:', error);
+  }
+};
+
+/**
+ * 播放队列中的下一个音频
+ */
+const playNextInQueue = async () => {
+  if (currentAudioQueue.value.length === 0) {
+    isAudioPlaying.value = false;
+    return;
+  }
+
+  isAudioPlaying.value = true;
+
+  try {
+    // 获取队列中的第一个Promise并等待其完成
+    const audioPromise = currentAudioQueue.value.shift();
+    await audioPromise;
+
+    // 继续播放下一个
+    await playNextInQueue();
+  } catch (error) {
+    console.error('播放音频队列出错:', error);
+    // 即使出错也继续下一个
+    setTimeout(() => playNextInQueue(), 100);
+  }
+};
+
+/**
+ * 等待所有音频播放完成
+ */
+const waitForAllAudioToFinish = async () => {
+  console.log(`等待所有音频播放完成，队列长度: ${currentAudioQueue.value.length}`);
+
+  if (currentAudioQueue.value.length === 0 && !isAudioPlaying.value) {
+    return;
+  }
+
+  // 克隆当前队列里的所有Promise
+  const promises = [...currentAudioQueue.value];
+
+  // 等待所有已添加到队列中的Promise完成
+  await Promise.all(promises);
+
+  // 等待最后一个正在播放的完成
+  if (isAudioPlaying.value) {
+    await new Promise(resolve => {
+      const checkInterval = setInterval(() => {
+        if (!isAudioPlaying.value) {
+          clearInterval(checkInterval);
+          resolve();
+        }
+      }, 100);
+    });
+  }
+
+  console.log('所有音频播放完成');
+};
+
+/**
+ * 添加消息到历史记录
+ */
+const addMessageToHistory = (role, content) => {
+  // 添加消息到历史
+  messages.value.push({
+    role,
+    content,
+    timestamp: new Date().toISOString()
+  });
+
+  // 如果是对话的第一条消息，创建新对话ID
+  if (messages.value.length === 1 || !currentConversationId.value) {
+    currentConversationId.value = 'conv_' + Date.now();
+  }
+
+  // 保存对话历史
+  saveCurrentConversation();
+};
 
 /**
  * 检查用户认证状态
@@ -941,6 +1845,240 @@ const checkUnclosedMarkdown = (text) => {
 };
 
 /**
+ * 语音输入相关函数
+ */
+
+// 播放音频反馈
+const playAudioFeedback = (type) => {
+  try {
+    const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    const oscillator = audioContext.createOscillator();
+    const gainNode = audioContext.createGain();
+
+    // 设置音效特性
+    if (type === 'start') {
+      // 启动音效 - 上升音调
+      oscillator.type = 'sine';
+      oscillator.frequency.setValueAtTime(440, audioContext.currentTime);
+      oscillator.frequency.linearRampToValueAtTime(880, audioContext.currentTime + 0.2);
+      gainNode.gain.setValueAtTime(0.1, audioContext.currentTime);
+      gainNode.gain.linearRampToValueAtTime(0, audioContext.currentTime + 0.3);
+    } else {
+      // 停止音效 - 下降音调
+      oscillator.type = 'sine';
+      oscillator.frequency.setValueAtTime(880, audioContext.currentTime);
+      oscillator.frequency.linearRampToValueAtTime(440, audioContext.currentTime + 0.2);
+      gainNode.gain.setValueAtTime(0.1, audioContext.currentTime);
+      gainNode.gain.linearRampToValueAtTime(0, audioContext.currentTime + 0.3);
+    }
+
+    // 连接节点并播放
+    oscillator.connect(gainNode);
+    gainNode.connect(audioContext.destination);
+    oscillator.start();
+
+    // 短暂播放后停止
+    setTimeout(() => {
+      oscillator.stop();
+      audioContext.close();
+    }, 300);
+  } catch (e) {
+    console.warn('无法播放音频反馈:', e);
+  }
+};
+
+// 语音命令处理 - 处理特殊的语音命令
+const processVoiceCommands = (text) => {
+  // 转换为小写并去除空格，用于命令匹配
+  const normalizedText = text.toLowerCase().trim();
+
+  // 定义一些特殊的语音命令
+  if (normalizedText === '清空对话' || normalizedText === '清除对话') {
+    ElMessageBox.confirm(
+        '确定要清空当前对话吗？此操作不可撤销。',
+        '语音命令确认',
+        {
+          confirmButtonText: '确定',
+          cancelButtonText: '取消',
+          type: 'warning'
+        }
+    ).then(() => {
+      clearChat();
+      ElMessage.success('对话已清空');
+      // 如果在连续对话模式，暂停一段时间后重新开始
+      if (voiceConversationMode.value) {
+        setTimeout(() => {
+          startVoiceConversation();
+        }, 1500);
+      }
+    }).catch(() => {
+      ElMessage.info('已取消清空操作');
+      // 如果在连续对话模式，继续语音识别
+      if (voiceConversationMode.value) {
+        startVoiceConversation();
+      }
+    });
+    return true;
+  }
+
+  if (normalizedText === '关闭语音模式' || normalizedText === '退出语音模式') {
+    voiceConversationMode.value = false;
+    handleVoiceConversationModeChange(false);
+    ElMessage.success('已关闭语音对话模式');
+    return true;
+  }
+
+  // 更多语音命令可以在这里添加
+
+  // 如果没有匹配的命令，返回false
+  return false;
+};
+
+// 语音合成增强函数
+
+// 预处理文本，提高朗读质量
+const preprocessTextForTTS = (text) => {
+  // 移除Markdown格式符号，以避免朗读它们
+  let processedText = text
+      .replace(/\*\*(.*?)\*\*/g, '$1') // 移除加粗标记
+      .replace(/\*(.*?)\*/g, '$1')     // 移除斜体标记
+      .replace(/\[(.*?)\]\((.*?)\)/g, '$1') // 移除链接，只读链接文本
+      .replace(/`(.*?)`/g, '$1')       // 移除行内代码标记
+      .replace(/```[\s\S]*?```/g, '代码块已省略') // 替换代码块
+      .replace(/#+\s+(.*?)(?:\n|$)/g, '$1。') // 将标题转换为普通文本，并在末尾添加句号
+      .replace(/\n+/g, '。') // 将多个换行符替换为句号，表示段落分隔
+      .replace(/[*\-+] (.*?)(?:\n|$)/g, '$1。') // 处理列表项
+      .replace(/\s{2,}/g, ' '); // 压缩多个空格
+
+  // 处理常见的缩写和特殊字符，使语音更自然
+  processedText = processedText
+      .replace(/(\d+)([A-Za-z]+)/g, '$1 $2') // 在数字和字母之间添加空格
+      .replace(/([A-Za-z]+)(\d+)/g, '$1 $2') // 在字母和数字之间添加空格
+      .replace(/(\.[^\.\s])/g, '. $1') // 在句点后添加空格，如果没有
+      .replace(/([^0-9])\.([^0-9\s\.])/g, '$1. $2'); // 确保句点后有空格
+
+  // 替换一些常见的英文缩写
+  const abbreviations = {
+    'e.g.': '例如',
+    'i.e.': '也就是',
+    'etc.': '等等',
+    'vs.': '对比',
+    'AI': 'A I',
+    'API': 'A P I',
+    'JSON': 'J S O N',
+    'HTML': 'H T M L',
+    'CSS': 'C S S',
+    'URL': 'U R L'
+  };
+
+  for (const [abbr, expanded] of Object.entries(abbreviations)) {
+    const regex = new RegExp('\\b' + abbr.replace(/\./g, '\\.') + '\\b', 'g');
+    processedText = processedText.replace(regex, expanded);
+  }
+
+  return processedText;
+};
+
+// 根据文本内容动态调整参数
+const dynamicAdjustTtsParams = (text) => {
+  // 默认使用配置的参数
+  const params = {
+    voice: speechSettings.value.voice,
+    speed: speechSettings.value.speed,
+    volume: speechSettings.value.volume,
+    pitch: speechSettings.value.pitch
+  };
+
+  // 如果文本包含问号，稍微提高音调表示疑问语气
+  if (text.includes('?') || text.includes('？')) {
+    params.pitch = Math.min(100, params.pitch + 10);
+  }
+
+  // 如果文本包含感叹号，稍微提高音量表示强调
+  if (text.includes('!') || text.includes('！')) {
+    params.volume = Math.min(100, params.volume + 10);
+  }
+
+  // 如果是很长的段落，稍微加快语速
+  if (text.length > 100) {
+    params.speed = Math.min(100, params.speed + 5);
+  }
+
+  return params;
+};
+
+// 临时禁用自动朗读（在某些情况下避免打扰用户）
+const temporarilyDisableAutoReading = (duration = 5000) => {
+  pauseAutoReading.value = true;
+  setTimeout(() => {
+    pauseAutoReading.value = false;
+  }, duration);
+};
+
+// 连续语音对话模式相关
+const handleVoiceConversationModeChange = (value) => {
+  if (value) {
+    // 启用连续语音对话模式
+    ElMessage.info('已启用语音对话模式，可以直接通过语音与AI助手对话');
+
+    // 启动新版语音对话模式
+    enterVoiceChatMode();
+  } else {
+    // 停止连续语音对话
+    if (voiceChatMode.value) {
+      exitVoiceChatMode();
+    } else {
+      voiceConversationManager.stop();
+      voiceConversationActive.value = false;
+    }
+    ElMessage.info('已关闭语音对话模式');
+  }
+};
+
+// 启动语音对话
+const startVoiceConversation = async () => {
+  // 如果正在加载（AI正在响应），则不启动语音识别
+  if (isLoading.value) return;
+
+  voiceConversationActive.value = true;
+
+  // 清除所有超时器
+  if (autoListeningTimeout.value) {
+    clearTimeout(autoListeningTimeout.value);
+    autoListeningTimeout.value = null;
+  }
+
+  // 启动语音识别
+  try {
+    await toggleVoiceInput();
+    ElMessage.success({
+      message: '请开始说话...',
+      duration: 1500
+    });
+  } catch (error) {
+    console.error('启动语音识别失败:', error);
+    voiceConversationActive.value = false;
+    ElMessage.error('启动语音识别失败，请检查麦克风权限和设置');
+  }
+};
+
+// 停止语音对话
+const stopVoiceConversation = () => {
+  voiceConversationActive.value = false;
+
+  // 清除所有超时器
+  if (autoListeningTimeout.value) {
+    clearTimeout(autoListeningTimeout.value);
+    autoListeningTimeout.value = null;
+  }
+
+  // 如果正在识别，停止语音识别
+  if (isRecognizing.value) {
+    toggleVoiceInput();
+  }
+};
+
+/**
  * 发送消息
  */
 const sendMessage = async () => {
@@ -1198,6 +2336,33 @@ const sendMessage = async () => {
                   }
                 }, 100);
               }
+
+              // 在消息发送完成后添加的代码 - 处理语音对话流程
+              // 如果启用了连续语音对话模式，在AI回复完成后自动开始下一轮语音输入
+              if (voiceConversationMode.value && voiceConversationActive.value) {
+                // 如果启用了语音对话模式，通知语音对话管理器
+                setTimeout(() => {
+                  // 获取最后一条消息
+                  const messageIndex = messages.value.length - 1;
+                  if (messageIndex >= 0 && messages.value[messageIndex].role === 'assistant') {
+                    voiceConversationManager.handleAIResponseComplete(messages.value[messageIndex].content);
+                  }
+                }, 500);
+              }
+
+              // 在消息处理完成后，如果启用了自动朗读，开始朗读最新的AI回复
+              if (autoReadMessages.value && !pauseAutoReading.value && !voiceConversationMode.value) {
+                // 获取最后一条消息的索引
+                const lastMessageIndex = messages.value.length - 1;
+
+                // 如果最后一条消息是AI回复，朗读它
+                if (lastMessageIndex >= 0 && messages.value[lastMessageIndex].role === 'assistant') {
+                  // 延迟一小段时间再开始朗读，确保UI更新完成
+                  setTimeout(() => {
+                    speakMessage(messages.value[lastMessageIndex].content, lastMessageIndex);
+                  }, 500);
+                }
+              }
             } else {
               // 继续等待
               setTimeout(waitForTypingComplete, 100);
@@ -1449,7 +2614,7 @@ const saveCurrentConversation = async () => {
     aiAssistantService.currentConversationId = currentConversationId.value;
     aiAssistantService.setMessages(messagesToSave);
 
-    // 保存对话
+// 保存对话
     const success = await aiAssistantService.saveConversation(currentConversationId.value);
 
     if (success) {
@@ -1772,6 +2937,12 @@ const loadSpeechSettings = async () => {
         speechSettings.value.volume = ttsPrefs.volume || 50;
         speechSettings.value.pitch = ttsPrefs.pitch || 50;
       }
+
+      // 加载自动朗读设置
+      const autoReadSettings = await store.getObject('speech_auto_read');
+      if (autoReadSettings) {
+        autoReadMessages.value = autoReadSettings.enabled || false;
+      }
     }
 
     console.log('语音设置加载完成');
@@ -1807,6 +2978,11 @@ const saveSpeechSettings = async () => {
       pitch: speechSettings.value.pitch
     });
 
+    // 保存自动朗读设置
+    await store.putObject('speech_auto_read', {
+      enabled: autoReadMessages.value
+    });
+
     showSpeechSettings.value = false;
     ElMessage.success('语音设置已保存');
   } catch (error) {
@@ -1814,54 +2990,6 @@ const saveSpeechSettings = async () => {
     ElMessage.error('保存语音设置失败: ' + error.message);
   }
 };
-
-// 防抖动函数
-const debouncedToggleVoiceInput = debounce(async () => {
-  if (isRecognizing.value) {
-    // 停止语音识别
-    isRecognizing.value = false;
-    try {
-      await speechService.stopRecognize();
-      console.log('语音识别已停止');
-    } catch (error) {
-      console.error('停止语音识别失败:', error);
-      ElMessage.error('停止语音识别失败: ' + error.message);
-    }
-  } else {
-    try {
-      // 开始语音识别
-      isRecognizing.value = true;
-
-      // 启动语音识别
-      await speechService.startRecognize(
-          // 结果回调
-          (text, isLast, result) => {
-            // 更新输入框
-            recognitionResult.value = text;
-            inputMessage.value = recognitionResult.value;
-
-            // 如果是最后一帧，结束识别
-            if (isLast) {
-              isRecognizing.value = false;
-            }
-          },
-          // 错误回调
-          (error) => {
-            console.error('语音识别错误:', error);
-            ElMessage.error('语音识别失败: ' + error.message);
-            isRecognizing.value = false;
-          }
-      );
-    } catch (error) {
-      console.error('启动语音识别失败:', error);
-      ElMessage.error('启动语音识别失败: ' + error.message);
-      isRecognizing.value = false;
-    }
-  }
-}, 300, { leading: true, trailing: false });
-
-// 添加一个新的状态变量用于禁用按钮
-const isVoiceButtonDisabled = ref(false);
 
 /**
  * 切换语音输入 - 使用锁机制防止重复触发
@@ -1878,6 +3006,18 @@ const toggleVoiceInput = async () => {
   isVoiceButtonDisabled.value = true;
 
   try {
+    // 在启动语音识别前清空之前的识别结果，提供更好的用户体验
+    if (!isRecognizing.value) {
+      recognitionResult.value = '';
+      inputMessage.value = '';
+
+      // 播放开始识别的音频反馈
+      playAudioFeedback('start');
+    } else {
+      // 播放停止识别的音频反馈
+      playAudioFeedback('stop');
+    }
+
     if (isRecognizing.value) {
       console.log('开始停止语音识别...');
       // 先更新UI状态
@@ -1925,10 +3065,63 @@ const toggleVoiceInput = async () => {
             recognitionResult.value = text;
             inputMessage.value = recognitionResult.value;
 
+            // 更新最后说话时间戳，用于静音检测
+            lastSpeechTimestamp.value = Date.now();
+
+            // 如果有静音检测定时器，重置它
+            if (silenceTimer.value) {
+              clearTimeout(silenceTimer.value);
+              silenceTimer.value = null;
+            }
+
+            // 设置新的静音检测定时器
+            if (isRecognizing.value && voiceConversationMode.value) {
+              silenceTimer.value = setTimeout(() => {
+                // 如果已经静音超过阈值，自动结束识别
+                if (Date.now() - lastSpeechTimestamp.value > silenceThreshold && isRecognizing.value) {
+                  console.log('检测到长时间静音，自动结束语音识别');
+                  toggleVoiceInput();
+                }
+              }, silenceThreshold);
+            }
+
+            // 如果使用了句点或问号等终止符，也可以考虑在短暂延迟后自动结束
+            const endPunctuations = ['.', '。', '?', '？', '!', '！'];
+            if (text && endPunctuations.some(p => text.trim().endsWith(p)) && voiceConversationMode.value) {
+              // 只在句子比较完整时才自动结束
+              if (text.length > 10) {
+                if (speechTimeout.value) {
+                  clearTimeout(speechTimeout.value);
+                }
+
+                speechTimeout.value = setTimeout(() => {
+                  if (isRecognizing.value) {
+                    console.log('检测到完整句子，自动结束语音识别');
+                    toggleVoiceInput();
+                  }
+                }, 1500); // 1.5秒后结束，给用户思考的时间
+              }
+            }
+
             // 如果是最后一帧，结束识别
             if (isLast) {
               isRecognizing.value = false;
               // 在回调中不释放按钮禁用状态，让主函数统一处理
+            }
+
+            // 检查是否是语音命令
+            const isCommand = processVoiceCommands(text);
+
+            // 如果是命令，自动停止语音识别
+            if (isCommand) {
+              // 清空输入框，防止命令被发送为消息
+              recognitionResult.value = '';
+              inputMessage.value = '';
+
+              // 停止语音识别
+              if (isRecognizing.value) {
+                toggleVoiceInput();
+              }
             }
           },
           // 错误回调
@@ -1950,6 +3143,22 @@ const toggleVoiceInput = async () => {
     setTimeout(() => {
       isVoiceButtonDisabled.value = false;
       console.log('操作完成，按钮已启用');
+
+      // 处理连续对话模式下的自动重启识别
+      // 如果停止了识别，且处于连续对话模式，且不是因为加载状态而停止的
+      if (!isRecognizing.value && voiceConversationMode.value && voiceConversationActive.value && !isLoading.value) {
+        // 语音输入结束后，如果有足够长的输入，自动发送
+        if (inputMessage.value.trim().length > 3) {
+          sendMessage();
+        } else {
+          // 如果输入太短，等待一段时间后重新开始语音识别
+          autoListeningTimeout.value = setTimeout(() => {
+            if (voiceConversationMode.value && voiceConversationActive.value && !isLoading.value) {
+              startVoiceConversation();
+            }
+          }, 1000); // 1秒后重新开始
+        }
+      }
     }, 500); // 延迟0.5秒，确保完全同步
   }
 };
@@ -1958,8 +3167,9 @@ const toggleVoiceInput = async () => {
  * 朗读消息
  * @param {string} text 要朗读的文本
  * @param {number} index 消息索引
+ * @param {Function} onComplete 完成回调
  */
-const speakMessage = async (text, index) => {
+const speakMessage = async (text, index, onComplete) => {
   try {
     // 如果当前正在朗读这条消息，点击停止
     if (isSpeaking.value && currentSpeakingIndex.value === index) {
@@ -1969,6 +3179,9 @@ const speakMessage = async (text, index) => {
       // 确保UI状态立即更新
       isSpeaking.value = false;
       currentSpeakingIndex.value = -1;
+
+      // 如果提供了回调，调用回调
+      if (onComplete) onComplete();
       return;
     }
 
@@ -1989,9 +3202,15 @@ const speakMessage = async (text, index) => {
     isSpeaking.value = true;
     currentSpeakingIndex.value = index;
 
+    // 预处理文本以获得更好的朗读效果
+    const processedText = preprocessTextForTTS(text);
+
+    // 获取动态调整的TTS参数
+    const ttsParams = dynamicAdjustTtsParams(processedText);
+
     // 启动语音合成
     await speechService.startSynthesize(
-        text,
+        processedText,
         // 开始回调
         () => {
           console.log('开始朗读');
@@ -2001,6 +3220,9 @@ const speakMessage = async (text, index) => {
           console.log('朗读结束');
           isSpeaking.value = false;
           currentSpeakingIndex.value = -1;
+
+          // 如果提供了回调，调用回调
+          if (onComplete) onComplete();
         },
         // 错误回调
         (error) => {
@@ -2008,20 +3230,21 @@ const speakMessage = async (text, index) => {
           ElMessage.error('语音合成失败: ' + error.message);
           isSpeaking.value = false;
           currentSpeakingIndex.value = -1;
+
+          // 如果提供了回调，调用回调
+          if (onComplete) onComplete();
         },
         // 合成选项
-        {
-          voice: speechSettings.value.voice,
-          speed: speechSettings.value.speed,
-          volume: speechSettings.value.volume,
-          pitch: speechSettings.value.pitch
-        }
+        ttsParams
     );
   } catch (error) {
     console.error('启动语音合成失败:', error);
     ElMessage.error('启动语音合成失败: ' + error.message);
     isSpeaking.value = false;
     currentSpeakingIndex.value = -1;
+
+    // 如果提供了回调，调用回调
+    if (onComplete) onComplete();
   }
 };
 
@@ -2054,6 +3277,9 @@ onMounted(async () => {
   // 加载语音设置
   await loadSpeechSettings();
 
+  // 初始化语音对话管理器
+  voiceConversationManager.init();
+
   // 从URL参数加载对话
   try {
     if (route && route.query && route.query.conversationId) {
@@ -2081,6 +3307,13 @@ onMounted(async () => {
         }
 
         const code = decodeURIComponent(codeAttr);
+
+        // 确保代码是字符串
+        if (typeof code !== 'string') {
+          throw new Error('代码数据格式不正确');
+        }
+
+        // 复制到剪贴板
         await navigator.clipboard.writeText(code);
 
         // 更改按钮文本作为视觉反馈
@@ -2130,6 +3363,34 @@ watch(
     { deep: true }
 );
 
+// 监听识别结果变化
+watch(
+    () => recognitionResult.value,
+    (newVal, oldVal) => {
+      if (newVal && newVal !== oldVal) {
+        // 只要有新的识别结果，更新最后说话时间戳
+        lastSpeechTimestamp.value = Date.now();
+
+        // 如果有静音检测定时器，重置它
+        if (silenceTimer.value) {
+          clearTimeout(silenceTimer.value);
+          silenceTimer.value = null;
+        }
+
+        // 设置新的静音检测定时器
+        if (isRecognizing.value && voiceConversationMode.value) {
+          silenceTimer.value = setTimeout(() => {
+            // 如果已经静音超过阈值，自动结束识别
+            if (Date.now() - lastSpeechTimestamp.value > silenceThreshold && isRecognizing.value) {
+              console.log('检测到长时间静音，自动结束语音识别');
+              toggleVoiceInput();
+            }
+          }, silenceThreshold);
+        }
+      }
+    }
+);
+
 // 在组件卸载时清理语音资源
 onBeforeUnmount(async () => {
   // 停止语音识别
@@ -2140,6 +3401,33 @@ onBeforeUnmount(async () => {
   // 停止语音合成
   if (isSpeaking.value) {
     speechService.stopPlayback();
+  }
+
+  // 停止语音对话
+  if (voiceConversationMode.value) {
+    if (voiceChatMode.value) {
+      exitVoiceChatMode();
+    } else {
+      voiceConversationManager.stop();
+    }
+    voiceConversationMode.value = false;
+    voiceConversationActive.value = false;
+  }
+
+  // 清除所有定时器
+  if (silenceTimer.value) {
+    clearTimeout(silenceTimer.value);
+    silenceTimer.value = null;
+  }
+
+  if (speechTimeout.value) {
+    clearTimeout(speechTimeout.value);
+    speechTimeout.value = null;
+  }
+
+  if (autoListeningTimeout.value) {
+    clearTimeout(autoListeningTimeout.value);
+    autoListeningTimeout.value = null;
   }
 });
 </script>
@@ -2308,6 +3596,30 @@ pre code.hljs {
 
 .message-actions .el-button.speaking {
   animation: pulse 2s infinite;
+}
+
+/* 朗读进度动画 */
+.reading-dots span {
+  opacity: 0;
+  animation: reading-dot 1.4s infinite;
+}
+
+.reading-dots span:nth-child(1) {
+  animation-delay: 0s;
+}
+
+.reading-dots span:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.reading-dots span:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+@keyframes reading-dot {
+  0% { opacity: 0; }
+  50% { opacity: 1; }
+  100% { opacity: 0; }
 }
 
 /* 添加代码块动画效果 */
@@ -2523,6 +3835,45 @@ pre code.hljs {
 .chat-actions {
   display: flex;
   gap: 10px;
+  align-items: center;
+}
+
+/* 语音对话状态指示器 */
+.voice-conversation-indicator {
+  display: flex;
+  align-items: center;
+  margin-left: 15px;
+  padding: 4px 10px;
+  background-color: rgba(0, 122, 255, 0.1);
+  border-radius: 20px;
+  font-size: 12px;
+  color: var(--primary-color);
+}
+
+.indicator-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background-color: #909399;
+  margin-right: 8px;
+}
+
+.indicator-dot.active {
+  background-color: #67c23a;
+  box-shadow: 0 0 0 rgba(103, 194, 58, 0.4);
+  animation: pulse-green 2s infinite;
+}
+
+@keyframes pulse-green {
+  0% {
+    box-shadow: 0 0 0 0 rgba(103, 194, 58, 0.4);
+  }
+  70% {
+    box-shadow: 0 0 0 10px rgba(103, 194, 58, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(103, 194, 58, 0);
+  }
 }
 
 /* 优化聊天消息区域间距 */
@@ -2655,7 +4006,7 @@ pre code.hljs {
 
 .user-message .message-body {
   background: linear-gradient(135deg, var(--primary-color) 0%, var(--primary-dark) 100%);
-  color: black;
+  color: white;
   border-radius: 16px 16px 0 16px;
   box-shadow: 0 2px 8px rgba(0, 122, 255, 0.2);
 }
@@ -2848,6 +4199,7 @@ pre code.hljs {
   animation: pulse 1.5s infinite;
   background-color: #f56c6c;
   color: white;
+  box-shadow: 0 0 10px rgba(245, 108, 108, 0.5);
 }
 
 /* 朗读中动画效果 */
@@ -2903,6 +4255,61 @@ pre code.hljs {
 .message-actions .el-button {
   padding: 2px 8px;
   font-size: 12px;
+}
+
+/* 语音波形动画 */
+.voice-wave-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin: 10px 0;
+  animation: fadeIn 0.3s ease-out;
+}
+
+.voice-wave {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 40px;
+}
+
+.voice-wave span {
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  margin: 0 2px;
+  background-color: var(--primary-color);
+  border-radius: 50%;
+  animation: wave 1.5s infinite ease-in-out;
+}
+
+.voice-wave span:nth-child(1) {
+  animation-delay: 0s;
+}
+
+.voice-wave span:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.voice-wave span:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+.voice-wave span:nth-child(4) {
+  animation-delay: 0.6s;
+}
+
+.voice-wave span:nth-child(5) {
+  animation-delay: 0.8s;
+}
+
+.recognition-text {
+  margin-top: 10px;
+  font-size: 14px;
+  color: var(--text-secondary);
+  min-height: 20px;
+  max-width: 80%;
+  text-align: center;
 }
 
 /* 响应式优化 */
