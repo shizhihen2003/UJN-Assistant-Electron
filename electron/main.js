@@ -272,7 +272,7 @@ function setupIPC() {
         }
     });
 
-// 统一的 IPASS 请求处理函数
+    // 统一的 IPASS 请求处理函数
     ipcMain.handle('ipass:request', async (event, args) => {
         try {
             const { method, url, data, cookies, headers = {} } = args;
@@ -307,6 +307,34 @@ function setupIPC() {
                 }
             } catch (e) {
                 console.log(`[主进程 ${requestId}] URL解析失败:`, e.message);
+            }
+
+            // 特殊处理token-login请求
+            if (url.includes('token-login')) {
+                console.log(`[主进程 ${requestId}] 检测到token-login请求: ${url}`);
+
+                try {
+                    // 提取token参数
+                    const tokenMatch = url.match(/token=([^&]+)/);
+                    if (tokenMatch) {
+                        console.log(`[主进程 ${requestId}] 提取到token: ${tokenMatch[1]}`);
+                    }
+
+                    // 修改请求选项以适应token-login
+                    options.redirect = 'manual'; // 保持手动重定向模式
+                    options.timeout = 10000; // 增加超时时间
+
+                    // 确保所有Cookie都被发送
+                    console.log(`[主进程 ${requestId}] Cookie数量: ${cookies?.length || 0}`);
+                    if (cookies && cookies.length > 0) {
+                        // 记录每个Cookie
+                        cookies.forEach((cookie, idx) => {
+                            console.log(`[主进程 ${requestId}] Cookie ${idx+1}: ${cookie.substring(0, 50)}...`);
+                        });
+                    }
+                } catch (error) {
+                    console.warn(`[主进程 ${requestId}] token-login参数处理错误:`, error);
+                }
             }
 
             // 准备请求选项
@@ -449,12 +477,20 @@ function setupIPC() {
 
             // 特殊处理302重定向状态码
             const isLoginRedirect = method === 'POST' && url.includes('login') && response.status === 302;
-            const isLoginSuccess = isLoginRedirect && !location?.includes('login');
+            const isLoginSuccess = isLoginRedirect && (!location?.includes('login') || location?.includes('ticket='));
+
+            // 特殊处理ticket参数和token参数
+            const hasTicket = location?.includes('ticket=');
+            const isTokenLogin = location?.includes('token-login') ||
+                url.includes('token-login');
 
             console.log(`[主进程 ${requestId}] 是否为登录重定向: ${isLoginRedirect}, 登录是否成功: ${isLoginSuccess}`);
+            console.log(`[主进程 ${requestId}] 包含ticket: ${hasTicket}, 是否token-login: ${isTokenLogin}`);
 
+            // 修改返回值判断逻辑
             return {
-                success: (response.status >= 200 && response.status < 300) || isLoginSuccess,
+                success: (response.status >= 200 && response.status < 300) ||
+                    (response.status === 302 && (isLoginSuccess || hasTicket || isTokenLogin || method === 'POST')),
                 status: response.status,
                 data: responseData,
                 cookies: responseCookies,
