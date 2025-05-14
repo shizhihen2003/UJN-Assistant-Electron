@@ -119,7 +119,7 @@ class IPassAccount extends Account {
     }
 
     /**
-     * 检查登录状态 - 合并版
+     * 检查登录状态
      * @returns {Promise<boolean>} 是否已登录
      */
     async absCheckLogin() {
@@ -137,16 +137,11 @@ class IPassAccount extends Account {
             console.log(`===== 检查智慧济大登录状态 =====`)
             console.log(`使用VPN模式: ${this._useVpn}`)
 
-            // 根据不同模式选择不同的登录检查方法
-            if (this._useVpn) {
-                // VPN模式下，使用直接访问主页的方式检查
-                const isLoggedIn = await this.tryAccessHomePage();
-                console.log(`VPN登录状态检查结果: ${isLoggedIn ? '已登录' : '未登录'}`);
-                return isLoggedIn;
-            } else {
-                // 普通模式下，使用原有方法检查
-                return await this.checkNormalLogin();
-            }
+            // 直接尝试访问主页确认登录状态
+            const isLoggedIn = await this.tryAccessHomePage();
+            console.log(`登录状态检查结果: ${isLoggedIn ? '已登录' : '未登录'}`);
+
+            return isLoggedIn;
         } catch (error) {
             console.error('检查登录状态失败:', error)
             if (error.stack) {
@@ -159,92 +154,515 @@ class IPassAccount extends Account {
     }
 
     /**
-     * 检查普通模式的登录状态
-     * @returns {Promise<boolean>} 是否已登录
+     * 登录实现方法 - 完整修复版
+     * @param {string} account 账号
+     * @param {string} password 密码
+     * @returns {Promise<boolean>} 登录是否成功
      */
-    async checkNormalLogin() {
+    async absLogin(account, password) {
         try {
-            console.log(`检查普通模式登录状态...`)
+            console.log(`==== 智慧济大登录过程开始 ====`);
+            console.log(`账号: ${account}`);
+            console.log(`密码长度: ${password.length}`);
+            console.log(`使用VPN: ${this._useVpn}`);
 
-            // 使用正确的URL检查登录状态
-            const checkUrl = `http://one.ujn.edu.cn/up/`;
-            console.log(`检查URL: ${checkUrl}`)
-
-            // 获取Cookie
-            const cookies = await this.cookieJar.getCookies();
-
-            console.log(`使用Cookie列表 (${cookies.length}个):`)
-            cookies.forEach((cookie, index) => {
-                console.log(`Cookie ${index + 1}: ${cookie}`)
-            })
-
-            // 手动构建Cookie字符串
-            const cookieString = cookies.join('; ');
-            console.log(`构建的Cookie字符串: ${cookieString}`);
-
-            // 发起请求
-            console.log(`发送请求...`)
-            const response = await ipc.ipassGet(checkUrl, {
-                cookies: cookies, // 添加cookies数组
-                headers: {
-                    'Cookie': cookieString,
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-                },
-                maxRedirects: 0,
-                validateStatus: status => (status >= 200 && status < 300) || status === 302
-            })
-
-            console.log(`响应状态码: ${response.status}`)
-
-            // 记录响应头
-            console.log(`响应头:`)
-            for (const [key, value] of Object.entries(response.headers || {})) {
-                console.log(`${key}: ${value}`)
-            }
-
-            // 记录响应Cookie
-            if (response.cookies && response.cookies.length > 0) {
-                console.log(`响应包含 ${response.cookies.length} 个Cookie:`)
-                response.cookies.forEach((cookie, index) => {
-                    console.log(`响应Cookie ${index + 1}: ${cookie}`)
-                })
+            // 清空相应的Cookie
+            if (this._useVpn) {
+                console.log('清空VPN Cookie');
+                this.vpnCookieJar.clearCookies();
             } else {
-                console.log(`响应不包含Cookie`)
+                console.log('清空普通Cookie');
+                this.cookieJar.clearCookies();
             }
 
-            // 判断登录状态
-            if (response.data && response.data.includes('url=http://one.ujn.edu.cn/up/view?m=up#act=portal/viewhome')) {
-                console.log("已检测到有效的登录会话，为已登录状态")
-                return true;
+            // 准备基础URL
+            let loginPageUrl;
+            if (this._useVpn) {
+                // VPN模式下，需要加密URL并添加正确的service参数
+                const baseUrl = "http://sso.ujn.edu.cn/tpass/login";
+                // 添加service参数，这是关键
+                const serviceParam = "?service=https%3A%2F%2Fwebvpn.ujn.edu.cn%2Flogin%3Fcas_login%3Dtrue";
+                const fullUrl = baseUrl + serviceParam;
+                loginPageUrl = VpnEncodeUtils.encryptUrl(fullUrl);
+                console.log(`VPN模式登录URL: ${loginPageUrl}`);
+            } else {
+                // 非VPN模式，使用普通URL
+                loginPageUrl = `${this.scheme}://${this.host}/tpass/login`;
+                console.log(`普通模式登录URL: ${loginPageUrl}`);
             }
 
-            // 检查响应内容是否包含登录表单
-            if (response.data && response.data.includes('id="loginForm"')) {
-                console.log("检测到未登录状态，发现登录表单")
+            // 步骤1: 获取登录页面
+            console.log(`\n[步骤1] 请求登录页面: ${loginPageUrl}`);
+            const loginPageResult = await ipc.ipassGet(loginPageUrl);
+
+            if (!loginPageResult.success) {
+                console.error("获取登录页面失败:", loginPageResult.error || '未知错误', loginPageResult);
                 return false;
             }
 
-            // 如果是302状态，检查重定向目标
-            if (response.status === 302) {
-                const location = response.location || '';
-                const isLoginRedirect = location.includes('login');
-                console.log(`收到重定向，目标: ${location}`)
-                console.log(`是否为登录页面重定向: ${isLoginRedirect}`)
+            console.log(`登录页面请求成功，状态码: ${loginPageResult.status}`);
 
-                return !isLoginRedirect;
+            // 保存初始Cookie并详细记录
+            if (loginPageResult.cookies && loginPageResult.cookies.length > 0) {
+                console.log(`接收到初始Cookie: ${loginPageResult.cookies.length}个`);
+                console.log("Cookie详情:", loginPageResult.cookies);
+
+                if (this._useVpn) {
+                    await this.vpnCookieJar.saveCookies(loginPageResult.cookies);
+                    console.log("已保存VPN Cookie:", await this.vpnCookieJar.getCookies());
+                } else {
+                    await this.cookieJar.saveCookies(loginPageResult.cookies);
+                    console.log("已保存普通Cookie:", await this.cookieJar.getCookies());
+                }
+            } else {
+                console.warn("登录页面未返回Cookie");
             }
 
-            // 默认情况处理
-            console.log("无法确定登录状态，默认为未登录")
+            const loginPageHtml = loginPageResult.data;
+
+            // 步骤2: 提取lt值
+            console.log(`\n[步骤2] 从登录页面提取lt值`);
+            const ltPattern = /name="lt" value="(LT-\d+-[a-zA-Z\d]+-tpass)"/;
+            const ltMatch = loginPageHtml.match(ltPattern);
+
+            if (!ltMatch) {
+                console.error("无法获取lt值，登录页面HTML片段:", loginPageHtml.substring(0, 200));
+                return false;
+            }
+
+            const lt = ltMatch[1];
+            console.log(`成功获取lt值: ${lt}`);
+
+            // 步骤3: 加密账号密码
+            console.log(`\n[步骤3] 加密账号密码`);
+            const accountLength = account.length.toString();
+            const passwordLength = password.length.toString();
+            const secret = await VpnEncodeUtils.encode(account, password, lt);
+            console.log("账号长度:", accountLength);
+            console.log("密码长度:", passwordLength);
+            console.log("加密数据已生成");
+
+            // 获取当前的Cookie
+            const currentCookies = this._useVpn ?
+                await this.vpnCookieJar.getCookies() :
+                await this.cookieJar.getCookies();
+
+            console.log("当前Cookie:", currentCookies);
+
+            // 创建登录数据
+            const loginData = {
+                rsa: secret,
+                ul: accountLength,
+                pl: passwordLength,
+                lt: lt,
+                execution: 'e1s1',
+                _eventId: 'submit'
+            };
+            console.log("登录表单数据:", loginData);
+
+            // 步骤4: 发起登录请求
+            console.log(`\n[步骤4] 发起登录请求 URL: ${loginPageUrl}`);
+            const loginHeaders = {
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'Referer': loginPageUrl,
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            };
+            console.log("登录请求头:", loginHeaders);
+
+            const loginResult = await ipc.ipassPost(loginPageUrl, loginData, {
+                headers: loginHeaders,
+                cookies: currentCookies
+            });
+
+            // 步骤5: 分析登录结果
+            console.log(`\n[步骤5] 分析登录结果`);
+            console.log(`登录状态码: ${loginResult.status || 'unknown'}`);
+
+            // 保存登录返回的Cookie
+            if (loginResult.cookies && loginResult.cookies.length > 0) {
+                console.log(`登录返回Cookie: ${loginResult.cookies.length}个`);
+                console.log("Cookie详情:", loginResult.cookies);
+
+                if (this._useVpn) {
+                    await this.vpnCookieJar.saveCookies(loginResult.cookies);
+                    console.log("保存后的VPN Cookie:", await this.vpnCookieJar.getCookies());
+                } else {
+                    await this.cookieJar.saveCookies(loginResult.cookies);
+                    console.log("保存后的普通Cookie:", await this.cookieJar.getCookies());
+                }
+            } else {
+                console.warn("登录请求未返回Cookie");
+            }
+
+            // 处理重定向，关键修复点
+            if (loginResult.status === 302) {
+                // 获取重定向URL
+                const locationHeader = loginResult.location || '';
+                console.log(`接收到重定向URL: ${locationHeader}`);
+
+                // 修改判断条件：如果URL包含ticket参数，则视为登录成功
+                const hasTicket = locationHeader.includes('ticket=');
+
+                if (hasTicket) {
+                    console.log(`登录成功，重定向URL包含ticket参数`);
+
+                    // 保存票据以备后用
+                    const ticketMatch = locationHeader.match(/ticket=([^&]+)/);
+                    if (ticketMatch) {
+                        const ticket = ticketMatch[1];
+                        console.log(`提取到ticket: ${ticket}`);
+                        this._lastTicket = ticket;
+                    }
+
+                    // VPN登录成功后的重定向链处理
+                    if (this._useVpn) {
+                        try {
+                            console.log(`\n[步骤6] 处理VPN重定向链...`);
+
+                            // 1. 第一次重定向 - 使用带ticket参数的URL
+                            console.log(`第1次重定向请求: ${locationHeader}`);
+                            const redirect1Result = await ipc.ipassGet(locationHeader, {
+                                cookies: await this.vpnCookieJar.getCookies(),
+                                headers: {
+                                    'Referer': loginPageUrl,
+                                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                                }
+                            });
+
+                            // 保存Cookie
+                            if (redirect1Result.cookies && redirect1Result.cookies.length > 0) {
+                                await this.vpnCookieJar.saveCookies(redirect1Result.cookies);
+                            }
+
+                            // 检查是否需要继续重定向
+                            if (redirect1Result.status === 302 && redirect1Result.location) {
+                                // 2. 第二次重定向 - 通常是到wengine-vpn-token-login
+                                const redirect2Url = redirect1Result.location.startsWith('http') ?
+                                    redirect1Result.location :
+                                    `https://webvpn.ujn.edu.cn${redirect1Result.location}`;
+
+                                console.log(`第2次重定向请求: ${redirect2Url}`);
+                                const redirect2Result = await ipc.ipassGet(redirect2Url, {
+                                    cookies: await this.vpnCookieJar.getCookies(),
+                                    headers: {
+                                        'Referer': locationHeader,
+                                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                                    }
+                                });
+
+                                // 保存Cookie
+                                if (redirect2Result.cookies && redirect2Result.cookies.length > 0) {
+                                    await this.vpnCookieJar.saveCookies(redirect2Result.cookies);
+                                }
+
+                                // 检查是否需要继续重定向
+                                if (redirect2Result.status === 302 && redirect2Result.location) {
+                                    // 3. 第三次重定向 - 通常是到token-login
+                                    const redirect3Url = redirect2Result.location.startsWith('http') ?
+                                        redirect2Result.location :
+                                        `https://webvpn.ujn.edu.cn${redirect2Result.location}`;
+
+                                    console.log(`第3次重定向请求: ${redirect3Url}`);
+
+                                    // 关键：如果是token-login，单独处理
+                                    if (redirect3Url.includes('token-login')) {
+                                        // 提取token
+                                        const tokenMatch = redirect3Url.match(/token=([^&]+)/);
+                                        if (tokenMatch) {
+                                            const token = tokenMatch[1];
+                                            console.log(`提取到token: ${token}`);
+
+                                            // 尝试简化的token URL
+                                            const simpleTokenUrl = `https://webvpn.ujn.edu.cn/token-login?token=${token}`;
+                                            console.log(`使用简化token URL: ${simpleTokenUrl}`);
+
+                                            try {
+                                                const tokenResult = await ipc.ipassGet(simpleTokenUrl, {
+                                                    cookies: await this.vpnCookieJar.getCookies(),
+                                                    headers: {
+                                                        'Referer': redirect2Url,
+                                                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                                                    }
+                                                });
+
+                                                // 保存Cookie
+                                                if (tokenResult.cookies && tokenResult.cookies.length > 0) {
+                                                    await this.vpnCookieJar.saveCookies(tokenResult.cookies);
+                                                }
+
+                                                // 4. 如果token请求重定向到首页
+                                                if (tokenResult.status === 302 && tokenResult.location) {
+                                                    const redirect4Url = tokenResult.location.startsWith('http') ?
+                                                        tokenResult.location :
+                                                        `https://webvpn.ujn.edu.cn${tokenResult.location}`;
+
+                                                    console.log(`第4次重定向请求: ${redirect4Url}`);
+
+                                                    const redirect4Result = await ipc.ipassGet(redirect4Url, {
+                                                        cookies: await this.vpnCookieJar.getCookies(),
+                                                        headers: {
+                                                            'Referer': simpleTokenUrl,
+                                                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                                                        }
+                                                    });
+
+                                                    // 保存Cookie
+                                                    if (redirect4Result.cookies && redirect4Result.cookies.length > 0) {
+                                                        await this.vpnCookieJar.saveCookies(redirect4Result.cookies);
+                                                    }
+
+                                                    // 跟随后续所有重定向到主页
+                                                    if (redirect4Result.status === 302 && redirect4Result.location) {
+                                                        await this.followFinalRedirects(redirect4Result.location, simpleTokenUrl);
+                                                    }
+                                                }
+                                            } catch (tokenError) {
+                                                console.warn(`Token请求失败: ${tokenError.message}`);
+                                                // 尝试直接访问首页
+                                                await this.tryAccessHomePage();
+                                            }
+                                        }
+                                    } else {
+                                        // 非token-login的第三次重定向，正常处理
+                                        const redirect3Result = await ipc.ipassGet(redirect3Url, {
+                                            cookies: await this.vpnCookieJar.getCookies(),
+                                            headers: {
+                                                'Referer': redirect2Url,
+                                                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                                            }
+                                        });
+
+                                        // 保存Cookie
+                                        if (redirect3Result.cookies && redirect3Result.cookies.length > 0) {
+                                            await this.vpnCookieJar.saveCookies(redirect3Result.cookies);
+                                        }
+
+                                        // 跟随后续所有重定向到主页
+                                        if (redirect3Result.status === 302 && redirect3Result.location) {
+                                            await this.followFinalRedirects(redirect3Result.location, redirect2Url);
+                                        }
+                                    }
+                                }
+                            }
+                        } catch (redirectError) {
+                            console.warn(`处理VPN重定向链失败: ${redirectError.message}`);
+                            console.warn(`但不影响登录结果，尝试直接访问主页`);
+
+                            // 即使重定向链处理失败，也尝试访问主页确认登录状态
+                            await this.tryAccessHomePage();
+                        }
+                    } else {
+                        // 非VPN模式下的重定向处理
+                        try {
+                            console.log(`\n[步骤6] 处理非VPN重定向...`);
+
+                            // 跟随重定向
+                            await ipc.ipassGet(locationHeader, {
+                                cookies: await this.cookieJar.getCookies(),
+                                headers: {
+                                    'Referer': loginPageUrl,
+                                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                                }
+                            });
+                        } catch (redirectError) {
+                            console.warn(`处理重定向失败: ${redirectError.message}`);
+                        }
+                    }
+
+                    // 无论重定向链处理是否成功，都尝试直接访问主页确认
+                    try {
+                        console.log(`\n[步骤7] 最终确认登录状态...`);
+                        const canAccessHomePage = await this.tryAccessHomePage();
+
+                        if (canAccessHomePage) {
+                            console.log(`==== 访问主页成功，确认登录成功 ====`);
+                        } else {
+                            console.log(`警告：无法访问主页，但仍然假定登录成功`);
+                            // 因为我们已经收到了带ticket的重定向，我们认为登录成功，即使不能访问主页
+                        }
+                    } catch (homePageError) {
+                        console.warn(`访问主页确认失败: ${homePageError.message}`);
+                        console.warn(`但不影响登录结果，假定登录成功`);
+                    }
+
+                    console.log("==== 智慧济大登录成功 ====");
+                    return true;
+                } else if (locationHeader.includes('login')) {
+                    console.log("登录失败，重定向回登录页面");
+                    return false;
+                } else {
+                    console.log("未检测到带ticket的重定向，但仍可能成功");
+                    console.log("尝试访问主页进行验证...");
+
+                    const canAccessHome = await this.tryAccessHomePage();
+                    if (canAccessHome) {
+                        console.log("能够访问主页，登录成功");
+                        return true;
+                    } else {
+                        console.log("无法访问主页，登录失败");
+                        return false;
+                    }
+                }
+            } else if (!loginResult.success) {
+                // 其他失败情况
+                console.error("登录请求失败:", loginResult.error || '未知错误');
+                console.error("完整错误信息:", loginResult);
+                return false;
+            }
+
+            // 处理非重定向响应
+            if (loginResult.status === 200 && loginResult.data) {
+                // 检查是否有登录表单或密码错误提示
+                const hasLoginForm = loginResult.data.includes('id="loginForm"') ||
+                    loginResult.data.includes('name="loginForm"');
+                const hasPasswordError = loginResult.data.includes('密码错误') ||
+                    loginResult.data.includes('用户名不存在');
+
+                if (hasPasswordError) {
+                    console.log("用户名或密码错误");
+                    return false;
+                } else if (!hasLoginForm) {
+                    console.log("登录成功，直接返回主页");
+                    return true;
+                } else {
+                    console.log("登录失败，仍在登录页面");
+                    return false;
+                }
+            }
+
+            // 其他所有情况都视为登录失败
+            console.log("登录失败，状态码:", loginResult.status);
             return false;
         } catch (error) {
-            console.error('检查普通登录状态失败:', error)
+            console.error('登录过程发生异常:', error);
+            if (error.stack) {
+                console.error('错误堆栈:', error.stack);
+            }
+
+            // 如果普通模式登录失败，尝试VPN模式
+            if (!this._useVpn) {
+                console.log("普通模式登录失败，尝试使用VPN模式");
+                this._useVpn = true;
+                try {
+                    return await this.absLogin(account, password);
+                } catch (vpnError) {
+                    console.error("VPN模式也失败", vpnError);
+                    this._useVpn = false; // 恢复原设置
+                    return false;
+                }
+            }
+
             return false;
         }
     }
 
     /**
-     * 尝试访问主页以确认登录状态 (主要用于VPN模式)
+     * 跟随最终重定向链到主页
+     * @param {string} initialLocation 初始重定向URL
+     * @param {string} referer 来源URL
+     */
+    async followFinalRedirects(initialLocation, referer) {
+        try {
+            console.log(`跟随最终重定向链...`);
+
+            // 确保URL是完整的
+            let currentUrl = initialLocation;
+            if (!currentUrl.startsWith('http')) {
+                currentUrl = `https://webvpn.ujn.edu.cn${currentUrl.startsWith('/') ? '' : '/'}${currentUrl}`;
+            }
+
+            let currentReferer = referer;
+            let redirectCount = 0;
+            const maxRedirects = 5; // 最大重定向次数
+
+            while (redirectCount < maxRedirects) {
+                console.log(`重定向 #${redirectCount + 1}: ${currentUrl}`);
+
+                try {
+                    const result = await ipc.ipassGet(currentUrl, {
+                        cookies: this._useVpn ?
+                            await this.vpnCookieJar.getCookies() :
+                            await this.cookieJar.getCookies(),
+                        headers: {
+                            'Referer': currentReferer,
+                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                        }
+                    });
+
+                    // 保存Cookie，即使请求失败也保存收到的任何Cookie
+                    if (result.cookies && result.cookies.length > 0) {
+                        if (this._useVpn) {
+                            await this.vpnCookieJar.saveCookies(result.cookies);
+                        } else {
+                            await this.cookieJar.saveCookies(result.cookies);
+                        }
+                    }
+
+                    // 如果是最终页面，停止重定向
+                    if (result.status !== 302 || !result.location) {
+                        console.log(`重定向链结束，状态码: ${result.status}`);
+                        break;
+                    }
+
+                    // 更新URL和referer
+                    currentReferer = currentUrl;
+                    currentUrl = result.location.startsWith('http') ?
+                        result.location :
+                        `https://webvpn.ujn.edu.cn${result.location.startsWith('/') ? '' : '/'}${result.location}`;
+                } catch (error) {
+                    // 在发生错误时打印信息但继续执行
+                    console.warn(`重定向 #${redirectCount + 1} 失败: ${error.message}`);
+                    console.warn(`尝试跳过这个重定向继续执行...`);
+
+                    // 对于带ticket的URL特殊处理
+                    if (currentUrl.includes('ticket=')) {
+                        try {
+                            console.log(`检测到ticket参数，尝试直接访问主页...`);
+                            // 直接跳到主页尝试
+                            const homeResult = await this.tryAccessHomePage();
+                            if (homeResult) {
+                                console.log(`直接访问主页成功，重定向链处理完成`);
+                                return; // 成功访问主页，可以结束重定向链处理
+                            }
+                        } catch (e) {
+                            console.warn(`直接访问主页失败: ${e.message}`);
+                        }
+                    }
+
+                    // 如果重定向过程中出错，可能已经获得了足够的cookie，可以尝试继续
+                    if (redirectCount >= 2) { // 至少已经完成了2次重定向
+                        console.log(`已完成 ${redirectCount} 次重定向，可能已获得足够的cookie`);
+                        break;
+                    }
+
+                    // 否则继续下一次重定向
+                    redirectCount++;
+                    continue;
+                }
+
+                redirectCount++;
+            }
+
+            if (redirectCount >= maxRedirects) {
+                console.log(`达到最大重定向次数(${maxRedirects})，停止跟踪`);
+                // 尝试直接访问主页确认登录状态
+                await this.tryAccessHomePage();
+            }
+
+            console.log(`重定向链处理完成`);
+        } catch (error) {
+            console.warn(`跟随重定向链失败: ${error.message}`);
+            // 即使整个过程失败，也尝试直接访问主页
+            try {
+                await this.tryAccessHomePage();
+            } catch (e) {
+                console.warn(`最后尝试访问主页也失败: ${e.message}`);
+            }
+        }
+    }
+
+    /**
+     * 尝试访问主页以确认登录状态
      * @returns {Promise<boolean>} 是否能够访问主页
      */
     async tryAccessHomePage() {
@@ -380,574 +798,6 @@ class IPassAccount extends Account {
             return false;
         } finally {
             console.log(`===== 主页访问确认结束 =====`);
-        }
-    }
-
-    /**
-     * 登录实现方法 - 合并版
-     * @param {string} account 账号
-     * @param {string} password 密码
-     * @returns {Promise<boolean>} 登录是否成功
-     */
-    async absLogin(account, password) {
-        try {
-            console.log(`==== 智慧济大登录过程开始 ====`);
-            console.log(`账号: ${account}`);
-            console.log(`密码长度: ${password.length}`);
-            console.log(`使用VPN: ${this._useVpn}`);
-
-            // 清空相应的Cookie
-            if (this._useVpn) {
-                console.log('清空VPN Cookie');
-                this.vpnCookieJar.clearCookies();
-            } else {
-                console.log('清空普通Cookie');
-                this.cookieJar.clearCookies();
-            }
-
-            // 准备基础URL - VPN和普通模式使用不同的URL构建方式
-            let loginPageUrl;
-            if (this._useVpn) {
-                // VPN模式下，需要加密URL并添加service参数
-                const baseUrl = "http://sso.ujn.edu.cn/tpass/login";
-                // 添加service参数，这是关键
-                const serviceParam = "?service=https%3A%2F%2Fwebvpn.ujn.edu.cn%2Flogin%3Fcas_login%3Dtrue";
-                const fullUrl = baseUrl + serviceParam;
-                loginPageUrl = VpnEncodeUtils.encryptUrl(fullUrl);
-                console.log(`VPN模式登录URL: ${loginPageUrl}`);
-            } else {
-                // 非VPN模式，使用普通URL
-                loginPageUrl = `${this.scheme}://${this.host}/tpass/login`;
-                console.log(`普通模式登录URL: ${loginPageUrl}`);
-            }
-
-            // 步骤1: 获取登录页面
-            console.log(`\n[步骤1] 请求登录页面: ${loginPageUrl}`);
-            const loginPageResult = await ipc.ipassGet(loginPageUrl);
-
-            if (!loginPageResult.success) {
-                console.error("获取登录页面失败:", loginPageResult.error || '未知错误', loginPageResult);
-                return false;
-            }
-
-            console.log(`登录页面请求成功，状态码: ${loginPageResult.status}`);
-
-            // 保存初始Cookie并详细记录
-            if (loginPageResult.cookies && loginPageResult.cookies.length > 0) {
-                console.log(`接收到初始Cookie: ${loginPageResult.cookies.length}个`);
-                console.log("Cookie详情:", loginPageResult.cookies);
-
-                if (this._useVpn) {
-                    await this.vpnCookieJar.saveCookies(loginPageResult.cookies);
-                    console.log("已保存VPN Cookie:", await this.vpnCookieJar.getCookies());
-                } else {
-                    await this.cookieJar.saveCookies(loginPageResult.cookies);
-                    console.log("已保存普通Cookie:", await this.cookieJar.getCookies());
-                }
-            } else {
-                console.warn("登录页面未返回Cookie");
-            }
-
-            const loginPageHtml = loginPageResult.data;
-
-            // 步骤2: 提取lt值
-            console.log(`\n[步骤2] 从登录页面提取lt值`);
-            const ltPattern = /name="lt" value="(LT-\d+-[a-zA-Z\d]+-tpass)"/;
-            const ltMatch = loginPageHtml.match(ltPattern);
-
-            if (!ltMatch) {
-                console.error("无法获取lt值，登录页面HTML片段:", loginPageHtml.substring(0, 200));
-                return false;
-            }
-
-            const lt = ltMatch[1];
-            console.log(`成功获取lt值: ${lt}`);
-
-            // 步骤3: 加密账号密码
-            console.log(`\n[步骤3] 加密账号密码`);
-            const accountLength = account.length.toString();
-            const passwordLength = password.length.toString();
-            const secret = await VpnEncodeUtils.encode(account, password, lt);
-            console.log("账号长度:", accountLength);
-            console.log("密码长度:", passwordLength);
-            console.log("加密数据已生成");
-
-            // 获取当前的Cookie
-            const currentCookies = this._useVpn ?
-                await this.vpnCookieJar.getCookies() :
-                await this.cookieJar.getCookies();
-
-            console.log("当前Cookie:", currentCookies);
-
-            // 创建登录数据
-            const loginData = {
-                rsa: secret,
-                ul: accountLength,
-                pl: passwordLength,
-                lt: lt,
-                execution: 'e1s1',
-                _eventId: 'submit'
-            };
-            console.log("登录表单数据:", loginData);
-
-            // 步骤4: 发起登录请求
-            console.log(`\n[步骤4] 发起登录请求 URL: ${loginPageUrl}`);
-            const loginHeaders = {
-                'Content-Type': 'application/x-www-form-urlencoded',
-                'Referer': loginPageUrl,
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-            };
-            console.log("登录请求头:", loginHeaders);
-
-            const loginResult = await ipc.ipassPost(loginPageUrl, loginData, {
-                headers: loginHeaders,
-                cookies: currentCookies
-            });
-
-            // 步骤5: 分析登录结果
-            console.log(`\n[步骤5] 分析登录结果`);
-            console.log(`登录状态码: ${loginResult.status || 'unknown'}`);
-
-            // 检查请求是否成功
-            if (!loginResult.success) {
-                console.error("登录请求失败:", loginResult.error || '未知错误');
-                console.error("完整错误信息:", loginResult);
-                return false;
-            }
-
-            // 保存登录返回的Cookie
-            if (loginResult.cookies && loginResult.cookies.length > 0) {
-                console.log(`登录返回Cookie: ${loginResult.cookies.length}个`);
-                console.log("Cookie详情:", loginResult.cookies);
-
-                if (this._useVpn) {
-                    await this.vpnCookieJar.saveCookies(loginResult.cookies);
-                    console.log("保存后的VPN Cookie:", await this.vpnCookieJar.getCookies());
-                } else {
-                    await this.cookieJar.saveCookies(loginResult.cookies);
-                    console.log("保存后的普通Cookie:", await this.cookieJar.getCookies());
-                }
-            } else {
-                console.warn("登录请求未返回Cookie");
-            }
-
-            // 处理重定向，关键修复点 - 根据不同模式使用不同的判断逻辑
-            if (loginResult.status === 302) {
-                // 获取重定向URL
-                const locationHeader = loginResult.location || '';
-                console.log(`接收到重定向URL: ${locationHeader}`);
-
-                if (this._useVpn) {
-                    // VPN模式：通过ticket参数判断是否登录成功
-                    const hasTicket = locationHeader.includes('ticket=');
-
-                    if (hasTicket) {
-                        console.log(`登录成功，重定向URL包含ticket参数`);
-
-                        // 保存票据以备后用
-                        const ticketMatch = locationHeader.match(/ticket=([^&]+)/);
-                        if (ticketMatch) {
-                            const ticket = ticketMatch[1];
-                            console.log(`提取到ticket: ${ticket}`);
-                            this._lastTicket = ticket;
-                        }
-
-                        // VPN登录成功后的重定向链处理
-                        try {
-                            console.log(`\n[步骤6] 处理VPN重定向链...`);
-
-                            // 处理第一次重定向
-                            let redirect1Result;
-                            try {
-                                console.log(`第1次重定向请求: ${locationHeader}`);
-                                redirect1Result = await ipc.ipassGet(locationHeader, {
-                                    cookies: await this.vpnCookieJar.getCookies(),
-                                    headers: {
-                                        'Referer': loginPageUrl,
-                                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-                                    }
-                                });
-
-                                // 保存Cookie
-                                if (redirect1Result.cookies && redirect1Result.cookies.length > 0) {
-                                    await this.vpnCookieJar.saveCookies(redirect1Result.cookies);
-                                }
-                            } catch (error) {
-                                console.warn(`第1次重定向请求失败: ${error.message}，继续尝试后续步骤`);
-                            }
-
-                            // 继续处理重定向链，即使某步骤失败
-                            await this.followVpnRedirectChain(locationHeader, loginPageUrl);
-                        } catch (redirectError) {
-                            console.warn(`处理VPN重定向链失败: ${redirectError.message}`);
-                            console.warn(`但不影响登录结果，尝试直接访问主页`);
-                        }
-
-                        // 无论重定向链处理是否成功，都尝试直接访问主页确认
-                        try {
-                            console.log(`\n[步骤7] 最终确认登录状态...`);
-                            const canAccessHomePage = await this.tryAccessHomePage();
-
-                            if (canAccessHomePage) {
-                                console.log(`==== 访问主页成功，确认登录成功 ====`);
-                            } else {
-                                console.log(`警告：无法访问主页，但仍然假定登录成功`);
-                                // 因为我们已经收到了带ticket的重定向，我们认为登录成功，即使不能访问主页
-                            }
-                        } catch (homePageError) {
-                            console.warn(`访问主页确认失败: ${homePageError.message}`);
-                            console.warn(`但不影响登录结果，假定登录成功`);
-                        }
-
-                        console.log("==== 智慧济大VPN登录成功 ====");
-                        return true;
-                    } else if (locationHeader.includes('login')) {
-                        console.log("VPN登录失败，重定向回登录页面");
-                        return false;
-                    } else {
-                        console.log("未检测到带ticket的重定向，但仍可能成功");
-                        console.log("尝试访问主页进行验证...");
-
-                        const canAccessHome = await this.tryAccessHomePage();
-                        if (canAccessHome) {
-                            console.log("能够访问主页，登录成功");
-                            return true;
-                        } else {
-                            console.log("无法访问主页，登录失败");
-                            return false;
-                        }
-                    }
-                } else {
-                    // 普通模式：通过location是否包含login判断
-                    if (!locationHeader.includes('login')) {
-                        console.log("普通模式登录成功，收到重定向到非登录页面");
-
-                        // 尝试访问重定向URL获取更多Cookie
-                        if (locationHeader) {
-                            try {
-                                await ipc.ipassGet(locationHeader, {
-                                    cookies: await this.cookieJar.getCookies(),
-                                    headers: {
-                                        'Referer': loginPageUrl,
-                                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-                                    }
-                                });
-                            } catch (redirectError) {
-                                console.warn(`处理重定向失败: ${redirectError.message}`);
-                            }
-                        }
-
-                        // 保存最终的Cookie状态
-                        console.log(`\n[最终Cookie状态]`);
-                        const finalCookies = await this.cookieJar.getCookies();
-                        console.log("最终Cookie列表:", finalCookies);
-                        console.log("==== 智慧济大普通登录成功 ====");
-                        return true;
-                    } else {
-                        console.log("普通模式登录失败，重定向到登录页面");
-                        return false;
-                    }
-                }
-            }
-
-            // 处理非重定向响应
-            if (loginResult.status === 200 && loginResult.data) {
-                // 检查是否有登录表单或密码错误提示
-                const hasLoginForm = loginResult.data.includes('id="loginForm"') ||
-                    loginResult.data.includes('name="loginForm"');
-                const hasPasswordError = loginResult.data.includes('密码错误') ||
-                    loginResult.data.includes('用户名不存在');
-
-                if (hasPasswordError) {
-                    console.log("用户名或密码错误");
-                    return false;
-                } else if (!hasLoginForm) {
-                    console.log("登录成功，直接返回主页");
-                    return true;
-                } else {
-                    console.log("登录失败，仍在登录页面");
-                    return false;
-                }
-            }
-
-            // 其他所有情况都视为登录失败
-            console.log("登录失败，状态码:", loginResult.status);
-            return false;
-        } catch (error) {
-            console.error('登录过程发生异常:', error);
-            if (error.stack) {
-                console.error('错误堆栈:', error.stack);
-            }
-
-            // 如果普通模式登录失败，尝试VPN模式
-            if (!this._useVpn) {
-                console.log("普通模式登录失败，尝试使用VPN模式");
-                this._useVpn = true;
-                try {
-                    const result = await this.absLogin(account, password);
-                    if (result) {
-                        return true;
-                    } else {
-                        this._useVpn = false; // 恢复原设置
-                        return false;
-                    }
-                } catch (vpnError) {
-                    console.error("VPN模式也失败", vpnError);
-                    this._useVpn = false; // 恢复原设置
-                    return false;
-                }
-            }
-
-            return false;
-        }
-    }
-
-    /**
-     * 处理VPN重定向链
-     * @param {string} initialLocation 初始重定向URL
-     * @param {string} referer 来源URL
-     */
-    async followVpnRedirectChain(initialLocation, referer) {
-        try {
-            // 处理第二次重定向（即使第一次失败）
-            try {
-                // 2. 第二次重定向 - 通常是到wengine-vpn-token-login
-                let redirect2Url;
-                if (initialLocation.includes('webvpn.ujn.edu.cn')) {
-                    // 如果初始重定向URL已经是VPN域名，直接使用
-                    redirect2Url = initialLocation;
-                } else {
-                    // 否则构建VPN域名URL
-                    redirect2Url = 'https://webvpn.ujn.edu.cn/login?cas_login=true';
-                }
-
-                console.log(`第2次重定向请求: ${redirect2Url}`);
-                const redirect2Result = await ipc.ipassGet(redirect2Url, {
-                    cookies: await this.vpnCookieJar.getCookies(),
-                    headers: {
-                        'Referer': referer,
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-                    }
-                });
-
-                // 保存Cookie
-                if (redirect2Result.cookies && redirect2Result.cookies.length > 0) {
-                    await this.vpnCookieJar.saveCookies(redirect2Result.cookies);
-                }
-
-                // 检查是否需要继续重定向
-                if (redirect2Result.status === 302 && redirect2Result.location) {
-                    // 3. 第三次重定向 - 通常是到token-login
-                    const redirect3Url = redirect2Result.location.startsWith('http') ?
-                        redirect2Result.location :
-                        `https://webvpn.ujn.edu.cn${redirect2Result.location.startsWith('/') ? '' : '/'}${redirect2Result.location}`;
-
-                    console.log(`第3次重定向请求: ${redirect3Url}`);
-
-                    // 关键：如果是token-login，单独处理
-                    if (redirect3Url.includes('token-login') || redirect3Url.includes('wengine-vpn')) {
-                        // 提取token
-                        const tokenMatch = redirect3Url.match(/token=([^&]+)/);
-                        if (tokenMatch) {
-                            const token = tokenMatch[1];
-                            console.log(`提取到token: ${token}`);
-
-                            // 尝试简化的token URL
-                            const simpleTokenUrl = `https://webvpn.ujn.edu.cn/token-login?token=${token}`;
-                            console.log(`使用简化token URL: ${simpleTokenUrl}`);
-
-                            try {
-                                const tokenResult = await ipc.ipassGet(simpleTokenUrl, {
-                                    cookies: await this.vpnCookieJar.getCookies(),
-                                    headers: {
-                                        'Referer': redirect2Url,
-                                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-                                    }
-                                });
-
-                                // 保存Cookie
-                                if (tokenResult.cookies && tokenResult.cookies.length > 0) {
-                                    await this.vpnCookieJar.saveCookies(tokenResult.cookies);
-                                }
-
-                                // 4. 如果token请求重定向到首页
-                                if (tokenResult.status === 302 && tokenResult.location) {
-                                    await this.followFinalRedirects(tokenResult.location, simpleTokenUrl);
-                                }
-                            } catch (tokenError) {
-                                console.warn(`Token请求失败: ${tokenError.message}`);
-                                // 尝试直接访问首页
-                                await this.tryAccessHomePage();
-                            }
-                        } else {
-                            // 没有token但仍需要处理
-                            try {
-                                const redirect3Result = await ipc.ipassGet(redirect3Url, {
-                                    cookies: await this.vpnCookieJar.getCookies(),
-                                    headers: {
-                                        'Referer': redirect2Url,
-                                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-                                    }
-                                });
-
-                                // 保存Cookie
-                                if (redirect3Result.cookies && redirect3Result.cookies.length > 0) {
-                                    await this.vpnCookieJar.saveCookies(redirect3Result.cookies);
-                                }
-
-                                // 跟随后续所有重定向
-                                if (redirect3Result.status === 302 && redirect3Result.location) {
-                                    await this.followFinalRedirects(redirect3Result.location, redirect3Url);
-                                }
-                            } catch (redirect3Error) {
-                                console.warn(`第3次重定向失败: ${redirect3Error.message}`);
-                            }
-                        }
-                    } else {
-                        // 非token-login的第三次重定向，正常处理
-                        try {
-                            const redirect3Result = await ipc.ipassGet(redirect3Url, {
-                                cookies: await this.vpnCookieJar.getCookies(),
-                                headers: {
-                                    'Referer': redirect2Url,
-                                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-                                }
-                            });
-
-                            // 保存Cookie
-                            if (redirect3Result.cookies && redirect3Result.cookies.length > 0) {
-                                await this.vpnCookieJar.saveCookies(redirect3Result.cookies);
-                            }
-
-                            // 跟随后续所有重定向到主页
-                            if (redirect3Result.status === 302 && redirect3Result.location) {
-                                await this.followFinalRedirects(redirect3Result.location, redirect2Url);
-                            }
-                        } catch (redirect3Error) {
-                            console.warn(`第3次重定向失败: ${redirect3Error.message}`);
-                        }
-                    }
-                }
-            } catch (redirect2Error) {
-                console.warn(`第2次重定向失败: ${redirect2Error.message}`);
-            }
-
-            // 即使重定向链处理中途失败，也尝试最后一步
-            console.log(`重定向链处理完成或部分失败，尝试直接访问主页`);
-            await this.tryAccessHomePage();
-        } catch (error) {
-            console.warn(`处理VPN重定向链失败: ${error.message}`);
-            // 即使整个过程失败，也尝试直接访问主页
-            try {
-                await this.tryAccessHomePage();
-            } catch (e) {
-                console.warn(`最后尝试访问主页也失败: ${e.message}`);
-            }
-        }
-    }
-
-    /**
-     * 跟随最终重定向链到主页
-     * @param {string} initialLocation 初始重定向URL
-     * @param {string} referer 来源URL
-     */
-    async followFinalRedirects(initialLocation, referer) {
-        try {
-            console.log(`跟随最终重定向链...`);
-
-            // 确保URL是完整的
-            let currentUrl = initialLocation;
-            if (!currentUrl.startsWith('http')) {
-                currentUrl = `https://webvpn.ujn.edu.cn${currentUrl.startsWith('/') ? '' : '/'}${currentUrl}`;
-            }
-
-            let currentReferer = referer;
-            let redirectCount = 0;
-            const maxRedirects = 5; // 最大重定向次数
-
-            while (redirectCount < maxRedirects) {
-                console.log(`重定向 #${redirectCount + 1}: ${currentUrl}`);
-
-                try {
-                    const result = await ipc.ipassGet(currentUrl, {
-                        cookies: this._useVpn ?
-                            await this.vpnCookieJar.getCookies() :
-                            await this.cookieJar.getCookies(),
-                        headers: {
-                            'Referer': currentReferer,
-                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-                        }
-                    });
-
-                    // 保存Cookie
-                    if (result.cookies && result.cookies.length > 0) {
-                        if (this._useVpn) {
-                            await this.vpnCookieJar.saveCookies(result.cookies);
-                        } else {
-                            await this.cookieJar.saveCookies(result.cookies);
-                        }
-                    }
-
-                    // 如果是最终页面，停止重定向
-                    if (result.status !== 302 || !result.location) {
-                        console.log(`重定向链结束，状态码: ${result.status}`);
-                        break;
-                    }
-
-                    // 更新URL和referer
-                    currentReferer = currentUrl;
-                    currentUrl = result.location.startsWith('http') ?
-                        result.location :
-                        `https://webvpn.ujn.edu.cn${result.location.startsWith('/') ? '' : '/'}${result.location}`;
-                } catch (error) {
-                    // 在发生错误时打印信息但继续执行
-                    console.warn(`重定向 #${redirectCount + 1} 失败: ${error.message}`);
-                    console.warn(`尝试跳过这个重定向继续执行...`);
-
-                    // 对于带ticket的URL特殊处理
-                    if (currentUrl.includes('ticket=')) {
-                        try {
-                            console.log(`检测到ticket参数，尝试直接访问主页...`);
-                            // 直接跳到主页尝试
-                            const homeResult = await this.tryAccessHomePage();
-                            if (homeResult) {
-                                console.log(`直接访问主页成功，重定向链处理完成`);
-                                return; // 成功访问主页，可以结束重定向链处理
-                            }
-                        } catch (e) {
-                            console.warn(`直接访问主页失败: ${e.message}`);
-                        }
-                    }
-
-                    // 如果重定向过程中出错，可能已经获得了足够的cookie，可以尝试继续
-                    if (redirectCount >= 2) { // 至少已经完成了2次重定向
-                        console.log(`已完成 ${redirectCount} 次重定向，可能已获得足够的cookie`);
-                        break;
-                    }
-
-                    // 否则继续下一次重定向
-                    redirectCount++;
-                    continue;
-                }
-
-                redirectCount++;
-            }
-
-            if (redirectCount >= maxRedirects) {
-                console.log(`达到最大重定向次数(${maxRedirects})，停止跟踪`);
-                // 尝试直接访问主页确认登录状态
-                await this.tryAccessHomePage();
-            }
-
-            console.log(`重定向链处理完成`);
-        } catch (error) {
-            console.warn(`跟随重定向链失败: ${error.message}`);
-            // 即使整个过程失败，也尝试直接访问主页
-            try {
-                await this.tryAccessHomePage();
-            } catch (e) {
-                console.warn(`最后尝试访问主页也失败: ${e.message}`);
-            }
         }
     }
 

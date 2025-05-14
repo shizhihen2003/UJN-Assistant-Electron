@@ -24,16 +24,6 @@ class Account {
     }
 
     /**
-     * 获取完整URL
-     * @param {string} path 路径
-     * @returns {string} 完整URL
-     */
-    getFullUrl(path) {
-        if (!path) return `${this.scheme}://${this.host}`
-        return `${this.scheme}://${this.host}/${path}`
-    }
-
-    /**
      * 登录（使用存储的账号密码）
      * @throws {Error} 网络错误或需要登录错误
      * @returns {Promise<boolean>} 登录是否成功

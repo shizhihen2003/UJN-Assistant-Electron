@@ -255,10 +255,9 @@ const hasLesson = (day, timeSlot) => {
 
   // 使用字符串形式的周次进行检查
   return group.lessons.some(lesson => {
-    // 将存储的字符串转回 BigInt 进行比较，或直接比较字符串中的位
-    const weekBits = typeof lesson.week === 'string' ? lesson.week : lesson.week.toString();
-    const weekNum = BigInt(weekBits);
-    return (weekNum & (1n << BigInt(currentWeek.value - 1))) !== 0n;
+    // 将存储的字符串转回 BigInt 进行比较
+    const weekValue = typeof lesson.week === 'string' ? BigInt(lesson.week) : lesson.week;
+    return (weekValue & (1n << BigInt(currentWeek.value - 1))) !== 0n;
   });
 }
 
@@ -276,8 +275,12 @@ const getLessonAt = (day, timeSlot) => {
     return null
   }
 
-  // 返回当前周的课程
-  return group.lessons.find(lesson => (lesson.week & (1n << BigInt(currentWeek.value - 1))) !== 0n)
+  // 返回当前周的课程 - 确保将字符串形式的week转换回BigInt
+  return group.lessons.find(lesson => {
+    // 检查week是否为字符串，如果是则转换为BigInt
+    const weekValue = typeof lesson.week === 'string' ? BigInt(lesson.week) : lesson.week;
+    return (weekValue & (1n << BigInt(currentWeek.value - 1))) !== 0n;
+  });
 }
 
 // 计算课程块的高度

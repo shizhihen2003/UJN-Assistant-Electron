@@ -725,8 +725,64 @@ export default {
                 headers: options.headers
             });
 
-            // 发起请求
-            const response = await this.ipassRequest('GET', url, null, options);
+            // 直接发起请求到主进程，不依赖this.ipassRequest
+            const requestId = Date.now().toString(36) + Math.random().toString(36).substr(2, 5);
+            console.log(`[请求 ${requestId}] GET ${url}`);
+
+            // 创建请求参数
+            const requestArgs = {
+                method: 'GET',
+                url,
+                data: null,
+                cookies: options.cookies || [],
+                headers: options.headers
+            };
+
+            // 直接使用IPC通信
+            if (!window.ipcRenderer) {
+                throw new Error('IPC Renderer 不可用，请在 Electron 环境中运行');
+            }
+
+            // 发送请求到主进程
+            console.log(`[请求 ${requestId}] 发送到主进程`);
+            const response = await window.ipcRenderer.invoke('ipass:request', requestArgs);
+
+            // 添加请求ID用于跟踪
+            if (response) {
+                response.requestId = requestId;
+            } else {
+                console.error(`[请求 ${requestId}] 响应为空`);
+                return {
+                    success: false,
+                    error: '响应为空',
+                    requestId
+                };
+            }
+
+            // 处理响应
+            console.log(`[请求 ${requestId}] 收到响应`);
+
+            // 对响应进行日志记录
+            if (response.success) {
+                console.log(`[响应 ${requestId}] 状态码: ${response.status}`);
+                if (response.headers) {
+                    console.log(`[响应 ${requestId}] 头信息:`, response.headers);
+                }
+                if (response.location) {
+                    console.log(`[响应 ${requestId}] 重定向地址: ${response.location}`);
+                }
+                if (response.cookies && response.cookies.length > 0) {
+                    console.log(`[响应 ${requestId}] 收到 ${response.cookies.length} 个Cookie`);
+                    response.cookies.forEach((cookie, index) => {
+                        console.log(`[响应 ${requestId}] Cookie ${index + 1}: ${cookie}`);
+                    });
+                }
+            } else {
+                console.error(`[响应 ${requestId}] 错误: ${response.error || '未知错误'}`);
+                if (response.errorDetails) {
+                    console.error(`[响应 ${requestId}] 错误详情:`, response.errorDetails);
+                }
+            }
 
             // 记录响应概要
             console.log(`请求完成，状态码: ${response.status}, 成功: ${response.success}`);
@@ -738,11 +794,26 @@ export default {
             if (error.stack) {
                 console.error(`错误堆栈:`, error.stack);
             }
-            throw error;
+
+            // 提供更详细的错误信息
+            let errorMessage = error.message || '未知错误';
+            let errorDetails = {
+                name: error.name,
+                code: error.code,
+                stack: error.stack
+            };
+
+            return {
+                success: false,
+                error: errorMessage,
+                errorDetails: errorDetails,
+                requestId: Date.now().toString(36)
+            };
         } finally {
             console.log(`===== IPASS GET请求结束 =====`);
         }
     },
+
 
     /**
      * 发送 IPASS POST 请求
@@ -752,7 +823,132 @@ export default {
      * @returns {Promise<Object>} 响应对象
      */
     async ipassPost(url, data, options = {}) {
-        return this.ipassRequest('POST', url, data, options);
+        try {
+            console.log(`===== IPASS POST请求开始 =====`);
+            console.log(`请求URL: ${url}`);
+
+            // 记录请求详情
+            if (data) {
+                console.log(`请求数据:`, typeof data === 'object' ? JSON.stringify(data) : data);
+            }
+
+            // 检查并记录Cookie
+            if (options.cookies && options.cookies.length > 0) {
+                console.log(`请求携带 ${options.cookies.length} 个Cookie`);
+            } else {
+                console.log(`请求未携带Cookie数组`);
+            }
+
+            // 确保options中同时包含cookies数组和headers中的Cookie
+            if (!options.headers) {
+                options.headers = {};
+            }
+
+            if (options.cookies && options.cookies.length > 0 && !options.headers.Cookie) {
+                options.headers.Cookie = options.cookies.join('; ');
+                console.log(`已自动添加Cookie到headers: ${options.headers.Cookie}`);
+            }
+
+            // 直接发起请求到主进程，不依赖this.ipassRequest
+            const requestId = Date.now().toString(36) + Math.random().toString(36).substr(2, 5);
+            console.log(`[请求 ${requestId}] POST ${url}`);
+
+            // 处理表单数据
+            let processedData = data;
+            if (data && options.headers && options.headers['Content-Type'] === 'application/x-www-form-urlencoded') {
+                if (typeof data === 'object' && !(data instanceof URLSearchParams) && !(data instanceof FormData)) {
+                    const formData = new URLSearchParams();
+                    Object.entries(data).forEach(([key, value]) => {
+                        formData.append(key, value);
+                    });
+                    processedData = formData.toString();
+                    console.log(`[请求 ${requestId}] 转换表单数据:`, processedData);
+                }
+            }
+
+            // 创建请求参数
+            const requestArgs = {
+                method: 'POST',
+                url,
+                data: processedData,
+                cookies: options.cookies || [],
+                headers: options.headers
+            };
+
+            // 直接使用IPC通信
+            if (!window.ipcRenderer) {
+                throw new Error('IPC Renderer 不可用，请在 Electron 环境中运行');
+            }
+
+            // 发送请求到主进程
+            console.log(`[请求 ${requestId}] 发送到主进程`);
+            const response = await window.ipcRenderer.invoke('ipass:request', requestArgs);
+
+            // 添加请求ID用于跟踪
+            if (response) {
+                response.requestId = requestId;
+            } else {
+                console.error(`[请求 ${requestId}] 响应为空`);
+                return {
+                    success: false,
+                    error: '响应为空',
+                    requestId
+                };
+            }
+
+            // 处理响应
+            console.log(`[请求 ${requestId}] 收到响应`);
+
+            // 对响应进行日志记录
+            if (response.success) {
+                console.log(`[响应 ${requestId}] 状态码: ${response.status}`);
+                if (response.headers) {
+                    console.log(`[响应 ${requestId}] 头信息:`, response.headers);
+                }
+                if (response.location) {
+                    console.log(`[响应 ${requestId}] 重定向地址: ${response.location}`);
+                }
+                if (response.cookies && response.cookies.length > 0) {
+                    console.log(`[响应 ${requestId}] 收到 ${response.cookies.length} 个Cookie`);
+                    response.cookies.forEach((cookie, index) => {
+                        console.log(`[响应 ${requestId}] Cookie ${index + 1}: ${cookie}`);
+                    });
+                }
+            } else {
+                console.error(`[响应 ${requestId}] 错误: ${response.error || '未知错误'}`);
+                if (response.errorDetails) {
+                    console.error(`[响应 ${requestId}] 错误详情:`, response.errorDetails);
+                }
+            }
+
+            // 记录响应概要
+            console.log(`请求完成，状态码: ${response.status}, 成功: ${response.success}`);
+
+            // 返回响应结果
+            return response;
+        } catch (error) {
+            console.error(`IPASS POST请求失败:`, error);
+            if (error.stack) {
+                console.error(`错误堆栈:`, error.stack);
+            }
+
+            // 提供更详细的错误信息
+            let errorMessage = error.message || '未知错误';
+            let errorDetails = {
+                name: error.name,
+                code: error.code,
+                stack: error.stack
+            };
+
+            return {
+                success: false,
+                error: errorMessage,
+                errorDetails: errorDetails,
+                requestId: Date.now().toString(36)
+            };
+        } finally {
+            console.log(`===== IPASS POST请求结束 =====`);
+        }
     },
 
     // 在 ipc.js 中添加网络测试功能

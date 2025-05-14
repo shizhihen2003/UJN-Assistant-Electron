@@ -50,14 +50,14 @@
         <div class="login-options">
           <el-checkbox v-model="loginForm.savePassword">记住密码</el-checkbox>
           <el-checkbox v-model="loginForm.autoLogin">自动登录</el-checkbox>
-          <el-checkbox v-model="loginForm.useVpn">使用VPN登录</el-checkbox>
+          <el-checkbox v-model="loginForm.useVpn">使用VPN登录智慧济大</el-checkbox>
         </div>
 
         <!-- 新增：教务系统VPN登录选项 -->
         <div class="login-options" v-if="loginForm.useVpn">
           <el-checkbox v-model="loginForm.useEasVpn" :disabled="!loginForm.useVpn">
             <el-tooltip content="登录后自动使用VPN登录教务系统" placement="top">
-              自动登录教务系统
+              同步使用VPN登录教务系统
             </el-tooltip>
           </el-checkbox>
         </div>
@@ -70,7 +70,7 @@
 
         <div class="login-tips">
           <p><el-icon><InfoFilled /></el-icon> 智慧济大账号通常与教务系统账号相同</p>
-          <p><el-icon><InfoFilled /></el-icon> 此登录用于VPN访问校内资源和电子饮水卡等服务</p>
+          <p><el-icon><InfoFilled /></el-icon> 此登录用于VPN访问校内资源</p>
           <p v-if="loginForm.useVpn"><el-icon><Warning /></el-icon> 当前使用VPN模式登录，适用于校外网络</p>
           <p v-if="loginForm.useVpn && loginForm.useEasVpn"><el-icon><InfoFilled /></el-icon> 登录成功后将自动使用VPN登录教务系统</p>
         </div>

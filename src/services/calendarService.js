@@ -2,6 +2,7 @@
 import ipc from '@/utils/ipc';
 import store from '@/utils/store';
 import authService from '@/services/authService';
+import VpnEncodeUtils from '../utils/vpnEncodeUtils';
 
 /**
  * 校历服务类
@@ -13,6 +14,7 @@ class CalendarService {
         this.cacheExpireKey = 'SCHOOL_CALENDAR_EXPIRE';
         this.cacheExpireDays = 7; // 缓存7天
         this.sessionId = null;
+        this.vpnTicket = null;
         this.debug = true; // 启用调试日志
     }
 
@@ -123,61 +125,97 @@ class CalendarService {
         try {
             this.log('开始获取存储的智慧济大Cookie');
 
+            // 检查VPN模式
+            const useVpn = authService.useVpn;
+            this.log(`VPN模式: ${useVpn ? '启用' : '禁用'}`);
+
             // 先检查是否已登录智慧济大
             if (authService.ipassLoginStatus.value) {
                 this.log('智慧济大已登录，从authService获取Cookie');
 
-                // 获取Cookie
-                const cookies = authService.ipassAccount.getCookie();
-                this.log('从authService获取的Cookie原始数据:', cookies);
+                // 获取Cookie - 根据VPN模式选择不同的Cookie
+                let cookies;
+                if (useVpn) {
+                    // VPN模式下，尝试获取VPN的Cookie
+                    if (authService.ipassAccount.vpnCookieJar) {
+                        cookies = await authService.ipassAccount.vpnCookieJar.getCookies();
+                        this.log('从vpnCookieJar获取的Cookie:', cookies);
+                        if (cookies && cookies.length > 0) {
+                            return cookies;
+                        }
+                    }
+                } else {
+                    // 普通模式下获取常规Cookie
+                    cookies = authService.ipassAccount.getCookie();
+                    this.log('从authService获取的Cookie原始数据:', cookies);
 
-                // 处理Cookie：如果是对象数组，转换为字符串数组
-                if (cookies && cookies.length > 0) {
-                    if (typeof cookies[0] === 'object') {
-                        this.log('Cookie是对象数组格式，转换为字符串数组');
+                    // 处理Cookie：如果是对象数组，转换为字符串数组
+                    if (cookies && cookies.length > 0) {
+                        if (typeof cookies[0] === 'object') {
+                            this.log('Cookie是对象数组格式，转换为字符串数组');
 
-                        const cookieStrings = cookies.map(cookie => {
-                            if (cookie.name && cookie.value) {
-                                return `${cookie.name}=${cookie.value}`;
-                            }
-                            return null;
-                        }).filter(Boolean); // 过滤掉null值
+                            const cookieStrings = cookies.map(cookie => {
+                                if (cookie.name && cookie.value) {
+                                    return `${cookie.name}=${cookie.value}`;
+                                }
+                                return null;
+                            }).filter(Boolean); // 过滤掉null值
 
-                        this.log('转换后的Cookie字符串数组:', cookieStrings);
-                        return cookieStrings;
-                    } else {
-                        this.log('Cookie已经是字符串数组格式');
+                            this.log('转换后的Cookie字符串数组:', cookieStrings);
+                            return cookieStrings;
+                        } else {
+                            this.log('Cookie已经是字符串数组格式');
+                            return cookies;
+                        }
                     }
                 }
-
-                return cookies || [];
             } else {
                 this.log('智慧济大未登录，尝试其他方式获取Cookie');
             }
 
-            // 如果authService未登录，尝试从CookieJar获取
-            if (authService.ipassAccount && authService.ipassAccount.cookieJar) {
-                this.log('尝试从cookieJar获取Cookie');
-                const cookies = await authService.ipassAccount.cookieJar.getCookies();
-                this.log('从cookieJar获取的Cookie:', cookies);
-                return cookies || [];
-            } else {
-                this.log('cookieJar不可用');
+            // 从CookieJar获取 - 根据VPN模式选择不同的CookieJar
+            if (authService.ipassAccount) {
+                if (useVpn && authService.ipassAccount.vpnCookieJar) {
+                    this.log('尝试从vpnCookieJar获取Cookie');
+                    const cookies = await authService.ipassAccount.vpnCookieJar.getCookies();
+                    this.log('从vpnCookieJar获取的Cookie:', cookies);
+                    if (cookies && cookies.length > 0) {
+                        return cookies;
+                    }
+                } else if (!useVpn && authService.ipassAccount.cookieJar) {
+                    this.log('尝试从普通cookieJar获取Cookie');
+                    const cookies = await authService.ipassAccount.cookieJar.getCookies();
+                    this.log('从cookieJar获取的Cookie:', cookies);
+                    if (cookies && cookies.length > 0) {
+                        return cookies;
+                    }
+                }
             }
 
-            // 如果以上方法都失败，尝试从localStorage获取
+            // 从localStorage获取 - 根据VPN模式使用不同的键
             try {
-                this.log('尝试从localStorage获取Cookie');
-                const savedCookies = localStorage.getItem('ipassCookies');
+                const storageKey = useVpn ? 'vpnCookies' : 'ipassCookies';
+                this.log(`尝试从localStorage获取Cookie(${storageKey})`);
+
+                const savedCookies = localStorage.getItem(storageKey);
                 if (savedCookies) {
                     const cookies = JSON.parse(savedCookies);
-                    this.log('从localStorage获取的Cookie:', cookies);
+                    this.log(`从localStorage获取的Cookie(${storageKey}):`, cookies);
                     return cookies;
                 } else {
-                    this.log('localStorage中没有存储Cookie');
+                    this.log(`localStorage中没有存储Cookie(${storageKey})`);
                 }
             } catch (e) {
                 this.error('从localStorage获取Cookie失败:', e);
+            }
+
+            // 根据VPN模式，返回已有的会话ID
+            if (useVpn && this.vpnTicket) {
+                this.log('使用已有vpnTicket创建Cookie');
+                return [`wengine_vpn_ticketwebvpn_ujn_edu_cn=${this.vpnTicket}`];
+            } else if (!useVpn && this.sessionId) {
+                this.log('使用已有sessionId创建Cookie');
+                return [`JSESSIONID=${this.sessionId}`];
             }
 
             this.log('未找到存储的智慧济大Cookie，返回空数组');
@@ -196,106 +234,155 @@ class CalendarService {
         try {
             this.log('开始从服务器获取校历数据');
 
+            // 检查VPN模式
+            const useVpn = authService.useVpn;
+            this.log(`VPN模式: ${useVpn ? '启用' : '禁用'}`);
+
             // 先获取存储的Cookie
             const storedCookies = await this.getStoredCookies();
             this.log(`获取到${storedCookies.length}个Cookie:`, storedCookies);
 
-            // 步骤1: 获取或使用现有的JSESSIONID
-            if (!this.sessionId) {
-                this.log('没有现有的JSESSIONID，尝试提取');
+            // 步骤1: 获取或使用现有的认证凭据
+            if (useVpn) {
+                // VPN模式 - 获取vpnTicket
+                if (!this.vpnTicket) {
+                    this.log('没有现有的VPN Ticket，尝试提取');
 
-                if (storedCookies.length > 0) {
-                    // 从存储的Cookie中查找JSESSIONID
-                    this.log('从存储的Cookie中查找JSESSIONID');
+                    if (storedCookies.length > 0) {
+                        // 从存储的Cookie中查找VPN Ticket
+                        this.log('从存储的Cookie中查找VPN Ticket');
 
-                    for (const cookie of storedCookies) {
-                        this.log(`检查Cookie: ${typeof cookie} - ${cookie}`);
+                        for (const cookie of storedCookies) {
+                            this.log(`检查Cookie: ${typeof cookie} - ${cookie}`);
 
-                        if (typeof cookie === 'string' && cookie.includes('JSESSIONID=')) {
-                            this.sessionId = cookie.split('=')[1].split(';')[0];
-                            this.log('从存储Cookie中获取JSESSIONID:', this.sessionId);
-                            break;
+                            if (typeof cookie === 'string' && cookie.includes('wengine_vpn_ticketwebvpn_ujn_edu_cn=')) {
+                                this.vpnTicket = cookie.split('=')[1].split(';')[0];
+                                this.log('从存储Cookie中获取VPN Ticket:', this.vpnTicket);
+                                break;
+                            }
                         }
-                    }
 
-                    // 如果没有找到JSESSIONID，初始化会话
-                    if (!this.sessionId) {
-                        this.log('Cookie中未找到JSESSIONID，初始化会话');
-                        await this.initSession(storedCookies);
+                        // 如果没有找到VPN Ticket，初始化会话
+                        if (!this.vpnTicket) {
+                            this.log('Cookie中未找到VPN Ticket，初始化会话');
+                            await this.initSession(storedCookies);
+                        }
+                    } else {
+                        // 没有存储的Cookie，初始化会话
+                        this.log('没有存储的Cookie，初始化会话');
+                        await this.initSession([]);
                     }
                 } else {
-                    // 没有存储的Cookie，初始化会话
-                    this.log('没有存储的Cookie，初始化会话');
-                    await this.initSession([]);
+                    this.log('使用现有的VPN Ticket:', this.vpnTicket);
                 }
             } else {
-                this.log('使用现有的JSESSIONID:', this.sessionId);
+                // 非VPN模式 - 获取JSESSIONID
+                if (!this.sessionId) {
+                    this.log('没有现有的JSESSIONID，尝试提取');
+
+                    if (storedCookies.length > 0) {
+                        // 从存储的Cookie中查找JSESSIONID
+                        this.log('从存储的Cookie中查找JSESSIONID');
+
+                        for (const cookie of storedCookies) {
+                            this.log(`检查Cookie: ${typeof cookie} - ${cookie}`);
+
+                            if (typeof cookie === 'string' && cookie.includes('JSESSIONID=')) {
+                                this.sessionId = cookie.split('=')[1].split(';')[0];
+                                this.log('从存储Cookie中获取JSESSIONID:', this.sessionId);
+                                break;
+                            }
+                        }
+
+                        // 如果没有找到JSESSIONID，初始化会话
+                        if (!this.sessionId) {
+                            this.log('Cookie中未找到JSESSIONID，初始化会话');
+                            await this.initSession(storedCookies);
+                        }
+                    } else {
+                        // 没有存储的Cookie，初始化会话
+                        this.log('没有存储的Cookie，初始化会话');
+                        await this.initSession([]);
+                    }
+                } else {
+                    this.log('使用现有的JSESSIONID:', this.sessionId);
+                }
             }
 
-            // 步骤2: 获取应用列表以查找校历
-            this.log('步骤2: 获取应用列表以查找校历');
-            const appsList = await this.getBusinessAppsList(storedCookies);
-            this.log(`获取到${appsList.length}个应用`);
+            try {
+                // 步骤2: 获取应用列表以查找校历
+                this.log('步骤2: 获取应用列表以查找校历');
+                const appsList = await this.getBusinessAppsList(storedCookies);
+                this.log(`获取到${appsList.length}个应用`);
 
-            // 步骤3: 从应用列表中找到校历应用ID
-            this.log('步骤3: 从应用列表中找到校历应用');
-            const calendarApp = this.findCalendarApp(appsList);
-            if (!calendarApp) {
-                throw new Error('找不到校历应用');
+                // 步骤3: 从应用列表中找到校历应用ID
+                this.log('步骤3: 从应用列表中找到校历应用');
+                const calendarApp = this.findCalendarApp(appsList);
+                if (!calendarApp) {
+                    throw new Error('找不到校历应用');
+                }
+                this.log('找到校历应用:', calendarApp);
+
+                // 步骤4: 解析URL获取资源ID
+                this.log('步骤4: 解析URL获取资源ID');
+                const resourceId = this.extractResourceIdFromUrl(calendarApp.URL);
+                if (!resourceId) {
+                    throw new Error('无法获取校历资源ID');
+                }
+                this.log('解析到资源ID:', resourceId);
+
+                // 步骤5: 获取校历详细信息
+                this.log('步骤5: 获取校历详细信息');
+                const calendarDetail = await this.getCalendarDetail(resourceId, storedCookies);
+                if (!calendarDetail || !calendarDetail.length) {
+                    throw new Error('获取校历详细信息失败');
+                }
+                this.log('获取到校历详情:', calendarDetail);
+
+                // 步骤6: 获取校历内容
+                this.log('步骤6: 获取校历内容');
+                const contentUrl = calendarDetail[0].CONTENT_URL;
+                if (!contentUrl) {
+                    throw new Error('无法获取校历内容地址');
+                }
+                this.log('获取到内容URL:', contentUrl);
+
+                // 步骤7: 获取校历数据并解析
+                this.log('步骤7: 获取校历内容并解析');
+                const calendarContent = await this.getCalendarContent(contentUrl, storedCookies);
+                if (!calendarContent) {
+                    throw new Error('获取校历内容失败');
+                }
+                this.log('获取到校历内容，长度:', calendarContent.length);
+
+                // 提取HTML内容
+                const htmlContent = this.extractHtmlContent(calendarContent);
+                if (!htmlContent) {
+                    throw new Error('提取HTML内容失败');
+                }
+                this.log('提取HTML内容完成，长度:', htmlContent.length);
+
+                // 组装返回数据
+                this.log('开始组装返回数据');
+                const result = {
+                    title: calendarDetail[0].PIM_TITLE || '校历',
+                    updateTime: new Date(calendarDetail[0].MODIFY_TIME || Date.now()).toISOString(),
+                    htmlContent: htmlContent,
+                    semesterInfo: this.extractSemesterInfo(calendarDetail[0].PIM_TITLE || '', calendarContent),
+                    weeks: this.extractWeeks(calendarContent),
+                    importantDates: this.extractImportantDates(calendarContent)
+                };
+                this.log('数据组装完成');
+
+                // 保存到缓存
+                this.log('保存数据到缓存');
+                await this.saveCalendarToCache(result);
+
+                this.log('校历数据获取成功');
+                return result;
+            } catch (error) {
+                throw error;
             }
-            this.log('找到校历应用:', calendarApp);
-
-            // 步骤4: 解析URL获取资源ID
-            this.log('步骤4: 解析URL获取资源ID');
-            const resourceId = this.extractResourceIdFromUrl(calendarApp.URL);
-            if (!resourceId) {
-                throw new Error('无法获取校历资源ID');
-            }
-            this.log('解析到资源ID:', resourceId);
-
-            // 步骤5: 获取校历详细信息
-            this.log('步骤5: 获取校历详细信息');
-            const calendarDetail = await this.getCalendarDetail(resourceId, storedCookies);
-            if (!calendarDetail || !calendarDetail.length) {
-                throw new Error('获取校历详细信息失败');
-            }
-            this.log('获取到校历详情:', calendarDetail);
-
-            // 步骤6: 获取校历内容
-            this.log('步骤6: 获取校历内容');
-            const contentUrl = calendarDetail[0].CONTENT_URL;
-            if (!contentUrl) {
-                throw new Error('无法获取校历内容地址');
-            }
-            this.log('获取到内容URL:', contentUrl);
-
-            // 步骤7: 获取校历数据并解析
-            this.log('步骤7: 获取校历内容并解析');
-            const calendarContent = await this.getCalendarContent(contentUrl, storedCookies);
-            this.log('获取到校历内容，长度:', calendarContent.length);
-
-            // 提取HTML内容
-            const htmlContent = this.extractHtmlContent(calendarContent);
-            this.log('提取HTML内容完成，长度:', htmlContent.length);
-
-            // 组装返回数据
-            this.log('开始组装返回数据');
-            const result = {
-                title: calendarDetail[0].PIM_TITLE || '校历',
-                updateTime: new Date(calendarDetail[0].MODIFY_TIME || Date.now()).toISOString(),
-                htmlContent: htmlContent,
-                semesterInfo: this.extractSemesterInfo(calendarDetail[0].PIM_TITLE || '', calendarContent),
-                weeks: this.extractWeeks(calendarContent),
-                importantDates: this.extractImportantDates(calendarContent)  // 确保这行正确
-            };
-            this.log('数据组装完成');
-
-            // 保存到缓存
-            this.log('保存数据到缓存');
-            await this.saveCalendarToCache(result);
-
-            this.log('校历数据获取成功');
-            return result;
         } catch (error) {
             this.error('从服务器获取校历数据失败:', error);
             throw error;
@@ -310,16 +397,41 @@ class CalendarService {
         try {
             this.log('初始化会话，使用已有Cookie数量:', existingCookies.length);
 
-            const url = 'http://one.ujn.edu.cn/up/view?m=up';
+            // 检查VPN模式
+            const useVpn = authService.useVpn;
+            this.log(`VPN模式: ${useVpn ? '启用' : '禁用'}`);
+
+            // 根据VPN模式构建URL
+            let url;
+            if (useVpn) {
+                // 使用VPN加密URL
+                const originalUrl = 'http://one.ujn.edu.cn/up/view?m=up';
+                url = VpnEncodeUtils.encryptUrl(originalUrl);
+            } else {
+                url = 'http://one.ujn.edu.cn/up/view?m=up';
+            }
+
             const options = {
                 maxRedirects: 5,
                 timeout: 30000,  // 增加超时时间
                 cookies: existingCookies
             };
 
-            this.log('发送请求获取会话，URL:', url, '选项:', options);
+            // 添加相应的请求头
+            options.headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            };
 
-            // 访问智慧济大门户以获取JSESSIONID
+            if (useVpn) {
+                options.headers['Host'] = 'webvpn.ujn.edu.cn';
+                options.headers['Referer'] = 'https://webvpn.ujn.edu.cn/';
+            } else {
+                options.headers['Referer'] = 'http://one.ujn.edu.cn/';
+            }
+
+            this.log('发送请求获取会话，URL:', url);
+
+            // 访问智慧济大门户以获取会话ID
             const response = await ipc.ipassGet(url, options);
 
             this.log('收到响应, 状态:', response.success ? '成功' : '失败');
@@ -328,20 +440,6 @@ class CalendarService {
             }
             if (response.error) {
                 this.error('响应错误:', response.error);
-            }
-            if (response.headers) {
-                this.log('响应头:', response.headers);
-            }
-
-            // 打印响应体的前100个字符作为预览
-            if (response.data) {
-                const previewLength = Math.min(100, response.data.length);
-                this.log(`响应内容预览(前${previewLength}个字符):`, response.data.substring(0, previewLength));
-            }
-
-            if (!response.success) {
-                this.error('访问门户失败', response.error || '未知错误');
-                throw new Error('访问门户失败: ' + (response.error || '未知错误'));
             }
 
             // 保存新的Cookie
@@ -372,66 +470,93 @@ class CalendarService {
 
                 // 保存到localStorage以备后用
                 try {
-                    localStorage.setItem('ipassCookies', JSON.stringify(newCookies));
-                    this.log('Cookie已保存到localStorage');
+                    // 根据VPN模式保存到不同的键
+                    const storageKey = useVpn ? 'vpnCookies' : 'ipassCookies';
+                    localStorage.setItem(storageKey, JSON.stringify(newCookies));
+                    this.log(`Cookie已保存到localStorage(${storageKey})`);
                 } catch (e) {
                     this.error('保存Cookie到localStorage失败:', e);
                 }
 
-                // 从Cookie中提取JSESSIONID
-                this.log('从Cookie中提取JSESSIONID');
+                // 从Cookie中提取会话ID
+                this.log('从Cookie中提取会话ID');
                 for (const cookie of response.cookies) {
-                    if (typeof cookie === 'string' && cookie.includes('JSESSIONID=')) {
-                        this.sessionId = cookie.split('=')[1].split(';')[0];
-                        this.log('成功获取JSESSIONID:', this.sessionId);
-                        return;
+                    if (useVpn) {
+                        // VPN模式 - 查找VPN Ticket
+                        if (typeof cookie === 'string' && cookie.includes('wengine_vpn_ticketwebvpn_ujn_edu_cn=')) {
+                            this.vpnTicket = cookie.split('=')[1].split(';')[0];
+                            this.log('成功获取VPN Ticket:', this.vpnTicket);
+                            return;
+                        }
+                    } else {
+                        // 非VPN模式 - 查找JSESSIONID
+                        if (typeof cookie === 'string' && cookie.includes('JSESSIONID=')) {
+                            this.sessionId = cookie.split('=')[1].split(';')[0];
+                            this.log('成功获取JSESSIONID:', this.sessionId);
+                            return;
+                        }
                     }
                 }
-                this.log('Cookie中未找到JSESSIONID');
+                this.log(`Cookie中未找到${useVpn ? 'VPN Ticket' : 'JSESSIONID'}`);
             } else {
                 this.log('响应没有Cookie');
             }
 
-            if (!this.sessionId) {
+            // 检查是否获取到了必要的会话ID
+            if ((useVpn && !this.vpnTicket) || (!useVpn && !this.sessionId)) {
                 // 尝试从响应头中获取
-                this.log('尝试从响应头中获取JSESSIONID');
+                this.log('尝试从响应头中获取会话ID');
                 const setCookieHeader = response.headers && response.headers['set-cookie'];
                 if (setCookieHeader) {
                     const cookies = Array.isArray(setCookieHeader) ? setCookieHeader : [setCookieHeader];
                     this.log('从响应头找到Cookie:', cookies);
 
                     for (const cookie of cookies) {
-                        if (typeof cookie === 'string' && cookie.includes('JSESSIONID=')) {
-                            this.sessionId = cookie.split('=')[1].split(';')[0];
-                            this.log('成功从响应头获取JSESSIONID:', this.sessionId);
-                            return;
+                        if (useVpn) {
+                            // VPN模式 - 查找VPN Ticket
+                            if (typeof cookie === 'string' && cookie.includes('wengine_vpn_ticketwebvpn_ujn_edu_cn=')) {
+                                this.vpnTicket = cookie.split('=')[1].split(';')[0];
+                                this.log('成功从响应头获取VPN Ticket:', this.vpnTicket);
+                                return;
+                            }
+                        } else {
+                            // 非VPN模式 - 查找JSESSIONID
+                            if (typeof cookie === 'string' && cookie.includes('JSESSIONID=')) {
+                                this.sessionId = cookie.split('=')[1].split(';')[0];
+                                this.log('成功从响应头获取JSESSIONID:', this.sessionId);
+                                return;
+                            }
                         }
                     }
-                    this.log('响应头中没有JSESSIONID Cookie');
+                    this.log(`响应头中没有${useVpn ? 'VPN Ticket' : 'JSESSIONID'} Cookie`);
                 } else {
                     this.log('响应头中没有set-cookie字段');
                 }
 
                 // 如果没有Cookie，尝试从页面内容中提取
-                this.log('尝试从页面内容中提取JSESSIONID');
-                const content = response.data;
-                if (content && content.includes('jsessionid=')) {
-                    const match = content.match(/jsessionid=([^"&;]+)/i);
-                    if (match && match[1]) {
-                        this.sessionId = match[1];
-                        this.log('成功从页面内容获取JSESSIONID:', this.sessionId);
-                        return;
+                if (!useVpn) {
+                    // 非VPN模式才从页面内容中提取JSESSIONID
+                    this.log('尝试从页面内容中提取JSESSIONID');
+                    const content = response.data;
+                    if (content && content.includes('jsessionid=')) {
+                        const match = content.match(/jsessionid=([^"&;]+)/i);
+                        if (match && match[1]) {
+                            this.sessionId = match[1];
+                            this.log('成功从页面内容获取JSESSIONID:', this.sessionId);
+                            return;
+                        }
+                        this.log('页面内容中未找到jsessionid');
+                    } else {
+                        this.log('页面内容中不包含jsessionid');
                     }
-                    this.log('页面内容中未找到jsessionid');
-                } else {
-                    this.log('页面内容中不包含jsessionid');
                 }
 
-                this.error('无法获取JSESSIONID');
-                throw new Error('获取JSESSIONID失败');
+                // 没有找到必要的会话ID，抛出错误
+                this.error(`无法获取${useVpn ? 'VPN Ticket' : 'JSESSIONID'}`);
+                throw new Error(`获取${useVpn ? 'VPN Ticket' : 'JSESSIONID'}失败`);
             }
         } catch (error) {
-            this.error('初始化会话失败:', error, error.stack);
+            this.error('初始化会话失败:', error);
             throw error;
         }
     }
@@ -445,7 +570,20 @@ class CalendarService {
         try {
             this.log('开始获取智慧济大应用列表');
 
-            const url = 'http://one.ujn.edu.cn/up/up/appstore/applist/getBusinessAppsList';
+            // 检查VPN模式
+            const useVpn = authService.useVpn;
+            this.log(`VPN模式: ${useVpn ? '启用' : '禁用'}`);
+
+            // 构建URL
+            let url;
+            if (useVpn) {
+                // VPN模式下使用加密URL
+                const originalUrl = 'http://one.ujn.edu.cn/up/up/appstore/applist/getBusinessAppsList';
+                url = VpnEncodeUtils.encryptUrl(originalUrl);
+            } else {
+                url = 'http://one.ujn.edu.cn/up/up/appstore/applist/getBusinessAppsList';
+            }
+
             const data = {
                 mapping: 'getBusinessAppsList',
                 TYPE: '12',
@@ -459,11 +597,22 @@ class CalendarService {
             const headers = {
                 'Content-Type': 'application/json;charset=UTF-8',
                 'X-Requested-With': 'XMLHttpRequest',
-                'Referer': 'http://one.ujn.edu.cn/up/view?m=up'
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
             };
 
-            // 添加JSESSIONID Cookie（如果有）
-            if (this.sessionId) {
+            // 根据VPN模式设置相应的Referer和Host
+            if (useVpn) {
+                headers['Referer'] = 'https://webvpn.ujn.edu.cn/http/77726476706e69737468656265737421fff944d2323a661e7b0c9ce29b5b/up/view?m=up';
+                headers['Host'] = 'webvpn.ujn.edu.cn';
+            } else {
+                headers['Referer'] = 'http://one.ujn.edu.cn/up/view?m=up';
+            }
+
+            // 添加认证Cookie（根据VPN模式不同）
+            if (useVpn && this.vpnTicket) {
+                headers['Cookie'] = `wengine_vpn_ticketwebvpn_ujn_edu_cn=${this.vpnTicket}`;
+                this.log('添加VPN Ticket到请求头:', this.vpnTicket);
+            } else if (!useVpn && this.sessionId) {
                 headers['Cookie'] = `JSESSIONID=${this.sessionId}`;
                 this.log('添加JSESSIONID到请求头:', this.sessionId);
             }
@@ -471,29 +620,20 @@ class CalendarService {
             this.log('请求头:', headers);
             this.log('使用Cookie数量:', cookies.length);
 
+            // 发送请求
             const response = await ipc.ipassPost(url, data, {
                 headers: headers,
                 cookies: cookies
             });
 
+            // 处理响应
             this.log('收到响应, 状态:', response.success ? '成功' : '失败');
-            if (response.status) {
-                this.log('状态码:', response.status);
-            }
-            if (response.error) {
-                this.error('响应错误:', response.error);
-            }
-
-            // 打印响应体的前100个字符作为预览
-            if (response.data) {
-                const previewLength = Math.min(100, response.data.length);
-                this.log(`响应内容预览(前${previewLength}个字符):`, response.data.substring(0, previewLength));
-            }
 
             if (!response.success) {
-                throw new Error('获取应用列表失败: ' + (response.error || '未知错误'));
+                throw new Error('获取应用列表失败，请求不成功');
             }
 
+            // 尝试解析响应
             let appsList;
             try {
                 appsList = JSON.parse(response.data);
@@ -586,7 +726,20 @@ class CalendarService {
         try {
             this.log('获取校历详细信息, 资源ID:', resourceId);
 
-            const url = 'http://one.ujn.edu.cn/up/up/pim/showpim/getPimDetailInfoById';
+            // 检查VPN模式
+            const useVpn = authService.useVpn;
+            this.log(`VPN模式: ${useVpn ? '启用' : '禁用'}`);
+
+            // 构建URL
+            let url;
+            if (useVpn) {
+                // VPN模式下使用加密URL
+                const originalUrl = 'http://one.ujn.edu.cn/up/up/pim/showpim/getPimDetailInfoById';
+                url = VpnEncodeUtils.encryptUrl(originalUrl);
+            } else {
+                url = 'http://one.ujn.edu.cn/up/up/pim/showpim/getPimDetailInfoById';
+            }
+
             const data = {
                 RESOURCE_ID: resourceId
             };
@@ -598,11 +751,22 @@ class CalendarService {
             const headers = {
                 'Content-Type': 'application/json;charset=UTF-8',
                 'X-Requested-With': 'XMLHttpRequest',
-                'Referer': 'http://one.ujn.edu.cn/up/view?m=up'
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
             };
 
-            // 添加JSESSIONID Cookie（如果有）
-            if (this.sessionId) {
+            // 根据VPN模式设置相应的Referer和Host
+            if (useVpn) {
+                headers['Referer'] = 'https://webvpn.ujn.edu.cn/http/77726476706e69737468656265737421fff944d2323a661e7b0c9ce29b5b/up/view?m=up';
+                headers['Host'] = 'webvpn.ujn.edu.cn';
+            } else {
+                headers['Referer'] = 'http://one.ujn.edu.cn/up/view?m=up';
+            }
+
+            // 添加认证Cookie（根据VPN模式不同）
+            if (useVpn && this.vpnTicket) {
+                headers['Cookie'] = `wengine_vpn_ticketwebvpn_ujn_edu_cn=${this.vpnTicket}`;
+                this.log('添加VPN Ticket到请求头:', this.vpnTicket);
+            } else if (!useVpn && this.sessionId) {
                 headers['Cookie'] = `JSESSIONID=${this.sessionId}`;
                 this.log('添加JSESSIONID到请求头:', this.sessionId);
             }
@@ -610,29 +774,20 @@ class CalendarService {
             this.log('请求头:', headers);
             this.log('使用Cookie数量:', cookies.length);
 
+            // 发送请求
             const response = await ipc.ipassPost(url, data, {
                 headers: headers,
                 cookies: cookies
             });
 
+            // 处理响应
             this.log('收到响应, 状态:', response.success ? '成功' : '失败');
-            if (response.status) {
-                this.log('状态码:', response.status);
-            }
-            if (response.error) {
-                this.error('响应错误:', response.error);
-            }
-
-            // 打印响应体的前100个字符作为预览
-            if (response.data) {
-                const previewLength = Math.min(100, response.data.length);
-                this.log(`响应内容预览(前${previewLength}个字符):`, response.data.substring(0, previewLength));
-            }
 
             if (!response.success) {
-                throw new Error('获取校历详情失败: ' + (response.error || '未知错误'));
+                throw new Error('获取校历详情失败，请求不成功');
             }
 
+            // 尝试解析响应
             let calendarDetail;
             try {
                 calendarDetail = JSON.parse(response.data);
@@ -659,27 +814,51 @@ class CalendarService {
         try {
             this.log('获取校历内容, URL:', contentUrl);
 
+            // 检查VPN模式
+            const useVpn = authService.useVpn;
+            this.log(`VPN模式: ${useVpn ? '启用' : '禁用'}`);
+
             // 确保contentUrl是正确的路径
-            if (!contentUrl || !contentUrl.startsWith('uploadfiles/')) {
+            if (!contentUrl || (!contentUrl.startsWith('uploadfiles/') && !contentUrl.includes('/'))) {
                 this.error('无效的内容URL:', contentUrl);
                 throw new Error('无效的内容URL');
             }
 
-            const url = `http://one.ujn.edu.cn/up/${contentUrl}`;
+            // 构建完整URL
+            let fullUrl;
+            if (useVpn) {
+                // VPN模式下使用加密URL
+                const originalUrl = `http://one.ujn.edu.cn/up/${contentUrl}`;
+                fullUrl = VpnEncodeUtils.encryptUrl(originalUrl);
+            } else {
+                fullUrl = `http://one.ujn.edu.cn/up/${contentUrl}`;
+            }
+
             // 生成一个唯一的回调名称
             const callbackName = `jsonp_${Date.now()}`;
-            const fullUrl = `${url}?callback=${callbackName}`;
+            fullUrl = `${fullUrl}${fullUrl.includes('?') ? '&' : '?'}callback=${callbackName}`;
 
             this.log('完整请求URL:', fullUrl);
 
             // 设置请求头
             const headers = {
                 'X-Requested-With': 'XMLHttpRequest',
-                'Referer': 'http://one.ujn.edu.cn/up/view?m=up'
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
             };
 
-            // 添加JSESSIONID Cookie（如果有）
-            if (this.sessionId) {
+            // 根据VPN模式设置相应的Referer和Host
+            if (useVpn) {
+                headers['Referer'] = 'https://webvpn.ujn.edu.cn/http/77726476706e69737468656265737421fff944d2323a661e7b0c9ce29b5b/up/view?m=up';
+                headers['Host'] = 'webvpn.ujn.edu.cn';
+            } else {
+                headers['Referer'] = 'http://one.ujn.edu.cn/up/view?m=up';
+            }
+
+            // 添加认证Cookie（根据VPN模式不同）
+            if (useVpn && this.vpnTicket) {
+                headers['Cookie'] = `wengine_vpn_ticketwebvpn_ujn_edu_cn=${this.vpnTicket}`;
+                this.log('添加VPN Ticket到请求头:', this.vpnTicket);
+            } else if (!useVpn && this.sessionId) {
                 headers['Cookie'] = `JSESSIONID=${this.sessionId}`;
                 this.log('添加JSESSIONID到请求头:', this.sessionId);
             }
@@ -687,35 +866,34 @@ class CalendarService {
             this.log('请求头:', headers);
             this.log('使用Cookie数量:', cookies.length);
 
+            // 发送请求
             const response = await ipc.ipassGet(fullUrl, {
                 headers: headers,
                 cookies: cookies
             });
 
+            // 处理响应
             this.log('收到响应, 状态:', response.success ? '成功' : '失败');
-            if (response.status) {
-                this.log('状态码:', response.status);
-            }
-            if (response.error) {
-                this.error('响应错误:', response.error);
-            }
-
-            // 打印响应体的前100个字符作为预览
-            if (response.data) {
-                const previewLength = Math.min(100, response.data.length);
-                this.log(`响应内容预览(前${previewLength}个字符):`, response.data.substring(0, previewLength));
-            }
 
             if (!response.success) {
-                throw new Error('获取校历内容失败: ' + (response.error || '未知错误'));
+                throw new Error('获取校历内容失败，请求不成功');
             }
 
-            // 检查响应是否是预期的JSONP格式
-            if (!response.data || !response.data.includes(callbackName)) {
-                this.log(`响应内容不是预期的JSONP格式，完整内容:`, response.data);
-            } else {
-                this.log('成功获取校历JSONP内容，长度:', response.data.length);
+            // 检查响应是否是JSONP格式
+            if (!response.data) {
+                this.log('响应内容为空');
+                throw new Error('响应内容为空');
             }
+
+            // 修改验证逻辑，支持各种格式的JSONP回调
+            // 1. 检查是否包含我们请求的回调名称
+            // 2. 或者检查是否是任何jsonp_开头的回调
+            if (!response.data.includes(callbackName) && !response.data.match(/jsonp_\d+\s*\(/)) {
+                this.log(`响应内容不是JSONP格式，完整内容:`, response.data);
+                throw new Error('响应内容不是JSONP格式');
+            }
+
+            this.log('成功获取校历JSONP内容，长度:', response.data.length);
 
             // 返回原始的JSONP数据
             return response.data;
@@ -735,7 +913,8 @@ class CalendarService {
             this.log('开始从JSONP响应中提取HTML内容');
 
             // 从JSONP响应中提取JSON部分
-            const jsonMatch = jsonpData.match(/\(({.*})\)/);
+            // 改进正则表达式以匹配任何jsonp回调名称
+            const jsonMatch = jsonpData.match(/jsonp_\d+\s*\(({.*})\)/);
             if (!jsonMatch || jsonMatch.length < 2) {
                 this.log('无法从JSONP响应中提取JSON部分');
                 return '';

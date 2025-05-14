@@ -19,13 +19,18 @@ class ClassroomService {
      */
     async _getBaseUrl() {
         try {
-            // 如果已有缓存的baseUrl，直接返回
-            if (this.baseUrl) {
-                return this.baseUrl;
-            }
-
             // 从EASAccount获取当前使用的host
             if (authService.easAccount) {
+                // 检查是否处于VPN模式
+                const useVpn = authService.easAccount.useVpn || false;
+
+                if (useVpn) {
+                    // VPN模式下返回空字符串，后续会使用getFullUrl方法构建完整URL
+                    console.log('VPN模式下将使用动态构建URL');
+                    return ''; // 返回空字符串，表示后续需要使用easAccount.getFullUrl
+                }
+
+                // 非VPN模式，使用普通URL
                 const host = authService.easAccount.host;
                 if (host) {
                     const scheme = authService.easAccount.scheme || 'http';
@@ -78,13 +83,30 @@ class ClassroomService {
                 }
             }
 
+            // 检查VPN模式
+            const useVpn = authService.easAccount?.useVpn || false;
+            console.log(`当前VPN模式: ${useVpn ? '启用' : '禁用'}`);
+
             // 获取Cookie
             let cookies = [];
-            if (authService.easAccount && authService.easAccount.cookieJar) {
+            if (authService.easAccount) {
                 try {
-                    cookies = await authService.easAccount.cookieJar.getCookies();
+                    if (useVpn) {
+                        // 在VPN模式下，使用智慧济大的VPN Cookie
+                        const ipassAccount = authService.ipassAccount;
+                        if (ipassAccount && ipassAccount.vpnCookieJar) {
+                            cookies = await ipassAccount.vpnCookieJar.getCookies();
+                            console.log("使用VPN模式Cookie，Cookie数量:", cookies ? cookies.length : 0);
+                        }
+                    } else {
+                        // 非VPN模式使用教务系统Cookie
+                        if (authService.easAccount.cookieJar) {
+                            cookies = await authService.easAccount.cookieJar.getCookies();
+                            console.log("使用普通模式Cookie，Cookie数量:", cookies ? cookies.length : 0);
+                        }
+                    }
                 } catch (error) {
-                    console.error('从cookieJar获取Cookie失败:', error);
+                    console.error('获取Cookie失败:', error);
                     if (typeof authService.easAccount.getCookie === 'function') {
                         const cookieResult = authService.easAccount.getCookie();
                         if (Array.isArray(cookieResult) && cookieResult.length > 0) {
@@ -106,22 +128,38 @@ class ClassroomService {
             // 获取当前教务系统URL
             const baseUrl = await this._getBaseUrl();
 
-            // 构造请求URL
-            const requestUrl = `${baseUrl}/cdjy/cdjy_cxKxcdlb.html?doType=query&gnmkdm=N2155`;
+            // 构造请求URL - 使用正确的URL构建方式
+            let requestUrl;
+            if (useVpn && baseUrl === '') {
+                // VPN模式下使用getFullUrl方法
+                requestUrl = authService.easAccount.getFullUrl('jwglxt/cdjy/cdjy_cxKxcdlb.html?doType=query&gnmkdm=N2155');
+            } else {
+                // 非VPN模式下直接拼接
+                requestUrl = `${baseUrl}/jwglxt/cdjy/cdjy_cxKxcdlb.html?doType=query&gnmkdm=N2155`;
+            }
 
             console.log('请求URL:', requestUrl);
             console.log('请求参数:', params);
             console.log('Cookie数量:', cookies.length);
 
+            // 生成参考URL供Referer使用
+            let refererUrl;
+            if (useVpn && baseUrl === '') {
+                refererUrl = authService.easAccount.getFullUrl('xtgl/index_initMenu.html');
+            } else {
+                refererUrl = `${baseUrl}/xtgl/index_initMenu.html`;
+            }
+
             // 发送请求到教务系统
-            const response = await ipc.easPost(requestUrl, params, {
+            const response = await (useVpn ? ipc.ipassPost : ipc.easPost)(requestUrl, params, {
                 cookies: cookies,
                 headers: {
                     'Content-Type': 'application/x-www-form-urlencoded',
                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
                     'Accept': 'application/json, text/javascript, */*; q=0.01',
                     'X-Requested-With': 'XMLHttpRequest',
-                    'Referer': `${baseUrl}/xtgl/index_initMenu.html`
+                    'Referer': refererUrl,
+                    'Host': useVpn ? 'webvpn.ujn.edu.cn' : authService.easAccount?.host || 'jwgl.ujn.edu.cn'
                 }
             });
 
@@ -228,11 +266,28 @@ class ClassroomService {
                 }
             }
 
+            // 检查VPN模式
+            const useVpn = authService.easAccount?.useVpn || false;
+            console.log(`获取页面HTML - VPN模式: ${useVpn ? '启用' : '禁用'}`);
+
             // 获取Cookie
             let cookies = [];
-            if (authService.easAccount && authService.easAccount.cookieJar) {
+            if (authService.easAccount) {
                 try {
-                    cookies = await authService.easAccount.cookieJar.getCookies();
+                    if (useVpn) {
+                        // 在VPN模式下，使用智慧济大的VPN Cookie
+                        const ipassAccount = authService.ipassAccount;
+                        if (ipassAccount && ipassAccount.vpnCookieJar) {
+                            cookies = await ipassAccount.vpnCookieJar.getCookies();
+                            console.log("使用VPN模式Cookie，Cookie数量:", cookies ? cookies.length : 0);
+                        }
+                    } else {
+                        // 非VPN模式使用教务系统Cookie
+                        if (authService.easAccount.cookieJar) {
+                            cookies = await authService.easAccount.cookieJar.getCookies();
+                            console.log("使用普通模式Cookie，Cookie数量:", cookies ? cookies.length : 0);
+                        }
+                    }
                 } catch (error) {
                     console.error('从cookieJar获取Cookie失败:', error);
                     if (typeof authService.easAccount.getCookie === 'function') {
@@ -253,13 +308,31 @@ class ClassroomService {
             const baseUrl = await this._getBaseUrl();
 
             // 构造请求URL
-            const requestUrl = `${baseUrl}/cdjy/cdjy_cxKxcdlb.html?gnmkdm=N2155`;
+            let requestUrl;
+            if (useVpn && baseUrl === '') {
+                // VPN模式下使用getFullUrl方法
+                requestUrl = authService.easAccount.getFullUrl('jwglxt/cdjy/cdjy_cxKxcdlb.html?gnmkdm=N2155');
+            } else {
+                // 非VPN模式下直接拼接
+                requestUrl = `${baseUrl}/jwglxt/cdjy/cdjy_cxKxcdlb.html?gnmkdm=N2155`;
+            }
+
+            // 生成参考URL供Referer使用
+            let refererUrl;
+            if (useVpn && baseUrl === '') {
+                refererUrl = authService.easAccount.getFullUrl('xtgl/index_initMenu.html');
+            } else {
+                refererUrl = `${baseUrl}/xtgl/index_initMenu.html`;
+            }
 
             // 发送请求获取HTML页面
-            const response = await ipc.easGet(requestUrl, {
+            const response = await (useVpn ? ipc.ipassGet : ipc.easGet)(requestUrl, {
                 cookies: cookies,
                 headers: {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                    'Host': useVpn ? 'webvpn.ujn.edu.cn' : authService.easAccount?.host || 'jwgl.ujn.edu.cn',
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+                    'Referer': refererUrl
                 }
             });
 
@@ -437,13 +510,30 @@ class ClassroomService {
                 }
             }
 
+            // 检查VPN模式
+            const useVpn = authService.easAccount?.useVpn || false;
+            console.log(`获取教学楼 - VPN模式: ${useVpn ? '启用' : '禁用'}`);
+
             // 获取Cookie
             let cookies = [];
-            if (authService.easAccount && authService.easAccount.cookieJar) {
+            if (authService.easAccount) {
                 try {
-                    cookies = await authService.easAccount.cookieJar.getCookies();
+                    if (useVpn) {
+                        // 在VPN模式下，使用智慧济大的VPN Cookie
+                        const ipassAccount = authService.ipassAccount;
+                        if (ipassAccount && ipassAccount.vpnCookieJar) {
+                            cookies = await ipassAccount.vpnCookieJar.getCookies();
+                            console.log("使用VPN模式Cookie，Cookie数量:", cookies ? cookies.length : 0);
+                        }
+                    } else {
+                        // 非VPN模式使用教务系统Cookie
+                        if (authService.easAccount.cookieJar) {
+                            cookies = await authService.easAccount.cookieJar.getCookies();
+                            console.log("使用普通模式Cookie，Cookie数量:", cookies ? cookies.length : 0);
+                        }
+                    }
                 } catch (error) {
-                    console.error('从cookieJar获取Cookie失败:', error);
+                    console.error('获取Cookie失败:', error);
                     if (typeof authService.easAccount.getCookie === 'function') {
                         const cookieResult = authService.easAccount.getCookie();
                         if (Array.isArray(cookieResult) && cookieResult.length > 0) {
@@ -466,8 +556,23 @@ class ClassroomService {
             // 获取当前教务系统URL
             const baseUrl = await this._getBaseUrl();
 
-            // 构造请求URL - 修正为正确的接口
-            const requestUrl = `${baseUrl}/cdjy/cdjy_cxXqjc.html?gnmkdm=N2155`;
+            // 构造请求URL
+            let requestUrl;
+            if (useVpn && baseUrl === '') {
+                // VPN模式下使用getFullUrl方法
+                requestUrl = authService.easAccount.getFullUrl('jwglxt/cdjy/cdjy_cxXqjc.html?gnmkdm=N2155');
+            } else {
+                // 非VPN模式下直接拼接
+                requestUrl = `${baseUrl}/jwglxt/cdjy/cdjy_cxXqjc.html?gnmkdm=N2155`;
+            }
+
+            // 生成参考URL供Referer使用
+            let refererUrl;
+            if (useVpn && baseUrl === '') {
+                refererUrl = authService.easAccount.getFullUrl('jwglxt/cdjy/cdjy_cxKxcdlb.html?gnmkdm=N2155');
+            } else {
+                refererUrl = `${baseUrl}/jwglxt/cdjy/cdjy_cxKxcdlb.html?gnmkdm=N2155`;
+            }
 
             // 构造请求参数
             const params = {
@@ -477,14 +582,15 @@ class ClassroomService {
             console.log(`请求校区 ${campusId} 的教学楼数据, URL:`, requestUrl);
 
             // 发送请求获取教学楼数据
-            const response = await ipc.easPost(requestUrl, params, {
+            const response = await (useVpn ? ipc.ipassPost : ipc.easPost)(requestUrl, params, {
                 cookies: cookies,
                 headers: {
                     'Content-Type': 'application/x-www-form-urlencoded',
                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
                     'Accept': 'application/json, text/javascript, */*; q=0.01',
                     'X-Requested-With': 'XMLHttpRequest',
-                    'Referer': `${baseUrl}/cdjy/cdjy_cxKxcdlb.html?gnmkdm=N2155`
+                    'Referer': refererUrl,
+                    'Host': useVpn ? 'webvpn.ujn.edu.cn' : authService.easAccount?.host || 'jwgl.ujn.edu.cn'
                 }
             });
 
@@ -504,7 +610,7 @@ class ClassroomService {
                         // 添加"全部"选项
                         options.unshift({ value: '', label: '全部' });
 
-                        console.log(`成功获取 ${options.length-1} 个教学楼数据`);
+                        console.log(`成功获取 ${options.length-1} 个教学楼选项`);
                         return {
                             success: true,
                             data: options
@@ -606,13 +712,30 @@ class ClassroomService {
                 }
             }
 
+            // 检查VPN模式
+            const useVpn = authService.easAccount?.useVpn || false;
+            console.log(`获取场地类别 - VPN模式: ${useVpn ? '启用' : '禁用'}`);
+
             // 获取Cookie
             let cookies = [];
-            if (authService.easAccount && authService.easAccount.cookieJar) {
+            if (authService.easAccount) {
                 try {
-                    cookies = await authService.easAccount.cookieJar.getCookies();
+                    if (useVpn) {
+                        // 在VPN模式下，使用智慧济大的VPN Cookie
+                        const ipassAccount = authService.ipassAccount;
+                        if (ipassAccount && ipassAccount.vpnCookieJar) {
+                            cookies = await ipassAccount.vpnCookieJar.getCookies();
+                            console.log("使用VPN模式Cookie，Cookie数量:", cookies ? cookies.length : 0);
+                        }
+                    } else {
+                        // 非VPN模式使用教务系统Cookie
+                        if (authService.easAccount.cookieJar) {
+                            cookies = await authService.easAccount.cookieJar.getCookies();
+                            console.log("使用普通模式Cookie，Cookie数量:", cookies ? cookies.length : 0);
+                        }
+                    }
                 } catch (error) {
-                    console.error('从cookieJar获取Cookie失败:', error);
+                    console.error('获取Cookie失败:', error);
                     if (typeof authService.easAccount.getCookie === 'function') {
                         const cookieResult = authService.easAccount.getCookie();
                         if (Array.isArray(cookieResult) && cookieResult.length > 0) {
@@ -664,7 +787,6 @@ class ClassroomService {
             };
         }
     }
-
     /**
      * 获取默认学年学期列表
      * @private
