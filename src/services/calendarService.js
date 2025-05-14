@@ -319,7 +319,14 @@ class CalendarService {
                 this.log('步骤3: 从应用列表中找到校历应用');
                 const calendarApp = this.findCalendarApp(appsList);
                 if (!calendarApp) {
-                    throw new Error('找不到校历应用');
+                    // 检查应用列表长度，判断是否可能是未登录导致的
+                    if (appsList.length === 0) {
+                        const loginError = new Error('NOT_LOGGED_IN:未登录或会话已过期，请先登录智慧济大');
+                        loginError.isLoginError = true;
+                        throw loginError;
+                    } else {
+                        throw new Error('找不到校历应用');
+                    }
                 }
                 this.log('找到校历应用:', calendarApp);
 
@@ -381,6 +388,10 @@ class CalendarService {
                 this.log('校历数据获取成功');
                 return result;
             } catch (error) {
+                // 检查是否是登录错误，如果是则保持原样传递
+                if (error.isLoginError) {
+                    throw error;
+                }
                 throw error;
             }
         } catch (error) {
@@ -440,6 +451,19 @@ class CalendarService {
             }
             if (response.error) {
                 this.error('响应错误:', response.error);
+            }
+
+            // 检查是否是重定向到登录页面
+            if (response.status === 302) {
+                const location = response.headers?.location || '';
+                this.log('重定向地址:', location);
+
+                if (location.includes('tpass/login') || location.includes('sso.ujn.edu.cn')) {
+                    this.log('检测到重定向到登录页面，用户未登录');
+                    const loginError = new Error('NOT_LOGGED_IN:未登录或会话已过期，请先登录智慧济大');
+                    loginError.isLoginError = true;
+                    throw loginError;
+                }
             }
 
             // 保存新的Cookie
@@ -551,13 +575,34 @@ class CalendarService {
                     }
                 }
 
+                // 最后检查一次响应数据是否包含登录页面特征
+                if (response.data && typeof response.data === 'string') {
+                    if (response.data.includes('sso.ujn.edu.cn') ||
+                        response.data.includes('tpass/login') ||
+                        response.data.includes('登录')) {
+                        this.log('响应内容包含登录页面特征，用户未登录');
+                        const loginError = new Error('NOT_LOGGED_IN:未登录或会话已过期，请先登录智慧济大');
+                        loginError.isLoginError = true;
+                        throw loginError;
+                    }
+                }
+
                 // 没有找到必要的会话ID，抛出错误
                 this.error(`无法获取${useVpn ? 'VPN Ticket' : 'JSESSIONID'}`);
-                throw new Error(`获取${useVpn ? 'VPN Ticket' : 'JSESSIONID'}失败`);
+                throw new Error('NOT_LOGGED_IN:未登录或会话已过期，请先登录智慧济大');
             }
         } catch (error) {
             this.error('初始化会话失败:', error);
-            throw error;
+
+            // 如果是登录错误，直接传递
+            if (error.isLoginError) {
+                throw error;
+            }
+
+            // 其他错误也转换为登录错误
+            const loginError = new Error('NOT_LOGGED_IN:未登录或会话已过期，请先登录智慧济大');
+            loginError.isLoginError = true;
+            throw loginError;
         }
     }
 
@@ -633,19 +678,55 @@ class CalendarService {
                 throw new Error('获取应用列表失败，请求不成功');
             }
 
+            // 检查响应中是否包含登录页面信息
+            if (response.data && typeof response.data === 'string') {
+                if (response.data.includes('sso.ujn.edu.cn') ||
+                    response.data.includes('tpass/login') ||
+                    response.data.includes('登录')) {
+                    this.log('响应内容包含登录页面特征，用户未登录');
+                    const loginError = new Error('NOT_LOGGED_IN:未登录或会话已过期，请先登录智慧济大');
+                    loginError.isLoginError = true;
+                    throw loginError;
+                }
+            }
+
             // 尝试解析响应
             let appsList;
             try {
                 appsList = JSON.parse(response.data);
                 this.log(`解析成功，获取到${appsList.length}个应用`);
+
+                // 如果解析成功但应用列表为空，可能是登录问题
+                if (Array.isArray(appsList) && appsList.length === 0) {
+                    this.log('成功解析但应用列表为空，可能是未登录状态');
+                    const loginError = new Error('NOT_LOGGED_IN:未登录或会话已过期，请先登录智慧济大');
+                    loginError.isLoginError = true;
+                    throw loginError;
+                }
             } catch (e) {
                 this.error('解析应用列表失败:', e);
+
+                // 检查是否因为未登录而无法解析JSON
+                if (response.data && typeof response.data === 'string' &&
+                    (response.data.includes('<html') || response.data.includes('<!DOCTYPE'))) {
+                    this.log('返回的是HTML而不是JSON，可能是未登录状态');
+                    const loginError = new Error('NOT_LOGGED_IN:未登录或会话已过期，请先登录智慧济大');
+                    loginError.isLoginError = true;
+                    throw loginError;
+                }
+
                 throw new Error('解析应用列表失败: ' + e.message);
             }
 
             return appsList;
         } catch (error) {
             this.error('获取智慧济大应用列表失败:', error);
+
+            // 如果是登录错误，直接传递
+            if (error.isLoginError) {
+                throw error;
+            }
+
             throw error;
         }
     }
@@ -664,6 +745,12 @@ class CalendarService {
         }
 
         this.log(`应用列表包含${appsList.length}个应用`);
+
+        // 检查应用列表是否为空，可能是未登录导致的
+        if (appsList.length === 0) {
+            this.log('应用列表为空，可能是未登录导致的');
+            return null;
+        }
 
         // 先查找名称为"校历"的应用
         let calendarApp = appsList.find(app => app.APP_NAME === '校历');

@@ -44,15 +44,37 @@
 
     <!-- 错误状态 -->
     <div v-else-if="error" class="error-container">
-      <div class="error-icon">
-        <el-icon><WarningFilled /></el-icon>
+      <!-- 未登录错误 -->
+      <div v-if="isLoginError" class="login-error">
+        <div class="error-icon">
+          <el-icon><Lock /></el-icon>
+        </div>
+        <div class="error-content">
+          <h3 class="error-title">需要登录</h3>
+          <p class="error-message">{{ error }}</p>
+          <div class="error-buttons">
+            <el-button type="primary" @click="goToLogin" class="login-button">
+              <el-icon><Key /></el-icon> 去登录
+            </el-button>
+            <el-button @click="refreshCalendar" class="retry-button">
+              <el-icon><RefreshRight /></el-icon> 重试
+            </el-button>
+          </div>
+        </div>
       </div>
-      <div class="error-content">
-        <h3 class="error-title">数据加载失败</h3>
-        <p class="error-message">{{ error }}</p>
-        <el-button type="danger" @click="refreshCalendar" class="error-button" round>
-          <el-icon><RefreshRight /></el-icon> 重新获取
-        </el-button>
+
+      <!-- 普通错误 -->
+      <div v-else class="general-error">
+        <div class="error-icon">
+          <el-icon><WarningFilled /></el-icon>
+        </div>
+        <div class="error-content">
+          <h3 class="error-title">数据加载失败</h3>
+          <p class="error-message">{{ error }}</p>
+          <el-button type="danger" @click="refreshCalendar" class="error-button" round>
+            <el-icon><RefreshRight /></el-icon> 重新获取
+          </el-button>
+        </div>
       </div>
     </div>
 
@@ -212,6 +234,7 @@
 
 <script setup>
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
+import { useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import {
   Refresh,
@@ -227,10 +250,16 @@ import {
   WarningFilled,
   InfoFilled,
   Grid,
-  Filter
+  Filter,
+  Lock,
+  Key
 } from '@element-plus/icons-vue';
 import calendarService from '@/services/calendarService';
 import store from '@/utils/store';
+import authService from '@/services/authService';
+
+// 获取路由器实例
+const router = useRouter();
 
 // 状态变量
 const loading = ref(true);
@@ -240,6 +269,7 @@ const updateTime = ref(null);
 const currentWeek = ref(1);
 const activeTabName = ref('table');
 const isDarkMode = ref(false);
+const isLoginError = ref(false); // 添加标识登录错误的变量
 const filters = ref({
   holiday: true,
   exam: true,
@@ -498,11 +528,19 @@ const showMessage = (message, type = 'info', duration = 3000) => {
   });
 };
 
+// 跳转到登录页面的方法
+const goToLogin = () => {
+  // 校历数据来自智慧济大，所以跳转到智慧济大登录页面
+  router.push('/login/ipass');
+}
+
+
 // 刷新校历数据
 const refreshCalendar = async () => {
   try {
     loading.value = true;
     error.value = null;
+    isLoginError.value = false; // 重置登录错误状态
 
     // 从服务获取校历数据
     const data = await calendarService.getCalendarData(true);
@@ -518,8 +556,16 @@ const refreshCalendar = async () => {
     showMessage('校历数据已更新', 'success');
   } catch (err) {
     console.error('刷新校历失败:', err);
-    error.value = '获取校历数据失败: ' + (err.message || '未知错误');
-    showMessage('获取校历数据失败，请稍后再试', 'error');
+
+    // 检查是否是登录错误
+    if (err.message && err.message.startsWith('NOT_LOGGED_IN:')) {
+      isLoginError.value = true;
+      error.value = err.message.replace('NOT_LOGGED_IN:', '');
+      showMessage('需要登录才能查看校历', 'warning');
+    } else {
+      error.value = '获取校历数据失败: ' + (err.message || '未知错误');
+      showMessage('获取校历数据失败，请稍后再试', 'error');
+    }
   } finally {
     loading.value = false;
   }
@@ -890,6 +936,65 @@ onBeforeUnmount(() => {
 @keyframes pulse {
   0%, 100% { opacity: 0.5; }
   50% { opacity: 1; }
+}
+
+/* 登录错误样式 */
+.login-error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  animation: fadeInUp 0.6s ease-out;
+}
+
+.login-error .error-icon {
+  color: var(--app-primary-color);
+  animation: pulse 2s ease infinite;
+}
+
+.error-buttons {
+  display: flex;
+  gap: 12px;
+  margin-top: 20px;
+}
+
+.login-button {
+  font-weight: 600;
+  padding: 10px 24px;
+  background-color: var(--app-primary-color);
+  border-color: var(--app-primary-color);
+  box-shadow: 0 4px 12px rgba(92, 108, 255, 0.3);
+  transition: all 0.3s;
+}
+
+.login-button:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 6px 16px rgba(92, 108, 255, 0.4);
+}
+
+.retry-button {
+  font-weight: 500;
+  padding: 10px 24px;
+}
+
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes pulse {
+  0%, 100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.1);
+  }
 }
 
 /* 错误状态 */
