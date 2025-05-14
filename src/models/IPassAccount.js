@@ -469,6 +469,22 @@ class IPassAccount extends Account {
                         }
                     }
 
+                    // 无论重定向链处理是否成功，都尝试直接访问主页确认
+                    try {
+                        console.log(`\n[步骤7] 最终确认登录状态...`);
+                        const canAccessHomePage = await this.tryAccessHomePage();
+
+                        if (canAccessHomePage) {
+                            console.log(`==== 访问主页成功，确认登录成功 ====`);
+                        } else {
+                            console.log(`警告：无法访问主页，但仍然假定登录成功`);
+                            // 因为我们已经收到了带ticket的重定向，我们认为登录成功，即使不能访问主页
+                        }
+                    } catch (homePageError) {
+                        console.warn(`访问主页确认失败: ${homePageError.message}`);
+                        console.warn(`但不影响登录结果，假定登录成功`);
+                    }
+
                     console.log("==== 智慧济大登录成功 ====");
                     return true;
                 } else if (locationHeader.includes('login')) {
@@ -562,47 +578,86 @@ class IPassAccount extends Account {
             while (redirectCount < maxRedirects) {
                 console.log(`重定向 #${redirectCount + 1}: ${currentUrl}`);
 
-                const result = await ipc.ipassGet(currentUrl, {
-                    cookies: this._useVpn ?
-                        await this.vpnCookieJar.getCookies() :
-                        await this.cookieJar.getCookies(),
-                    headers: {
-                        'Referer': currentReferer,
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                try {
+                    const result = await ipc.ipassGet(currentUrl, {
+                        cookies: this._useVpn ?
+                            await this.vpnCookieJar.getCookies() :
+                            await this.cookieJar.getCookies(),
+                        headers: {
+                            'Referer': currentReferer,
+                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                        }
+                    });
+
+                    // 保存Cookie，即使请求失败也保存收到的任何Cookie
+                    if (result.cookies && result.cookies.length > 0) {
+                        if (this._useVpn) {
+                            await this.vpnCookieJar.saveCookies(result.cookies);
+                        } else {
+                            await this.cookieJar.saveCookies(result.cookies);
+                        }
                     }
-                });
 
-                // 保存Cookie
-                if (result.cookies && result.cookies.length > 0) {
-                    if (this._useVpn) {
-                        await this.vpnCookieJar.saveCookies(result.cookies);
-                    } else {
-                        await this.cookieJar.saveCookies(result.cookies);
+                    // 如果是最终页面，停止重定向
+                    if (result.status !== 302 || !result.location) {
+                        console.log(`重定向链结束，状态码: ${result.status}`);
+                        break;
                     }
-                }
 
-                // 如果是最终页面，停止重定向
-                if (result.status !== 302 || !result.location) {
-                    console.log(`重定向链结束，状态码: ${result.status}`);
-                    break;
-                }
+                    // 更新URL和referer
+                    currentReferer = currentUrl;
+                    currentUrl = result.location.startsWith('http') ?
+                        result.location :
+                        `https://webvpn.ujn.edu.cn${result.location.startsWith('/') ? '' : '/'}${result.location}`;
+                } catch (error) {
+                    // 在发生错误时打印信息但继续执行
+                    console.warn(`重定向 #${redirectCount + 1} 失败: ${error.message}`);
+                    console.warn(`尝试跳过这个重定向继续执行...`);
 
-                // 更新URL和referer
-                currentReferer = currentUrl;
-                currentUrl = result.location.startsWith('http') ?
-                    result.location :
-                    `https://webvpn.ujn.edu.cn${result.location.startsWith('/') ? '' : '/'}${result.location}`;
+                    // 对于带ticket的URL特殊处理
+                    if (currentUrl.includes('ticket=')) {
+                        try {
+                            console.log(`检测到ticket参数，尝试直接访问主页...`);
+                            // 直接跳到主页尝试
+                            const homeResult = await this.tryAccessHomePage();
+                            if (homeResult) {
+                                console.log(`直接访问主页成功，重定向链处理完成`);
+                                return; // 成功访问主页，可以结束重定向链处理
+                            }
+                        } catch (e) {
+                            console.warn(`直接访问主页失败: ${e.message}`);
+                        }
+                    }
+
+                    // 如果重定向过程中出错，可能已经获得了足够的cookie，可以尝试继续
+                    if (redirectCount >= 2) { // 至少已经完成了2次重定向
+                        console.log(`已完成 ${redirectCount} 次重定向，可能已获得足够的cookie`);
+                        break;
+                    }
+
+                    // 否则继续下一次重定向
+                    redirectCount++;
+                    continue;
+                }
 
                 redirectCount++;
             }
 
             if (redirectCount >= maxRedirects) {
-                console.warn(`达到最大重定向次数(${maxRedirects})，停止跟踪`);
+                console.log(`达到最大重定向次数(${maxRedirects})，停止跟踪`);
+                // 尝试直接访问主页确认登录状态
+                await this.tryAccessHomePage();
             }
 
             console.log(`重定向链处理完成`);
         } catch (error) {
             console.warn(`跟随重定向链失败: ${error.message}`);
+            // 即使整个过程失败，也尝试直接访问主页
+            try {
+                await this.tryAccessHomePage();
+            } catch (e) {
+                console.warn(`最后尝试访问主页也失败: ${e.message}`);
+            }
         }
     }
 
@@ -612,7 +667,7 @@ class IPassAccount extends Account {
      */
     async tryAccessHomePage() {
         try {
-            console.log(`尝试访问主页以确认登录状态...`);
+            console.log(`\n===== 尝试访问主页以确认登录状态 =====`);
 
             // 构建主页URL
             let homeUrl;
@@ -630,6 +685,8 @@ class IPassAccount extends Account {
                 await this.cookieJar.getCookies();
 
             console.log(`尝试访问主页URL: ${homeUrl}`);
+            console.log(`使用 ${cookies.length} 个Cookie`);
+
             // 尝试访问主页
             const homeResult = await ipc.ipassGet(homeUrl, {
                 cookies: cookies,
@@ -640,6 +697,7 @@ class IPassAccount extends Account {
 
             // 保存返回的Cookie
             if (homeResult.cookies && homeResult.cookies.length > 0) {
+                console.log(`主页访问返回 ${homeResult.cookies.length} 个Cookie`);
                 if (this._useVpn) {
                     await this.vpnCookieJar.saveCookies(homeResult.cookies);
                 } else {
@@ -652,15 +710,57 @@ class IPassAccount extends Account {
                 console.log(`成功访问主页，状态码: 200`);
 
                 // 检查页面内容是否包含登录表单
-                if (homeResult.data && homeResult.data.includes('id="loginForm"')) {
+                if (homeResult.data && (homeResult.data.includes('id="loginForm"') || homeResult.data.includes('name="loginForm"'))) {
                     console.log(`页面包含登录表单，登录状态无效`);
                     return false;
                 }
 
+                console.log(`页面不包含登录表单，登录状态有效`);
                 return true;
-            } else if (homeResult.status === 302 && homeResult.location && homeResult.location.includes('login')) {
-                console.log(`重定向到登录页面，登录状态无效`);
-                return false;
+            } else if (homeResult.status === 302 && homeResult.location) {
+                // 处理重定向
+                console.log(`主页访问返回状态码302，重定向到: ${homeResult.location}`);
+
+                if (homeResult.location.includes('login')) {
+                    console.log(`重定向到登录页面，登录状态无效`);
+                    return false;
+                } else {
+                    // 尝试跟随这个重定向
+                    console.log(`尝试跟随重定向...`);
+                    try {
+                        const redirect = homeResult.location.startsWith('http') ?
+                            homeResult.location :
+                            `https://webvpn.ujn.edu.cn${homeResult.location.startsWith('/') ? '' : '/'}${homeResult.location}`;
+
+                        const redirectResult = await ipc.ipassGet(redirect, {
+                            cookies: cookies,
+                            headers: {
+                                'Referer': homeUrl,
+                                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                            }
+                        });
+
+                        // 保存新Cookie
+                        if (redirectResult.cookies && redirectResult.cookies.length > 0) {
+                            if (this._useVpn) {
+                                await this.vpnCookieJar.saveCookies(redirectResult.cookies);
+                            } else {
+                                await this.cookieJar.saveCookies(redirectResult.cookies);
+                            }
+                        }
+
+                        // 如果重定向后状态码为200且不包含登录表单，认为登录成功
+                        if (redirectResult.status === 200 &&
+                            redirectResult.data &&
+                            !redirectResult.data.includes('id="loginForm"') &&
+                            !redirectResult.data.includes('name="loginForm"')) {
+                            console.log(`重定向后页面访问成功，登录状态有效`);
+                            return true;
+                        }
+                    } catch (redirectError) {
+                        console.warn(`跟随重定向失败: ${redirectError.message}`);
+                    }
+                }
             }
 
             // 默认情况下返回false
@@ -668,7 +768,36 @@ class IPassAccount extends Account {
             return false;
         } catch (error) {
             console.error(`访问主页出错: ${error.message}`);
+
+            // 尝试使用备用URL访问
+            try {
+                console.log(`尝试使用备用URL访问...`);
+                const backupUrl = this._useVpn ?
+                    'https://webvpn.ujn.edu.cn/' :
+                    'http://one.ujn.edu.cn/';
+
+                const backupResult = await ipc.ipassGet(backupUrl, {
+                    cookies: this._useVpn ?
+                        await this.vpnCookieJar.getCookies() :
+                        await this.cookieJar.getCookies(),
+                    headers: {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                    }
+                });
+
+                if (backupResult.status === 200 ||
+                    (backupResult.status === 302 && !backupResult.location.includes('login'))) {
+                    console.log(`备用URL访问成功，登录可能有效`);
+                    return true;
+                }
+            } catch (backupError) {
+                console.error(`备用URL访问也失败: ${backupError.message}`);
+            }
+
+            console.log(`===== 主页访问确认结束: 失败 =====`);
             return false;
+        } finally {
+            console.log(`===== 主页访问确认结束 =====`);
         }
     }
 

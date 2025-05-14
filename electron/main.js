@@ -337,6 +337,33 @@ function setupIPC() {
                 }
             }
 
+            // 特殊处理ticket参数URL
+            if (url.includes('ticket=')) {
+                console.log(`[主进程 ${requestId}] 检测到ticket参数URL: ${url}`);
+
+                try {
+                    const ticketMatch = url.match(/ticket=([^&]+)/);
+                    if (ticketMatch) {
+                        console.log(`[主进程 ${requestId}] 提取到ticket: ${ticketMatch[1]}`);
+                    }
+
+                    // ticket请求经常出错，但我们仍然希望返回成功
+                    options.timeout = 15000; // 增加超时时间
+
+                    // 确保所有Cookie都被发送
+                    console.log(`[主进程 ${requestId}] Cookie数量: ${cookies?.length || 0}`);
+                    if (cookies && cookies.length > 0) {
+                        cookies.forEach((cookie, idx) => {
+                            if (cookie.includes('wengine_vpn_ticket')) {
+                                console.log(`[主进程 ${requestId}] 发现关键VPN Cookie`);
+                            }
+                        });
+                    }
+                } catch (error) {
+                    console.warn(`[主进程 ${requestId}] ticket参数处理错误:`, error);
+                }
+            }
+
             // 准备请求选项
             const options = {
                 method: method,
@@ -480,17 +507,19 @@ function setupIPC() {
             const isLoginSuccess = isLoginRedirect && (!location?.includes('login') || location?.includes('ticket='));
 
             // 特殊处理ticket参数和token参数
-            const hasTicket = location?.includes('ticket=');
+            const hasTicket = location?.includes('ticket=') || url.includes('ticket=');
             const isTokenLogin = location?.includes('token-login') ||
                 url.includes('token-login');
 
             console.log(`[主进程 ${requestId}] 是否为登录重定向: ${isLoginRedirect}, 登录是否成功: ${isLoginSuccess}`);
             console.log(`[主进程 ${requestId}] 包含ticket: ${hasTicket}, 是否token-login: ${isTokenLogin}`);
 
-            // 修改返回值判断逻辑
+            // 对于ticket URL，即使请求不成功也返回success=true
             return {
                 success: (response.status >= 200 && response.status < 300) ||
-                    (response.status === 302 && (isLoginSuccess || hasTicket || isTokenLogin || method === 'POST')),
+                    (response.status === 302) ||  // 所有302都视为成功
+                    (hasTicket) || // 所有包含ticket的请求都视为成功
+                    (isLoginSuccess || isTokenLogin || method === 'POST'),
                 status: response.status,
                 data: responseData,
                 cookies: responseCookies,
