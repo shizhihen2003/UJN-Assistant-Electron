@@ -187,7 +187,7 @@ class CookieJar {
     }
 
     /**
-     * 保存Cookie字符串数组 - 增强版
+     * 保存Cookie字符串数组 - 增强版，处理跨域问题
      * @param {Array<string>} cookies Cookie字符串数组
      */
     async saveCookies(cookies) {
@@ -205,24 +205,89 @@ class CookieJar {
                 try {
                     console.log(`处理Cookie: ${cookieStr}`);
 
-                    // 解析Cookie
-                    const newCookie = this.parseCookie(cookieStr);
-                    console.log(`解析后的Cookie对象:`, newCookie);
+                    // 解析Cookie字符串获取基本信息
+                    const cookieParts = cookieStr.split(';');
+                    const mainPart = cookieParts[0].trim().split('=');
+
+                    if (mainPart.length < 2) {
+                        console.warn(`无效的Cookie格式: ${cookieStr}`);
+                        continue;
+                    }
+
+                    const name = mainPart[0].trim();
+                    const value = mainPart.slice(1).join('=').trim();
+
+                    // 确定Cookie的域和路径
+                    let domain = this.host; // 默认使用当前主机
+                    let path = '/';
+                    let httpOnly = false;
+                    let expires = null;
+
+                    // 从Cookie字符串中提取属性
+                    for (let i = 1; i < cookieParts.length; i++) {
+                        const part = cookieParts[i].trim();
+                        if (!part) continue;
+
+                        if (part.toLowerCase().includes('domain=')) {
+                            const domainMatch = part.match(/domain=([^;]+)/i);
+                            if (domainMatch) domain = domainMatch[1].trim();
+                        } else if (part.toLowerCase().includes('path=')) {
+                            const pathMatch = part.match(/path=([^;]+)/i);
+                            if (pathMatch) path = pathMatch[1].trim();
+                        } else if (part.toLowerCase() === 'httponly') {
+                            httpOnly = true;
+                        } else if (part.toLowerCase().includes('expires=')) {
+                            const expiresMatch = part.match(/expires=([^;]+)/i);
+                            if (expiresMatch) {
+                                try {
+                                    expires = new Date(expiresMatch[1].trim());
+                                } catch (e) {
+                                    console.warn(`解析Cookie过期时间失败: ${expiresMatch[1]}`);
+                                }
+                            }
+                        }
+                    }
+
+                    // 特殊处理：使用路径来确定域
+                    // 关键修复：检测主系统Cookie
+                    if (name === 'JSESSIONID' && path === '/up') {
+                        domain = 'one.ujn.edu.cn';
+                        console.log(`指定JSESSIONID Cookie域为: one.ujn.edu.cn，路径: ${path}`);
+                    }
+
+                    // 创建Cookie对象
+                    const cookie = {
+                        name,
+                        value,
+                        domain,
+                        path,
+                        expires,
+                        httpOnly
+                    };
+
+                    console.log(`解析后的Cookie对象:`, {
+                        name: cookie.name,
+                        value: cookie.value.substring(0, 10) + '...',
+                        domain: cookie.domain,
+                        path: cookie.path,
+                        expires: cookie.expires ? cookie.expires.toISOString() : null,
+                        httpOnly: cookie.httpOnly
+                    });
 
                     // 查找是否已存在同名Cookie
                     const existingIndex = this.cookiesList.findIndex(c =>
-                        c.name === newCookie.name &&
-                        c.domain === newCookie.domain &&
-                        c.path === newCookie.path
+                        c.name === cookie.name &&
+                        c.domain === cookie.domain &&
+                        c.path === cookie.path
                     );
 
                     // 替换或添加新Cookie
                     if (existingIndex !== -1) {
-                        console.log(`替换已存在的Cookie: ${newCookie.name}`);
-                        this.cookiesList[existingIndex] = newCookie;
+                        console.log(`替换已存在的Cookie: ${cookie.name} (${cookie.domain})`);
+                        this.cookiesList[existingIndex] = cookie;
                     } else {
-                        console.log(`添加新Cookie: ${newCookie.name}`);
-                        this.cookiesList.push(newCookie);
+                        console.log(`添加新Cookie: ${cookie.name} (${cookie.domain})`);
+                        this.cookiesList.push(cookie);
                     }
                 } catch (e) {
                     console.error(`解析Cookie失败 (${this.cookieName})`, e, cookieStr);
@@ -245,10 +310,9 @@ class CookieJar {
             // 打印当前所有保存的Cookie
             console.log(`当前保存的所有Cookie:`, this.cookiesList.map(c => ({
                 name: c.name,
-                value: c.value.length > 20 ? c.value.substring(0, 20) + '...' : c.value,
                 domain: c.domain,
                 path: c.path,
-                expires: c.expires ? c.expires.toISOString() : null
+                value: c.value.substring(0, 10) + '...'
             })));
         } catch (error) {
             console.error(`保存Cookie失败 (${this.cookieName})`, error);

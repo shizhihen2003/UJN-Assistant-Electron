@@ -186,8 +186,9 @@ class IPassAccount extends Account {
                 loginPageUrl = VpnEncodeUtils.encryptUrl(fullUrl);
                 console.log(`VPN模式登录URL: ${loginPageUrl}`);
             } else {
-                // 非VPN模式，使用普通URL
-                loginPageUrl = `${this.scheme}://${this.host}/tpass/login`;
+                // 非VPN模式，也添加正确的service参数
+                const serviceParam = "?service=http%3A%2F%2Fone.ujn.edu.cn%2Fup%2Fview%3Fm%3Dup";
+                loginPageUrl = `${this.scheme}://${this.host}/tpass/login${serviceParam}`;
                 console.log(`普通模式登录URL: ${loginPageUrl}`);
             }
 
@@ -300,8 +301,9 @@ class IPassAccount extends Account {
                 const locationHeader = loginResult.location || '';
                 console.log(`接收到重定向URL: ${locationHeader}`);
 
-                // 修改判断条件：如果URL包含ticket参数，则视为登录成功
+                // 修改判断条件
                 const hasTicket = locationHeader.includes('ticket=');
+                const isOneUjnRedirect = locationHeader.includes('one.ujn.edu.cn/up');
 
                 if (hasTicket) {
                     console.log(`登录成功，重定向URL包含ticket参数`);
@@ -452,20 +454,80 @@ class IPassAccount extends Account {
                             await this.tryAccessHomePage();
                         }
                     } else {
-                        // 非VPN模式下的重定向处理
+                        // 非VPN模式下的重定向处理 - 修改关键部分
                         try {
                             console.log(`\n[步骤6] 处理非VPN重定向...`);
 
-                            // 跟随重定向
-                            await ipc.ipassGet(locationHeader, {
+                            // 跟随第一次重定向
+                            const redirect1Result = await ipc.ipassGet(locationHeader, {
                                 cookies: await this.cookieJar.getCookies(),
                                 headers: {
                                     'Referer': loginPageUrl,
                                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
                                 }
                             });
+
+                            // 保存重定向返回的Cookie - 关键修复点
+                            if (redirect1Result.cookies && redirect1Result.cookies.length > 0) {
+                                console.log(`重定向返回 ${redirect1Result.cookies.length} 个Cookie，处理中`);
+                                console.log("Cookie详情:", redirect1Result.cookies);
+
+                                // 保存返回的Cookie
+                                await this.cookieJar.saveCookies(redirect1Result.cookies);
+
+                                // 特别处理JSESSIONID Cookie
+                                const jsessionidCookie = redirect1Result.cookies.find(c => c.includes('JSESSIONID='));
+                                if (jsessionidCookie) {
+                                    console.log(`发现重要的JSESSIONID Cookie: ${jsessionidCookie}`);
+
+                                    // 提取JSESSIONID值
+                                    const jsessionidMatch = jsessionidCookie.match(/JSESSIONID=([^;]+)/);
+                                    if (jsessionidMatch) {
+                                        const jsessionidValue = jsessionidMatch[1];
+                                        console.log(`JSESSIONID值: ${jsessionidValue}`);
+
+                                        // 找出Path
+                                        const pathMatch = jsessionidCookie.match(/Path=([^;]+)/);
+                                        const path = pathMatch ? pathMatch[1] : '/';
+
+                                        // 创建一个带有正确域名的Cookie
+                                        const enhancedCookie = `JSESSIONID=${jsessionidValue}; Domain=one.ujn.edu.cn; Path=${path}` +
+                                            (jsessionidCookie.includes('HttpOnly') ? '; HttpOnly' : '');
+
+                                        console.log(`创建增强版主域Cookie: ${enhancedCookie}`);
+
+                                        // 单独保存这个增强版Cookie
+                                        await this.cookieJar.saveCookies([enhancedCookie]);
+                                    }
+                                }
+                            }
+
+                            // 处理二次重定向
+                            if (redirect1Result.status === 302 && redirect1Result.location) {
+                                console.log(`检测到二次重定向: ${redirect1Result.location}`);
+
+                                // 获取最新的Cookie
+                                const allCookies = await this.cookieJar.getCookies();
+                                console.log(`二次重定向前的Cookie: ${allCookies.length}个`);
+
+                                // 跟随二次重定向
+                                const redirect2Result = await ipc.ipassGet(redirect1Result.location, {
+                                    cookies: allCookies,
+                                    headers: {
+                                        'Referer': locationHeader,
+                                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                                    }
+                                });
+
+                                // 同样保存二次重定向Cookie
+                                if (redirect2Result.cookies && redirect2Result.cookies.length > 0) {
+                                    console.log(`二次重定向返回 ${redirect2Result.cookies.length} 个Cookie`);
+                                    await this.cookieJar.saveCookies(redirect2Result.cookies);
+                                }
+                            }
                         } catch (redirectError) {
-                            console.warn(`处理重定向失败: ${redirectError.message}`);
+                            console.warn(`处理非VPN重定向失败: ${redirectError.message}`);
+                            console.warn(`但继续后续流程`);
                         }
                     }
 
@@ -487,21 +549,54 @@ class IPassAccount extends Account {
 
                     console.log("==== 智慧济大登录成功 ====");
                     return true;
+                } else if (isOneUjnRedirect) {
+                    // 普通模式下重定向到主页也视为成功 - 新增处理逻辑
+                    console.log(`登录成功，重定向到济大门户系统`);
+
+                    // 跟随重定向到门户系统
+                    try {
+                        console.log(`跟随重定向到门户系统: ${locationHeader}`);
+                        const portalRedirectResult = await ipc.ipassGet(locationHeader, {
+                            cookies: await this.cookieJar.getCookies(),
+                            headers: {
+                                'Referer': loginPageUrl,
+                                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                            }
+                        });
+
+                        // 保存返回的Cookie
+                        if (portalRedirectResult.cookies && portalRedirectResult.cookies.length > 0) {
+                            console.log(`门户重定向返回 ${portalRedirectResult.cookies.length} 个Cookie`);
+                            // 特别处理并保存门户系统的Cookie
+                            for (const cookie of portalRedirectResult.cookies) {
+                                // 确保Cookie设置正确的域名
+                                if (cookie.includes('Path=/up')) {
+                                    // 这是门户系统Cookie，需要设置正确的域名
+                                    const name = cookie.split('=')[0];
+                                    const value = cookie.split(';')[0].substring(name.length + 1);
+                                    const enhancedCookie = `${name}=${value}; Domain=one.ujn.edu.cn; Path=/up` +
+                                        (cookie.includes('HttpOnly') ? '; HttpOnly' : '');
+                                    console.log(`增强门户Cookie: ${enhancedCookie}`);
+                                    await this.cookieJar.saveCookies([enhancedCookie]);
+                                } else {
+                                    // 其他Cookie正常保存
+                                    await this.cookieJar.saveCookies([cookie]);
+                                }
+                            }
+                        }
+                    } catch (e) {
+                        console.warn(`跟随门户重定向失败: ${e.message}，但不影响登录结果`);
+                    }
+
+                    console.log("==== 智慧济大登录成功 ====");
+                    return true;
                 } else if (locationHeader.includes('login')) {
                     console.log("登录失败，重定向回登录页面");
                     return false;
                 } else {
-                    console.log("未检测到带ticket的重定向，但仍可能成功");
-                    console.log("尝试访问主页进行验证...");
-
+                    console.log("未检测到标准重定向，尝试访问主页验证");
                     const canAccessHome = await this.tryAccessHomePage();
-                    if (canAccessHome) {
-                        console.log("能够访问主页，登录成功");
-                        return true;
-                    } else {
-                        console.log("无法访问主页，登录失败");
-                        return false;
-                    }
+                    return canAccessHome;
                 }
             } else if (!loginResult.success) {
                 // 其他失败情况
