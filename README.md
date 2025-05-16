@@ -120,3 +120,8 @@ npm run electron:dev
 ```sh
 nnpm run electron:build
 ```
+
+#### 构建所有平台
+```sh
+npm run electron:build:all
+```
