@@ -459,15 +459,21 @@ class AuthService {
      */
     async saveUserInfo() {
         try {
+            // 获取当前存储的用户信息
+            const storedUserInfo = await store.getObject('userInfo', {});
+
             // 创建一个简单的对象，避免无法克隆的问题
             const simpleUserInfo = {
                 studentId: this.userInfo.studentId,
-                name: this.userInfo.name || '',
-                entranceYear: this.userInfo.entranceYear || 0,
-                college: this.userInfo.college || '',
-                major: this.userInfo.major || '',
-                class: this.userInfo.class || ''
+                // 如果当前内存中有姓名，使用内存中的姓名；否则保留存储中的姓名
+                name: this.userInfo.name || storedUserInfo.name || '',
+                entranceYear: this.userInfo.entranceYear || storedUserInfo.entranceYear || 0,
+                college: this.userInfo.college || storedUserInfo.college || '',
+                major: this.userInfo.major || storedUserInfo.major || '',
+                class: this.userInfo.class || storedUserInfo.class || ''
             }
+
+            console.log('即将保存的用户信息:', simpleUserInfo);
             await store.putObject('userInfo', simpleUserInfo)
 
             // 额外保存入学年份到专门的键值中

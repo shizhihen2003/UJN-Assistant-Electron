@@ -82,6 +82,18 @@ class EASAccount extends Account {
             console.error("加载VPN设置失败，使用默认值false", e);
             EASAccount.useVpn = false;
         }
+
+        // 验证ipc模块是否可用
+        if (!ipc) {
+            console.error("错误: ipc模块未正确加载!");
+        } else {
+            console.log("ipc模块加载成功");
+            // 验证关键方法是否存在
+            if (!ipc.easGet || !ipc.easPost) {
+                console.error("错误: ipc.easGet 或 ipc.easPost 方法未定义!");
+                console.log("ipc方法列表:", Object.keys(ipc).join(", "));
+            }
+        }
     }
 
     /**
@@ -96,8 +108,7 @@ class EASAccount extends Account {
     static getInstance() {
         if (EASAccount.useVpn) {
             // 在实际应用中实现 VpnEASAccount
-            // return VpnEASAccount.getInstance()
-            console.log('VPN模式暂未实现');
+            console.log('VPN模式启用');
 
             if (!EASAccount.instance) {
                 EASAccount.instance = new EASAccount();
@@ -112,11 +123,6 @@ class EASAccount extends Account {
 
         return EASAccount.instance;
     }
-
-    /**
-     * 是否使用VPN
-     */
-    static useVpn = store.getBoolean('EA_USE_VPN', false);
 
     /**
      * 切换教务节点
@@ -148,7 +154,9 @@ class EASAccount extends Account {
         store.edit(editor => editor.putInt('ENTRANCE_TIME', value));
     }
 
-    // 静态VPN使用状态
+    /**
+     * 是否使用VPN - 静态变量，只定义一次
+     */
     static useVpn = store.getBoolean('EA_USE_EAS_VPN', false);
 
     /**
@@ -281,24 +289,50 @@ class EASAccount extends Account {
             const personalInfoUrl = this.getFullUrl('jwglxt/xsxxxggl/xsxxwh_cxCkDgxsxx.html?gnmkdm=N100801');
             console.log("检查登录状态URL:", personalInfoUrl);
 
+            // 准备请求头
+            const headers = {
+                'Host': EASAccount.useVpn ? 'webvpn.ujn.edu.cn' : this.host,
+                'Proxy-Connection': 'keep-alive',
+                'Cache-Control': 'max-age=0',
+                'Upgrade-Insecure-Requests': '1',
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+                'Accept-Encoding': 'gzip, deflate',
+                'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+                'Referer': this.getFullUrl('')
+            };
+
+            // 确保ipc对象存在
+            if (!ipc) {
+                console.error("错误: ipc对象未定义!");
+                return false;
+            }
+
+            // 确保必要的方法存在
+            if (EASAccount.useVpn && !ipc.ipassGet) {
+                console.error("错误: ipc.ipassGet方法未定义!");
+                return false;
+            } else if (!EASAccount.useVpn && !ipc.easGet) {
+                console.error("错误: ipc.easGet方法未定义!");
+                return false;
+            }
+
             // 尝试访问个人信息页面验证登录状态
-            const result = await (EASAccount.useVpn ? ipc.ipassGet : ipc.easGet)(
-                personalInfoUrl,
-                {
-                    cookies: cookies,
-                    headers: {
-                        'Host': EASAccount.useVpn ? 'webvpn.ujn.edu.cn' : this.host,
-                        'Proxy-Connection': 'keep-alive',
-                        'Cache-Control': 'max-age=0',
-                        'Upgrade-Insecure-Requests': '1',
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
-                        'Accept-Encoding': 'gzip, deflate',
-                        'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-                        'Referer': this.getFullUrl('')
+            // 使用try-catch包裹，确保即使方法调用失败也不会导致程序崩溃
+            let result;
+            try {
+                const requestMethod = EASAccount.useVpn ? ipc.ipassGet : ipc.easGet;
+                result = await requestMethod(
+                    personalInfoUrl,
+                    {
+                        cookies: cookies,
+                        headers: headers
                     }
-                }
-            );
+                );
+            } catch (requestError) {
+                console.error("请求个人信息页面失败:", requestError);
+                return false;
+            }
 
             // 检查响应是否包含个人信息
             const isLoggedIn = this.isValidLoggedInPage(result.data);
@@ -370,6 +404,29 @@ class EASAccount extends Account {
             console.log("=== 开始登录流程 ===");
             console.log(`账号: ${account}`);
             console.log(`密码长度: ${password.length}`);
+            console.log(`VPN模式: ${EASAccount.useVpn}`);
+
+            // 确保ipc对象存在
+            if (!ipc) {
+                console.error("错误: ipc对象未定义!");
+                return false;
+            }
+
+            // 确保必要的方法存在
+            if (EASAccount.useVpn && (!ipc.ipassGet || !ipc.ipassPost)) {
+                console.error("错误: VPN模式下必要的ipc方法未定义!");
+                return false;
+            } else if (!EASAccount.useVpn && (!ipc.easGet || !ipc.easPost)) {
+                console.error("错误: 普通模式下必要的ipc方法未定义!");
+                return false;
+            }
+
+            // VPN模式下的登录
+            if (EASAccount.useVpn) {
+                console.log("使用VPN模式登录");
+                // 这里可以添加VPN模式下的登录逻辑
+                // 目前先使用普通模式登录流程，后续可以扩展
+            }
 
             // 步骤1: 获取登录页面获取CSRF令牌
             const timestamp = new Date().getTime();
@@ -378,16 +435,33 @@ class EASAccount extends Account {
             const loginPageUrl = this.getFullUrl(`${UJNAPI.EA_LOGIN}?time=${timestamp}`);
             console.log(`请求登录页面: ${loginPageUrl}`);
 
-            const loginPageResult = await ipc.easGet(loginPageUrl);
-            if (!loginPageResult.success) {
-                console.error("获取登录页面失败:", loginPageResult.error || '未知错误');
+            // 选择合适的请求方法
+            const getMethod = EASAccount.useVpn ? ipc.ipassGet : ipc.easGet;
+            const postMethod = EASAccount.useVpn ? ipc.ipassPost : ipc.easPost;
+
+            let loginPageResult;
+            try {
+                loginPageResult = await getMethod(loginPageUrl);
+                if (!loginPageResult.success) {
+                    console.error("获取登录页面失败:", loginPageResult.error || '未知错误');
+                    return false;
+                }
+            } catch (requestError) {
+                console.error("获取登录页面请求失败:", requestError);
                 return false;
             }
 
             // 保存初始 cookie
             if (loginPageResult.cookies && loginPageResult.cookies.length > 0) {
                 console.log("保存初始 Cookie:", loginPageResult.cookies);
-                await this.cookieJar.saveCookies(loginPageResult.cookies);
+                if (EASAccount.useVpn) {
+                    // VPN模式下，保存Cookie到IPassAccount
+                    const ipassAccount = IPassAccount.getInstance();
+                    await ipassAccount.vpnCookieJar.saveCookies(loginPageResult.cookies);
+                } else {
+                    // 普通模式下，保存到本地CookieJar
+                    await this.cookieJar.saveCookies(loginPageResult.cookies);
+                }
             }
 
             const loginPageHtml = loginPageResult.data;
@@ -415,15 +489,32 @@ class EASAccount extends Account {
                 'Referer': loginPageUrl
             };
 
-            const currentCookies = await this.cookieJar.getCookies();
-            const publicKeyResult = await ipc.easGet(publicKeyUrl, {
-                params: publicKeyParams,
-                headers: publicKeyHeaders,
-                cookies: currentCookies
-            });
+            // 获取当前Cookie
+            let currentCookies;
+            if (EASAccount.useVpn) {
+                const ipassAccount = IPassAccount.getInstance();
+                currentCookies = await ipassAccount.vpnCookieJar.getCookies();
+            } else {
+                currentCookies = await this.cookieJar.getCookies();
+            }
 
-            if (!publicKeyResult.success) {
-                console.error("获取公钥失败:", publicKeyResult.error || '未知错误');
+            let publicKeyResult;
+            try {
+                publicKeyResult = await getMethod(
+                    publicKeyUrl,
+                    {
+                        params: publicKeyParams,
+                        headers: publicKeyHeaders,
+                        cookies: currentCookies
+                    }
+                );
+
+                if (!publicKeyResult.success) {
+                    console.error("获取公钥失败:", publicKeyResult.error || '未知错误');
+                    return false;
+                }
+            } catch (requestError) {
+                console.error("获取公钥请求失败:", requestError);
                 return false;
             }
 
@@ -481,18 +572,31 @@ class EASAccount extends Account {
             const loginHeaders = {
                 'Content-Type': 'application/x-www-form-urlencoded',
                 'Referer': loginPageUrl,
-                'Origin': this.getFullUrl(''),
+                'Origin': EASAccount.useVpn ? 'https://webvpn.ujn.edu.cn' : this.getFullUrl(''),
                 'Upgrade-Insecure-Requests': '1',
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
             };
 
             console.log("发送登录请求...");
-            const cookies = await this.cookieJar.getCookies();
+            // 获取当前Cookie
+            let cookies = await (EASAccount.useVpn ?
+                IPassAccount.getInstance().vpnCookieJar.getCookies() :
+                this.cookieJar.getCookies());
 
-            const loginResult = await ipc.easPost(loginUrl, loginData, {
-                headers: loginHeaders,
-                cookies: cookies
-            });
+            let loginResult;
+            try {
+                loginResult = await postMethod(
+                    loginUrl,
+                    loginData,
+                    {
+                        headers: loginHeaders,
+                        cookies: cookies
+                    }
+                );
+            } catch (requestError) {
+                console.error("登录请求失败:", requestError);
+                return false;
+            }
 
             // 步骤5: 分析登录结果
             console.log(`\n[步骤5] 分析登录结果`);
@@ -506,13 +610,24 @@ class EASAccount extends Account {
                 if (jsessionidCookie) {
                     console.log("找到 JSESSIONID Cookie:", jsessionidCookie);
                     // 清空旧 cookie 并设置新的 JSESSIONID cookie
-                    this.cookieJar.clearCookies();
-                    await this.cookieJar.saveCookies([jsessionidCookie]);
+                    if (EASAccount.useVpn) {
+                        const ipassAccount = IPassAccount.getInstance();
+                        ipassAccount.vpnCookieJar.clearCookies();
+                        await ipassAccount.vpnCookieJar.saveCookies([jsessionidCookie]);
+                    } else {
+                        this.cookieJar.clearCookies();
+                        await this.cookieJar.saveCookies([jsessionidCookie]);
+                    }
                     console.log("已保存 JSESSIONID Cookie");
                 } else {
                     console.log("未找到 JSESSIONID Cookie");
                     // 保存所有返回的 cookie
-                    await this.cookieJar.saveCookies(loginResult.cookies);
+                    if (EASAccount.useVpn) {
+                        const ipassAccount = IPassAccount.getInstance();
+                        await ipassAccount.vpnCookieJar.saveCookies(loginResult.cookies);
+                    } else {
+                        await this.cookieJar.saveCookies(loginResult.cookies);
+                    }
                 }
             }
 
@@ -563,16 +678,29 @@ class EASAccount extends Account {
             console.log("请求个人信息页面:", personalInfoUrl);
 
             // 使用当前保存的Cookie和合适的请求头
-            const savedCookies = await this.cookieJar.getCookies();
+            const savedCookies = await (EASAccount.useVpn ?
+                IPassAccount.getInstance().vpnCookieJar.getCookies() :
+                this.cookieJar.getCookies());
             console.log("使用已保存的Cookie进行验证:", savedCookies);
 
-            const personalInfoResult = await ipc.easGet(personalInfoUrl, {
-                cookies: savedCookies,
-                headers: {
-                    'Referer': this.getFullUrl(''),
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-                }
-            });
+            const personalInfoHeaders = {
+                'Referer': EASAccount.useVpn ? 'https://webvpn.ujn.edu.cn' : this.getFullUrl(''),
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            };
+
+            let personalInfoResult;
+            try {
+                personalInfoResult = await getMethod(
+                    personalInfoUrl,
+                    {
+                        cookies: savedCookies,
+                        headers: personalInfoHeaders
+                    }
+                );
+            } catch (requestError) {
+                console.error("备用验证请求失败:", requestError);
+                return false;
+            }
 
             // 使用统一方法检查响应是否有效
             const hasStudentInfo = this.isValidLoggedInPage(personalInfoResult.data);
@@ -661,21 +789,7 @@ class EASAccount extends Account {
             }
 
             // 构建请求URL - 灵活处理URL构建
-            let personalInfoUrl;
-            if (EASAccount.useVpn) {
-                // 使用getFullUrl但确保正确处理VPN前缀
-                // 保留原来的方法调用，让getFullUrl处理VPN加密
-                personalInfoUrl = this.getFullUrl('jwglxt/xsxxxggl/xsxxwh_cxCkDgxsxx.html?gnmkdm=N100801');
-                console.log("VPN模式下构建的URL:", personalInfoUrl);
-
-                // 检查URL是否包含正确的VPN前缀，如果没有则添加
-                if (!personalInfoUrl.includes('webvpn.ujn.edu.cn')) {
-                    console.log("构建的URL不包含VPN前缀，添加备用VPN前缀");
-                    personalInfoUrl = `https://webvpn.ujn.edu.cn/http/77726476706e69737468656265737421fae046906925625e300d8db9d6562d/jwglxt/xsxxxggl/xsxxwh_cxCkDgxsxx.html?gnmkdm=N100801`;
-                }
-            } else {
-                personalInfoUrl = this.getFullUrl('jwglxt/xsxxxggl/xsxxwh_cxCkDgxsxx.html?gnmkdm=N100801');
-            }
+            const personalInfoUrl = this.getFullUrl('jwglxt/xsxxxggl/xsxxwh_cxCkDgxsxx.html?gnmkdm=N100801');
             console.log("获取学生信息URL:", personalInfoUrl);
 
             // 准备请求头
@@ -687,19 +801,33 @@ class EASAccount extends Account {
                 'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8'
             };
 
-            // 如果有Cookie，确保添加到header中
-            if (cookies && cookies.length > 0) {
-                headers['Cookie'] = cookies.join('; ');
+            // 确保ipc对象存在
+            if (!ipc) {
+                console.error("错误: ipc对象未定义!");
+                return false;
+            }
+
+            // 确保必要的方法存在
+            const requestMethod = EASAccount.useVpn ? ipc.ipassGet : ipc.easGet;
+            if (!requestMethod) {
+                console.error(`错误: ${EASAccount.useVpn ? 'ipc.ipassGet' : 'ipc.easGet'}方法未定义!`);
+                return false;
             }
 
             // 获取学生信息
-            const response = await (EASAccount.useVpn ? ipc.ipassGet : ipc.easGet)(
-                personalInfoUrl,
-                {
-                    cookies: cookies,
-                    headers: headers
-                }
-            );
+            let response;
+            try {
+                response = await requestMethod(
+                    personalInfoUrl,
+                    {
+                        cookies: cookies,
+                        headers: headers
+                    }
+                );
+            } catch (requestError) {
+                console.error("获取学生信息请求失败:", requestError);
+                return false;
+            }
 
             if (!response.success || response.status !== 200) {
                 console.error("获取学生信息请求失败", response);
@@ -710,16 +838,13 @@ class EASAccount extends Account {
             console.log("响应状态:", response.status);
             console.log("响应数据前200字符:", response.data ? response.data.substring(0, 200) : "无数据");
 
-            // 优先使用isValidLoggedInPage方法判断页面是否有效
-            const isValid = this.isValidLoggedInPage(response.data);
-
-            if (!isValid) {
+            // 使用统一方法检查响应是否有效
+            if (!this.isValidLoggedInPage(response.data)) {
                 console.error("获取学生信息失败：无权限或未登录");
-                console.debug("响应数据片段:", response.data?.substring(0, 500));
                 return false;
             }
 
-            // 提取学生姓名 - 复用absCheckLogin中的姓名提取逻辑
+            // 提取学生姓名
             if (response.data) {
                 try {
                     // 尝试提取姓名
@@ -835,23 +960,45 @@ class EASAccount extends Account {
             const markUrl = this.getFullUrl(UJNAPI.GET_MARK);
             console.log("查询成绩URL:", markUrl);
 
+            // 准备请求头
+            const headers = {
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'Referer': EASAccount.useVpn ? 'https://webvpn.ujn.edu.cn' : this.getFullUrl(''),
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            };
+
+            // 确保ipc对象存在
+            if (!ipc) {
+                console.error("错误: ipc对象未定义!");
+                throw new Error("ipc对象未定义!");
+            }
+
+            // 确保必要的方法存在
+            const postMethod = EASAccount.useVpn ? ipc.ipassPost : ipc.easPost;
+            if (!postMethod) {
+                console.error(`错误: ${EASAccount.useVpn ? 'ipc.ipassPost' : 'ipc.easPost'}方法未定义!`);
+                throw new Error(`${EASAccount.useVpn ? 'ipc.ipassPost' : 'ipc.easPost'}方法未定义!`);
+            }
+
             // 查询成绩列表 - 根据VPN模式选择不同的请求方法
-            const markResponse = await (EASAccount.useVpn ? ipc.ipassPost : ipc.easPost)(
-                markUrl,
-                {
-                    xnm: xnm,
-                    xqm: xqm,
-                    'queryModel.showCount': '999'
-                },
-                {
-                    cookies: cookies,
-                    headers: {
-                        'Content-Type': 'application/x-www-form-urlencoded',
-                        'Referer': this.getFullUrl(''),
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            let markResponse;
+            try {
+                markResponse = await postMethod(
+                    markUrl,
+                    {
+                        xnm: xnm,
+                        xqm: xqm,
+                        'queryModel.showCount': '999'
+                    },
+                    {
+                        cookies: cookies,
+                        headers: headers
                     }
-                }
-            );
+                );
+            } catch (requestError) {
+                console.error("查询成绩请求失败:", requestError);
+                throw new Error("查询成绩请求失败: " + requestError.message);
+            }
 
             if (!markResponse.success) {
                 throw new Error(markResponse.error || '查询成绩失败');
@@ -921,22 +1068,24 @@ class EASAccount extends Account {
                 const markDetailUrl = this.getFullUrl(UJNAPI.GET_MARK_DETAIL);
                 console.log("查询成绩详情URL:", markDetailUrl);
 
-                const markDetailResponse = await (EASAccount.useVpn ? ipc.ipassPost : ipc.easPost)(
-                    markDetailUrl,
-                    {
-                        xnm: xnm,
-                        xqm: xqm,
-                        'queryModel.showCount': '999'
-                    },
-                    {
-                        cookies: cookies,
-                        headers: {
-                            'Content-Type': 'application/x-www-form-urlencoded',
-                            'Referer': this.getFullUrl(''),
-                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                let markDetailResponse;
+                try {
+                    markDetailResponse = await postMethod(
+                        markDetailUrl,
+                        {
+                            xnm: xnm,
+                            xqm: xqm,
+                            'queryModel.showCount': '999'
+                        },
+                        {
+                            cookies: cookies,
+                            headers: headers
                         }
-                    }
-                );
+                    );
+                } catch (requestError) {
+                    console.error("查询成绩详情请求失败:", requestError);
+                    throw requestError;
+                }
 
                 if (markDetailResponse.success) {
                     // 尝试解析成绩详情数据
@@ -1022,23 +1171,45 @@ class EASAccount extends Account {
             const noticeUrl = this.getFullUrl(UJNAPI.EA_SYSTEM_NOTICE);
             console.log("查询通知URL:", noticeUrl);
 
-            const response = await (EASAccount.useVpn ? ipc.ipassPost : ipc.easPost)(
-                noticeUrl,
-                {
-                    'queryModel.showCount': pageSize.toString(),
-                    'queryModel.currentPage': page.toString(),
-                    'queryModel.sortName': 'cjsj',
-                    'queryModel.sortOrder': 'desc'
-                },
-                {
-                    cookies: cookies,
-                    headers: {
-                        'Content-Type': 'application/x-www-form-urlencoded',
-                        'Referer': this.getFullUrl(''),
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            // 准备请求头
+            const headers = {
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'Referer': EASAccount.useVpn ? 'https://webvpn.ujn.edu.cn' : this.getFullUrl(''),
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            };
+
+            // 确保ipc对象存在
+            if (!ipc) {
+                console.error("错误: ipc对象未定义!");
+                throw new Error("ipc对象未定义!");
+            }
+
+            // 确保必要的方法存在
+            const postMethod = EASAccount.useVpn ? ipc.ipassPost : ipc.easPost;
+            if (!postMethod) {
+                console.error(`错误: ${EASAccount.useVpn ? 'ipc.ipassPost' : 'ipc.easPost'}方法未定义!`);
+                throw new Error(`${EASAccount.useVpn ? 'ipc.ipassPost' : 'ipc.easPost'}方法未定义!`);
+            }
+
+            let response;
+            try {
+                response = await postMethod(
+                    noticeUrl,
+                    {
+                        'queryModel.showCount': pageSize.toString(),
+                        'queryModel.currentPage': page.toString(),
+                        'queryModel.sortName': 'cjsj',
+                        'queryModel.sortOrder': 'desc'
+                    },
+                    {
+                        cookies: cookies,
+                        headers: headers
                     }
-                }
-            );
+                );
+            } catch (requestError) {
+                console.error("查询通知请求失败:", requestError);
+                throw new Error("查询通知请求失败: " + requestError.message);
+            }
 
             if (!response.success) {
                 throw new Error(response.error || '查询通知失败');
@@ -1094,22 +1265,44 @@ class EASAccount extends Account {
             const examUrl = this.getFullUrl(UJNAPI.GET_EXAM);
             console.log("查询考试URL:", examUrl);
 
-            const response = await (EASAccount.useVpn ? ipc.ipassPost : ipc.easPost)(
-                examUrl,
-                {
-                    xnm: xnm,
-                    xqm: xqm,
-                    'queryModel.showCount': '999'
-                },
-                {
-                    cookies: cookies,
-                    headers: {
-                        'Content-Type': 'application/x-www-form-urlencoded',
-                        'Referer': this.getFullUrl(''),
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            // 准备请求头
+            const headers = {
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'Referer': EASAccount.useVpn ? 'https://webvpn.ujn.edu.cn' : this.getFullUrl(''),
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            };
+
+            // 确保ipc对象存在
+            if (!ipc) {
+                console.error("错误: ipc对象未定义!");
+                throw new Error("ipc对象未定义!");
+            }
+
+            // 确保必要的方法存在
+            const postMethod = EASAccount.useVpn ? ipc.ipassPost : ipc.easPost;
+            if (!postMethod) {
+                console.error(`错误: ${EASAccount.useVpn ? 'ipc.ipassPost' : 'ipc.easPost'}方法未定义!`);
+                throw new Error(`${EASAccount.useVpn ? 'ipc.ipassPost' : 'ipc.easPost'}方法未定义!`);
+            }
+
+            let response;
+            try {
+                response = await postMethod(
+                    examUrl,
+                    {
+                        xnm: xnm,
+                        xqm: xqm,
+                        'queryModel.showCount': '999'
+                    },
+                    {
+                        cookies: cookies,
+                        headers: headers
                     }
-                }
-            );
+                );
+            } catch (requestError) {
+                console.error("查询考试请求失败:", requestError);
+                throw new Error("查询考试请求失败: " + requestError.message);
+            }
 
             if (!response.success) {
                 throw new Error(response.error || '查询考试失败');
@@ -1142,7 +1335,12 @@ class EASAccount extends Account {
      * 清除Cookie
      */
     clearCookies() {
-        this.cookieJar.clearCookies();
+        if (EASAccount.useVpn) {
+            const ipassAccount = IPassAccount.getInstance();
+            ipassAccount.vpnCookieJar.clearCookies();
+        } else {
+            this.cookieJar.clearCookies();
+        }
     }
 
     /**
@@ -1158,7 +1356,12 @@ class EASAccount extends Account {
      * @returns {Array} Cookie列表
      */
     getCookie() {
-        return this.cookieJar.cookiesList;
+        if (EASAccount.useVpn) {
+            const ipassAccount = IPassAccount.getInstance();
+            return ipassAccount.vpnCookieJar.cookiesList || [];
+        } else {
+            return this.cookieJar.cookiesList;
+        }
     }
 
     /**

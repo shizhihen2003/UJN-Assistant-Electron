@@ -1,9 +1,9 @@
-// src/utils/ipc.js
+// src/utils/ipc.js - 修复版
 /**
  * IPC通信封装
  * 提供渲染进程与主进程通信的工具函数
  */
-export default {
+const ipc = {
     /**
      * 获取存储值
      * @param {string} key 键名
@@ -290,6 +290,7 @@ export default {
         window.electron.removeAllListeners(channel);
     },
 
+    // 修复：将 easRequest 从方法改为独立函数以解决 this 绑定问题
     /**
      * 发送 EAS 请求 - 通过 IPC 通信
      * @param {string} method 请求方法
@@ -387,7 +388,7 @@ export default {
             const response = await window.ipcRenderer.invoke('eas:request', requestArgs);
 
             // 处理响应
-            return this._logResponse(response);
+            return ipc._logResponse(response);
         } catch (error) {
             console.error('[请求失败]', error);
             return {
@@ -456,6 +457,28 @@ export default {
         }
 
         return response;
+    },
+
+    // 修复：定义直接函数而不是方法，避免使用this
+    /**
+     * 发送 EAS GET 请求
+     * @param {string} url 请求URL
+     * @param {Object} options 请求选项
+     * @returns {Promise<Object>} 响应对象
+     */
+    async easGet(url, options = {}) {
+        return ipc.easRequest('GET', url, null, options);
+    },
+
+    /**
+     * 发送 EAS POST 请求
+     * @param {string} url 请求URL
+     * @param {Object} data 请求数据
+     * @param {Object} options 请求选项
+     * @returns {Promise<Object>} 响应对象
+     */
+    async easPost(url, data, options = {}) {
+        return ipc.easRequest('POST', url, data, options);
     },
 
     /**
@@ -617,7 +640,7 @@ export default {
                 }
             }
 
-            return this._logResponse(response);
+            return ipc._logResponse(response);
         } catch (currentError) {
             // 修复：使用参数变量名currentError，避免与外部error混淆
             console.error(`[请求 ${requestId}] 失败:`, currentError);
@@ -655,27 +678,6 @@ export default {
                 requestId
             };
         }
-    },
-
-    /**
-     * 发送 EAS GET 请求
-     * @param {string} url 请求URL
-     * @param {Object} options 请求选项
-     * @returns {Promise<Object>} 响应对象
-     */
-    async easGet(url, options = {}) {
-        return this.easRequest('GET', url, null, options);
-    },
-
-    /**
-     * 发送 EAS POST 请求
-     * @param {string} url 请求URL
-     * @param {Object} data 请求数据
-     * @param {Object} options 请求选项
-     * @returns {Promise<Object>} 响应对象
-     */
-    async easPost(url, data, options = {}) {
-        return this.easRequest('POST', url, data, options);
     },
 
     /**
@@ -813,7 +815,6 @@ export default {
             console.log(`===== IPASS GET请求结束 =====`);
         }
     },
-
 
     /**
      * 发送 IPASS POST 请求
@@ -1039,3 +1040,5 @@ export default {
         }
     }
 };
+
+export default ipc;
