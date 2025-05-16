@@ -135,7 +135,7 @@ class ClassroomService {
                 requestUrl = authService.easAccount.getFullUrl('jwglxt/cdjy/cdjy_cxKxcdlb.html?doType=query&gnmkdm=N2155');
             } else {
                 // 非VPN模式下直接拼接
-                requestUrl = `${baseUrl}/jwglxt/cdjy/cdjy_cxKxcdlb.html?doType=query&gnmkdm=N2155`;
+                requestUrl = `${baseUrl}/cdjy/cdjy_cxKxcdlb.html?doType=query&gnmkdm=N2155`;
             }
 
             console.log('请求URL:', requestUrl);
@@ -314,7 +314,7 @@ class ClassroomService {
                 requestUrl = authService.easAccount.getFullUrl('jwglxt/cdjy/cdjy_cxKxcdlb.html?gnmkdm=N2155');
             } else {
                 // 非VPN模式下直接拼接
-                requestUrl = `${baseUrl}/jwglxt/cdjy/cdjy_cxKxcdlb.html?gnmkdm=N2155`;
+                requestUrl = `${baseUrl}/cdjy/cdjy_cxKxcdlb.html?gnmkdm=N2155`;
             }
 
             // 生成参考URL供Referer使用
@@ -571,7 +571,7 @@ class ClassroomService {
             if (useVpn && baseUrl === '') {
                 refererUrl = authService.easAccount.getFullUrl('jwglxt/cdjy/cdjy_cxKxcdlb.html?gnmkdm=N2155');
             } else {
-                refererUrl = `${baseUrl}/jwglxt/cdjy/cdjy_cxKxcdlb.html?gnmkdm=N2155`;
+                refererUrl = `${baseUrl}/cdjy/cdjy_cxKxcdlb.html?gnmkdm=N2155`;
             }
 
             // 构造请求参数
