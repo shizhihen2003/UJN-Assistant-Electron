@@ -213,18 +213,113 @@
     <!-- 设置对话框 -->
     <el-dialog v-model="showSettings" title="AI助手设置" width="500px">
       <el-form label-position="top">
-        <el-form-item label="API Key">
-          <el-input v-model="settings.apiKey" placeholder="输入DeepSeek API Key" show-password />
+        <el-form-item label="服务类型">
+          <el-radio-group v-model="settings.serviceType">
+            <el-radio value="deepseek">DeepSeek在线服务</el-radio>
+            <el-radio value="ollama">本地Ollama</el-radio>
+          </el-radio-group>
         </el-form-item>
-        <el-form-item label="API URL">
-          <el-input v-model="settings.apiUrl" placeholder="DeepSeek API URL" />
-        </el-form-item>
-        <el-form-item label="模型">
-          <el-select v-model="settings.model" style="width: 100%">
-            <el-option label="DeepSeek Chat" value="deepseek-chat" />
-            <el-option label="DeepSeek Reasoner" value="deepseek-reasoner" />
-          </el-select>
-        </el-form-item>
+
+        <!-- DeepSeek配置 -->
+        <template v-if="settings.serviceType === 'deepseek'">
+          <el-form-item label="API Key">
+            <el-input v-model="settings.apiKey" placeholder="输入DeepSeek API Key" show-password />
+          </el-form-item>
+          <el-form-item label="API URL">
+            <el-input v-model="settings.apiUrl" placeholder="DeepSeek API URL" />
+          </el-form-item>
+          <el-form-item label="模型">
+            <el-select v-model="settings.model" style="width: 100%">
+              <el-option label="DeepSeek Chat" value="deepseek-chat" />
+              <el-option label="DeepSeek Reasoner" value="deepseek-reasoner" />
+            </el-select>
+          </el-form-item>
+        </template>
+
+        <!-- Ollama配置 -->
+        <template v-if="settings.serviceType === 'ollama'">
+          <el-form-item label="Ollama服务地址">
+            <el-input
+                v-model="settings.ollamaUrl"
+                placeholder="http://localhost:11434"
+            />
+            <div class="setting-description">
+              本地Ollama服务的地址，默认为 http://localhost:11434
+            </div>
+          </el-form-item>
+
+          <el-form-item>
+            <el-button @click="autoDetectModels" :loading="refreshingModels">
+              <el-icon><Refresh /></el-icon>
+              自动检测模型
+            </el-button>
+            <el-button @click="testOllamaConnection" :loading="testingConnection">
+              <el-icon><Connection /></el-icon>
+              测试连接
+            </el-button>
+          </el-form-item>
+
+          <el-form-item label="可用模型" v-if="availableModels.length > 0">
+            <el-select v-model="settings.ollamaModel" style="width: 100%" placeholder="选择模型">
+              <el-option-group
+                  v-for="group in groupedModels"
+                  :key="group.label"
+                  :label="group.label"
+              >
+                <el-option
+                    v-for="model in group.models"
+                    :key="model.name"
+                    :label="model.displayName"
+                    :value="model.name"
+                >
+                  <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <span>{{ model.displayName }}</span>
+                    <span style="color: #8492a6; font-size: 12px;">{{ model.size }}</span>
+                  </div>
+                </el-option>
+              </el-option-group>
+            </el-select>
+            <div class="setting-description">
+              当前已检测到 {{ availableModels.length }} 个模型。如果列表为空，请确保Ollama服务已启动并已下载模型。
+            </div>
+          </el-form-item>
+
+          <el-form-item v-else-if="!refreshingModels">
+            <el-alert
+                title="未检测到模型"
+                type="warning"
+                :closable="false"
+                show-icon
+            >
+              <template #default>
+                <p>未检测到本地模型，请确认：</p>
+                <ol style="margin: 8px 0; padding-left: 20px;">
+                  <li>Ollama服务已启动 (运行: <code>ollama serve</code>)</li>
+                  <li>已下载模型 (运行: <code>ollama pull &lt;模型名称&gt;</code>)</li>
+                  <li>服务地址正确: {{ settings.ollamaUrl }}</li>
+                </ol>
+                <p style="margin-top: 8px; font-size: 13px; color: #666;">
+                  可通过 <code>ollama list</code> 查看已安装的模型
+                </p>
+              </template>
+            </el-alert>
+          </el-form-item>
+
+          <el-form-item v-if="settings.ollamaModel" label="模型信息">
+            <el-descriptions :column="1" size="small" border>
+              <el-descriptions-item label="模型名称">
+                {{ settings.ollamaModel }}
+              </el-descriptions-item>
+              <el-descriptions-item label="模型大小" v-if="selectedModelInfo">
+                {{ selectedModelInfo.size }}
+              </el-descriptions-item>
+              <el-descriptions-item label="修改时间" v-if="selectedModelInfo">
+                {{ formatDate(selectedModelInfo.modified_at) }}
+              </el-descriptions-item>
+            </el-descriptions>
+          </el-form-item>
+        </template>
+
         <el-form-item label="系统提示词">
           <el-input
               v-model="settings.systemPrompt"
@@ -233,6 +328,7 @@
               placeholder="设置AI助手的行为指南"
           />
         </el-form-item>
+
         <el-form-item label="个性化设置">
           <el-switch
               v-model="settings.shareStudentData"
@@ -245,10 +341,10 @@
         </el-form-item>
       </el-form>
       <template #footer>
-        <span class="dialog-footer">
-          <el-button @click="showSettings = false">取消</el-button>
-          <el-button type="primary" @click="saveSettings">保存</el-button>
-        </span>
+    <span class="dialog-footer">
+      <el-button @click="showSettings = false">取消</el-button>
+      <el-button type="primary" @click="saveSettings">保存</el-button>
+    </span>
       </template>
     </el-dialog>
 
@@ -352,7 +448,8 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import {
   Plus, ArrowLeft, ArrowRight, Delete, Setting,
   CopyDocument, Position, More, ChatRound, Lock,
-  Microphone, Close, Headset // 添加语音相关图标
+  Microphone, Close, Headset, // 添加语音相关图标
+  Refresh, Connection // 新增的图标
 } from '@element-plus/icons-vue';
 import { debounce } from 'lodash';
 import aiAssistantService from '@/services/aiAssistantService';
@@ -533,8 +630,11 @@ const currentConversationTitle = ref('');
 // 设置相关
 const showSettings = ref(false);
 const settings = ref({
+  serviceType: 'deepseek', // 新增：服务类型
   apiKey: '',
   apiUrl: 'https://api.deepseek.com/chat/completions',
+  ollamaUrl: 'http://localhost:11434', // 新增：Ollama地址
+  ollamaModel: '', // 新增：Ollama模型，空字符串让自动检测
   model: 'deepseek-chat',
   systemPrompt: '你是一个乐于助人的助手，专注于帮助济南大学的学生。请提供准确、有用的信息和建议。',
   shareStudentData: false
@@ -589,6 +689,59 @@ const speechSynthesizer = ref(null);
 const currentAudioQueue = ref([]);
 const isAudioPlaying = ref(false);
 const pendingAudioChunks = ref([]);
+
+// 新增本地模型状态变量
+const testingConnection = ref(false);
+const refreshingModels = ref(false);
+const availableModels = ref([]);
+
+// 添加计算属性
+const groupedModels = computed(() => {
+  const groups = {};
+
+  availableModels.value.forEach(model => {
+    // 解析模型名称，提取基础名称
+    const parts = model.name.split(':');
+    const baseName = parts[0];
+    const version = parts[1] || 'latest';
+
+    if (!groups[baseName]) {
+      groups[baseName] = {
+        label: baseName,
+        models: []
+      };
+    }
+
+    groups[baseName].models.push({
+      ...model,
+      displayName: `${baseName}:${version}`,
+      version: version
+    });
+  });
+
+  // 排序：deepseek模型优先，然后按名称排序
+  const sortedGroups = Object.values(groups).sort((a, b) => {
+    if (a.label.includes('deepseek') && !b.label.includes('deepseek')) return -1;
+    if (!a.label.includes('deepseek') && b.label.includes('deepseek')) return 1;
+    return a.label.localeCompare(b.label);
+  });
+
+  // 每个组内部也按版本排序
+  sortedGroups.forEach(group => {
+    group.models.sort((a, b) => {
+      // 优先显示数字大的版本（如14b > 7b > 1.5b）
+      const aNum = parseFloat(a.version.replace(/[^\d.]/g, ''));
+      const bNum = parseFloat(b.version.replace(/[^\d.]/g, ''));
+      return bNum - aNum;
+    });
+  });
+
+  return sortedGroups;
+});
+
+const selectedModelInfo = computed(() => {
+  return availableModels.value.find(model => model.name === settings.value.ollamaModel);
+});
 
 // 语音对话管理器
 const voiceConversationManager = {
@@ -2774,36 +2927,252 @@ const confirmDelete = async () => {
 };
 
 /**
- * 保存设置
+ * 自动检测模型 - 改进版
+ */
+const autoDetectModels = async () => {
+  if (refreshingModels.value) return;
+
+  refreshingModels.value = true;
+
+  try {
+    console.log('正在检测Ollama服务和模型...');
+
+    // 首先测试连接
+    const response = await fetch(`${settings.value.ollamaUrl}/api/tags`, {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json'
+      }
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    }
+
+    const data = await response.json();
+    console.log('Ollama响应数据:', data);
+
+    if (data.models && Array.isArray(data.models) && data.models.length > 0) {
+      // 处理模型数据
+      availableModels.value = data.models.map(model => ({
+        name: model.name,
+        size: formatBytes(model.size || 0),
+        digest: model.digest,
+        modified_at: model.modified_at,
+        details: model.details || {}
+      }));
+
+      console.log('检测到的模型:', availableModels.value);
+
+      // 自动选择最佳模型
+      autoSelectBestModel();
+
+      ElMessage.success(`成功检测到 ${data.models.length} 个模型`);
+    } else {
+      availableModels.value = [];
+      ElMessage.warning('Ollama服务运行正常，但未找到已安装的模型');
+    }
+  } catch (error) {
+    console.error('自动检测模型失败:', error);
+    availableModels.value = [];
+
+    let errorMessage = '检测失败: ';
+    if (error.message.includes('fetch')) {
+      errorMessage += 'Ollama服务可能未启动';
+      ElMessage.error(errorMessage);
+      ElMessage.info('请在终端运行: ollama serve');
+    } else if (error.message.includes('timeout')) {
+      errorMessage += '连接超时';
+      ElMessage.error(errorMessage);
+    } else {
+      errorMessage += error.message;
+      ElMessage.error(errorMessage);
+    }
+  } finally {
+    refreshingModels.value = false;
+  }
+};
+
+/**
+ * 自动选择最佳模型
+ */
+const autoSelectBestModel = () => {
+  if (availableModels.value.length === 0) return;
+
+  // 如果当前已选择的模型存在，保持不变
+  if (settings.value.ollamaModel &&
+      availableModels.value.some(model => model.name === settings.value.ollamaModel)) {
+    console.log('保持当前选择的模型:', settings.value.ollamaModel);
+    return;
+  }
+
+  // 优先级规则：
+  // 1. deepseek-r1:14b (用户现在有的)
+  // 2. deepseek-r1:* (任何deepseek-r1版本)
+  // 3. 其他deepseek模型
+  // 4. 其他模型中参数量最大的
+
+  const priorities = [
+    'deepseek-r1:14b',
+    'deepseek-r1:32b',
+    'deepseek-r1:8b',
+    'deepseek-r1:7b',
+    'deepseek-r1:1.5b'
+  ];
+
+  // 按优先级查找
+  for (const priority of priorities) {
+    const found = availableModels.value.find(model => model.name === priority);
+    if (found) {
+      settings.value.ollamaModel = found.name;
+      console.log('自动选择模型:', found.name);
+      ElMessage.success(`已自动选择模型: ${found.name}`);
+      return;
+    }
+  }
+
+  // 如果没有deepseek-r1，查找其他deepseek模型
+  const deepseekModel = availableModels.value.find(model =>
+      model.name.toLowerCase().includes('deepseek'));
+  if (deepseekModel) {
+    settings.value.ollamaModel = deepseekModel.name;
+    console.log('自动选择deepseek模型:', deepseekModel.name);
+    ElMessage.success(`已自动选择模型: ${deepseekModel.name}`);
+    return;
+  }
+
+  // 最后选择第一个可用模型
+  settings.value.ollamaModel = availableModels.value[0].name;
+  console.log('自动选择第一个模型:', availableModels.value[0].name);
+  ElMessage.info(`已选择模型: ${availableModels.value[0].name}`);
+};
+
+/**
+ * 测试Ollama连接 - 改进版
+ */
+const testOllamaConnection = async () => {
+  testingConnection.value = true;
+
+  try {
+    // 测试基本连接
+    const response = await fetch(`${settings.value.ollamaUrl}/api/tags`);
+
+    if (response.ok) {
+      const data = await response.json();
+
+      // 测试聊天API
+      if (settings.value.ollamaModel) {
+        try {
+          const chatResponse = await fetch(`${settings.value.ollamaUrl}/v1/chat/completions`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+              model: settings.value.ollamaModel,
+              messages: [
+                { role: 'user', content: '测试连接' }
+              ],
+              stream: false,
+              max_tokens: 10
+            })
+          });
+
+          if (chatResponse.ok) {
+            ElMessage.success(`连接测试成功！模型 ${settings.value.ollamaModel} 可正常使用`);
+          } else {
+            ElMessage.warning(`基础连接成功，但模型 ${settings.value.ollamaModel} 可能不可用`);
+          }
+        } catch (chatError) {
+          ElMessage.warning('基础连接成功，但聊天API测试失败');
+        }
+      } else {
+        ElMessage.success(`连接成功！找到 ${data.models?.length || 0} 个模型`);
+      }
+    } else {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    }
+  } catch (error) {
+    console.error('测试Ollama连接失败:', error);
+    ElMessage.error(`连接失败: ${error.message}`);
+
+    if (error.message.includes('fetch')) {
+      ElMessage.warning('请确认Ollama服务已启动 (运行: ollama serve)');
+    }
+  } finally {
+    testingConnection.value = false;
+  }
+};
+
+/**
+ * 格式化日期
+ */
+const formatDate = (dateString) => {
+  if (!dateString) return '未知';
+
+  try {
+    const date = new Date(dateString);
+    return date.toLocaleString('zh-CN');
+  } catch (error) {
+    return '未知';
+  }
+};
+
+/**
+ * 格式化字节大小 - 改进版
+ */
+const formatBytes = (bytes) => {
+  if (bytes === 0) return '0 B';
+
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+};
+
+/**
+ * 保存设置 - 修改版本
  */
 const saveSettings = async () => {
   try {
-    // 保存设置到服务
-    aiAssistantService.setConfig({
-      apiKey: settings.value.apiKey,
-      apiUrl: settings.value.apiUrl,
-      model: settings.value.model,
-      shareStudentData: settings.value.shareStudentData
-    });
+    // 根据服务类型设置对应的配置
+    if (settings.value.serviceType === 'ollama') {
+      // 本地Ollama配置
+      aiAssistantService.setConfig({
+        apiKey: '', // Ollama不需要API Key
+        apiUrl: `${settings.value.ollamaUrl}/v1/chat/completions`,
+        model: settings.value.ollamaModel,
+        shareStudentData: settings.value.shareStudentData
+      });
+    } else {
+      // DeepSeek在线服务配置
+      aiAssistantService.setConfig({
+        apiKey: settings.value.apiKey,
+        apiUrl: settings.value.apiUrl,
+        model: settings.value.model,
+        shareStudentData: settings.value.shareStudentData
+      });
+    }
 
-    // 创建一个简单的可序列化对象
+    // 保存到本地存储
     const settingsToSave = {
+      serviceType: settings.value.serviceType,
       apiKey: settings.value.apiKey,
       apiUrl: settings.value.apiUrl,
+      ollamaUrl: settings.value.ollamaUrl,
+      ollamaModel: settings.value.ollamaModel,
       model: settings.value.model,
       systemPrompt: settings.value.systemPrompt,
       shareStudentData: settings.value.shareStudentData
     };
 
-    // 保存到本地存储
     try {
       if (ipc && typeof ipc.setStoreValue === 'function') {
-        // 使用JSON序列化再反序列化来避免克隆问题
         const serialized = JSON.stringify(settingsToSave);
         const deserialized = JSON.parse(serialized);
         await ipc.setStoreValue('ai_assistant_settings', deserialized);
       } else {
-        // 如果ipc不可用，使用localStorage
         localStorage.setItem('ai_assistant_settings', JSON.stringify(settingsToSave));
       }
 
@@ -2811,10 +3180,7 @@ const saveSettings = async () => {
       showSettings.value = false;
     } catch (storageError) {
       console.error('存储设置失败，尝试使用localStorage:', storageError);
-
-      // 备选：使用localStorage
       localStorage.setItem('ai_assistant_settings', JSON.stringify(settingsToSave));
-
       ElMessage.success('设置已保存(使用备选存储)');
       showSettings.value = false;
     }
@@ -2825,7 +3191,7 @@ const saveSettings = async () => {
 };
 
 /**
- * 加载设置
+ * 加载设置 - 修改版本
  */
 const loadSettings = async () => {
   try {
@@ -2854,27 +3220,42 @@ const loadSettings = async () => {
 
     if (savedSettings) {
       settings.value = {
+        serviceType: savedSettings.serviceType || 'deepseek',
         apiKey: savedSettings.apiKey || '',
         apiUrl: savedSettings.apiUrl || 'https://api.deepseek.com/chat/completions',
+        ollamaUrl: savedSettings.ollamaUrl || 'http://localhost:11434',
+        ollamaModel: savedSettings.ollamaModel || '', // 空字符串让自动检测
         model: savedSettings.model || 'deepseek-chat',
         systemPrompt: savedSettings.systemPrompt || '你是一个乐于助人的助手，专注于帮助济南大学的学生。请提供准确、有用的信息和建议。',
         shareStudentData: savedSettings.shareStudentData || false
       };
 
-      // 更新服务配置
-      aiAssistantService.setConfig({
-        apiKey: settings.value.apiKey,
-        apiUrl: settings.value.apiUrl,
-        model: settings.value.model,
-        shareStudentData: settings.value.shareStudentData
-      });
+      // 根据设置更新服务配置
+      if (settings.value.serviceType === 'ollama') {
+        aiAssistantService.setConfig({
+          apiKey: '',
+          apiUrl: `${settings.value.ollamaUrl}/v1/chat/completions`,
+          model: settings.value.ollamaModel,
+          shareStudentData: settings.value.shareStudentData
+        });
+      } else {
+        aiAssistantService.setConfig({
+          apiKey: settings.value.apiKey,
+          apiUrl: settings.value.apiUrl,
+          model: settings.value.model,
+          shareStudentData: settings.value.shareStudentData
+        });
+      }
     }
   } catch (error) {
     console.error('加载设置失败:', error);
     // 使用默认设置
     settings.value = {
+      serviceType: 'deepseek',
       apiKey: '',
       apiUrl: 'https://api.deepseek.com/chat/completions',
+      ollamaUrl: 'http://localhost:11434',
+      ollamaModel: '',
       model: 'deepseek-chat',
       systemPrompt: '你是一个乐于助人的助手，专注于帮助济南大学的学生。请提供准确、有用的信息和建议。',
       shareStudentData: false
@@ -3248,6 +3629,32 @@ const speakMessage = async (text, index, onComplete) => {
   }
 };
 
+// 监听设置对话框打开状态
+watch(showSettings, async (newValue) => {
+  if (newValue && settings.value.serviceType === 'ollama') {
+    // 设置对话框打开时自动检测模型
+    await nextTick();
+    if (availableModels.value.length === 0) {
+      await autoDetectModels();
+    }
+  }
+});
+
+// 监听服务类型变化
+watch(() => settings.value.serviceType, async (newType) => {
+  if (newType === 'ollama') {
+    await nextTick();
+    await autoDetectModels();
+  }
+});
+
+// 监听Ollama URL变化
+watch(() => settings.value.ollamaUrl, async (newUrl, oldUrl) => {
+  if (newUrl !== oldUrl && settings.value.serviceType === 'ollama') {
+    await autoDetectModels();
+  }
+});
+
 // 初始化
 onMounted(async () => {
   // 检查用户认证状态
@@ -3332,6 +3739,16 @@ onMounted(async () => {
       }
     }
   });
+
+  // 新增：如果当前设置是ollama，自动检测模型
+  if (settings.value.serviceType === 'ollama') {
+    console.log('检测到Ollama配置，开始自动检测模型...');
+    try {
+      await autoDetectModels();
+    } catch (error) {
+      console.error('自动检测模型失败:', error);
+    }
+  }
 });
 
 // 监听认证状态变化

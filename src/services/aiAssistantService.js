@@ -16,6 +16,10 @@ class AiAssistantService {
         this.shareStudentData = false; // 是否分享学生数据
         this.currentConversationId = null; // 新增：记录当前对话ID
 
+        // 新增：本地Ollama支持
+        this.isLocalOllama = false;
+        this.ollamaUrl = 'http://localhost:11434';
+
         // 存储介质相关
         this.useLocalStorage = false;
         this.ipc = null;
@@ -61,9 +65,48 @@ class AiAssistantService {
      */
     setConfig(config) {
         if (config.apiKey) this.apiKey = config.apiKey;
-        if (config.apiUrl) this.apiUrl = config.apiUrl;
+        if (config.apiUrl) {
+            this.apiUrl = config.apiUrl;
+            // 检测是否是本地Ollama
+            this.isLocalOllama = config.apiUrl.includes('localhost:11434') || config.apiUrl.includes('127.0.0.1:11434');
+            if (this.isLocalOllama) {
+                // 确保使用正确的Ollama端点
+                if (config.apiUrl.endsWith('/v1')) {
+                    this.apiUrl = config.apiUrl.replace('/v1', '/v1/chat/completions');
+                } else if (!config.apiUrl.includes('/api/') && !config.apiUrl.includes('/v1/')) {
+                    this.apiUrl = config.apiUrl + '/v1/chat/completions';
+                }
+                this.ollamaUrl = config.apiUrl.replace(/\/v1.*$/, '').replace(/\/api.*$/, '');
+            }
+        }
         if (config.model) this.model = config.model;
         if (config.shareStudentData !== undefined) this.shareStudentData = config.shareStudentData;
+    }
+
+    /**
+     * 检测本地Ollama是否可用
+     */
+    async checkOllamaStatus() {
+        if (!this.isLocalOllama) return false;
+
+        try {
+            const response = await fetch(`${this.ollamaUrl}/api/tags`, {
+                method: 'GET',
+                headers: {
+                    'Content-Type': 'application/json'
+                }
+            });
+
+            if (response.ok) {
+                const data = await response.json();
+                console.log('Ollama可用，已安装的模型:', data.models?.map(m => m.name) || []);
+                return true;
+            }
+            return false;
+        } catch (error) {
+            console.error('检查Ollama状态失败:', error);
+            return false;
+        }
     }
 
     /**
@@ -317,7 +360,7 @@ class AiAssistantService {
     }
 
     /**
-     * 发送流式请求到AI模型
+     * 发送流式请求到AI模型 - 支持Ollama
      * @param {string} userMessage 用户消息
      * @param {Function} onChunk 接收块的回调函数
      * @param {Function} onComplete 完成时的回调函数
@@ -327,8 +370,16 @@ class AiAssistantService {
      */
     async sendStreamingRequest(userMessage, onChunk, onComplete, onError, systemMessage = "You are a helpful assistant.") {
         try {
-            // 验证API Key是否设置
-            if (!this.apiKey) {
+            // 如果是本地Ollama，先检查状态
+            if (this.isLocalOllama) {
+                const isOllamaAvailable = await this.checkOllamaStatus();
+                if (!isOllamaAvailable) {
+                    throw new Error('本地Ollama服务不可用，请确保Ollama已启动并且模型已下载');
+                }
+            }
+
+            // 验证API Key（仅非本地Ollama需要）
+            if (!this.isLocalOllama && !this.apiKey) {
                 throw new Error('API Key未设置，请在设置中配置API Key');
             }
 
@@ -360,6 +411,19 @@ class AiAssistantService {
                 stream: true
             };
 
+            // 准备请求头
+            const headers = {
+                'Content-Type': 'application/json'
+            };
+
+            // 仅非本地Ollama需要Authorization
+            if (!this.isLocalOllama) {
+                headers['Authorization'] = `Bearer ${this.apiKey}`;
+            }
+
+            console.log('发送请求到:', this.apiUrl);
+            console.log('请求体:', JSON.stringify(requestBody, null, 2));
+
             // 设置流式标志
             this.isStreaming = true;
 
@@ -369,17 +433,58 @@ class AiAssistantService {
             // 发送请求
             const response = await fetch(this.apiUrl, {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${this.apiKey}`
-                },
+                headers: headers,
                 body: JSON.stringify(requestBody)
             });
 
+            console.log('响应状态:', response.status, response.statusText);
+
             // 检查响应状态
             if (!response.ok) {
-                const errorData = await response.json();
-                throw new Error(`API错误: ${errorData.error?.message || response.statusText}`);
+                let errorMessage = `HTTP ${response.status}: ${response.statusText}`;
+
+                try {
+                    const errorText = await response.text();
+                    console.log('错误响应内容:', errorText);
+
+                    // 尝试解析错误JSON
+                    try {
+                        const errorData = JSON.parse(errorText);
+                        errorMessage = errorData.error?.message || errorData.message || errorMessage;
+                    } catch (e) {
+                        // 如果不是JSON，使用原始文本
+                        if (errorText.trim()) {
+                            errorMessage = errorText;
+                        }
+                    }
+                } catch (e) {
+                    console.error('读取错误响应失败:', e);
+                }
+
+                // 针对不同错误提供更好的提示
+                if (response.status === 404) {
+                    if (this.isLocalOllama) {
+                        errorMessage = `找不到API端点。请确认：
+1. Ollama已启动 (运行 'ollama serve')
+2. 模型已下载 (运行 'ollama pull ${this.model}')
+3. API端点正确: ${this.apiUrl}`;
+                    } else {
+                        errorMessage = 'API端点不存在，请检查API URL设置';
+                    }
+                } else if (response.status === 401) {
+                    errorMessage = 'API Key无效或已过期，请检查API Key设置';
+                } else if (response.status === 500) {
+                    if (this.isLocalOllama) {
+                        errorMessage = `服务器内部错误，可能的原因：
+1. 模型 '${this.model}' 未下载
+2. Ollama服务异常
+3. 内存不足`;
+                    } else {
+                        errorMessage = '服务器内部错误: ' + errorMessage;
+                    }
+                }
+
+                throw new Error(errorMessage);
             }
 
             // 获取响应流
@@ -415,22 +520,37 @@ class AiAssistantService {
                         // 解析JSON数据
                         try {
                             const jsonData = JSON.parse(data);
-                            const chunk = jsonData.choices[0];
+                            const chunk = jsonData.choices?.[0];
 
-                            // 如果有内容，直接调用回调函数
-                            if (chunk.delta?.content) {
-                                fullResponse += chunk.delta.content;
-                                // 直接传递内容块，不做任何处理
-                                // 逐字显示的逻辑将在sendMessage中处理
-                                onChunk(chunk.delta.content);
-                            }
+                            if (chunk) {
+                                // 处理内容
+                                let content = '';
+                                if (chunk.delta?.content) {
+                                    content = chunk.delta.content;
+                                } else if (chunk.message?.content) {
+                                    content = chunk.message.content;
+                                }
 
-                            // 检查是否完成
-                            if (chunk.finish_reason) {
-                                this.isStreaming = false;
+                                if (content) {
+                                    fullResponse += content;
+                                    onChunk(content);
+                                }
+
+                                // 检查是否完成
+                                if (chunk.finish_reason) {
+                                    this.isStreaming = false;
+                                    break;
+                                }
                             }
-                        } catch (e) {
-                            console.warn('JSON解析错误:', e, 'Data:', data);
+                        } catch (parseError) {
+                            console.warn('JSON解析错误:', parseError.message);
+                            console.warn('原始数据:', data);
+
+                            // 如果解析失败，可能是纯文本响应（某些本地模型）
+                            if (data.trim() && !data.includes('{')) {
+                                fullResponse += data;
+                                onChunk(data);
+                            }
                         }
                     }
                 }
@@ -447,8 +567,22 @@ class AiAssistantService {
             // 重置流状态
             this.isStreaming = false;
 
+            // 提供更详细的错误信息
+            let errorMessage = error.message;
+
+            if (error.name === 'TypeError' && error.message.includes('fetch')) {
+                if (this.isLocalOllama) {
+                    errorMessage = `无法连接到本地Ollama服务。请确认：
+1. Ollama已启动 (在终端运行: ollama serve)
+2. 服务地址正确: ${this.ollamaUrl}
+3. 防火墙未阻止连接`;
+                } else {
+                    errorMessage = '网络连接失败，请检查网络设置和API地址';
+                }
+            }
+
             // 触发错误回调
-            onError(error);
+            onError(new Error(errorMessage));
         }
     }
 
