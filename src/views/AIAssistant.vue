@@ -3013,8 +3013,8 @@ const autoSelectBestModel = () => {
   // 4. 其他模型中参数量最大的
 
   const priorities = [
-    'deepseek-r1:14b',
     'deepseek-r1:32b',
+    'deepseek-r1:14b',
     'deepseek-r1:8b',
     'deepseek-r1:7b',
     'deepseek-r1:1.5b'
