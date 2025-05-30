@@ -70,12 +70,14 @@
               <el-icon><Delete /></el-icon>
             </el-button>
           </el-tooltip>
+
           <!-- 添加语音设置按钮 -->
           <el-tooltip content="语音设置">
             <el-button link @click="showSpeechSettings = true">
               <el-icon><Headset /></el-icon>
             </el-button>
           </el-tooltip>
+
           <el-tooltip content="语音对话模式">
             <el-switch
                 v-model="voiceConversationMode"
@@ -84,6 +86,7 @@
                 inactive-color="#909399">
             </el-switch>
           </el-tooltip>
+
           <el-tooltip content="设置">
             <el-button link @click="showSettings = true">
               <el-icon><Setting /></el-icon>
@@ -126,22 +129,78 @@
                 <span class="message-sender">{{ message.role === 'user' ? userName : 'AI助手' }}</span>
                 <span class="message-time">{{ formatTime(message.timestamp) }}</span>
               </div>
-              <div
-                  class="message-body"
-                  :ref="el => message.role === 'assistant' && index === messages.length - 1 && isLoading ? streamingElementRef = el : null"
-                  v-html="(message.role === 'assistant' && isLoading && index === messages.length - 1)
-                    ? ''
-                    : formatMessage(message.content)"
-              ></div>
-              <div class="message-actions" v-if="message.role === 'assistant'">
-                <el-button link size="small" @click="copyMessageContent(message.content)">
-                  <el-icon><CopyDocument /></el-icon> 复制全部
+
+              <!-- 思考状态指示器 -->
+              <div v-if="message.role === 'assistant' && index === messages.length - 1 && isThinking" class="thinking-indicator">
+                <div class="thinking-dots">
+                  <span></span>
+                  <span></span>
+                  <span></span>
+                </div>
+                <span class="thinking-text">AI正在思考中...</span>
+              </div>
+
+              <!-- 用户消息直接显示 -->
+              <div v-if="message.role === 'user'"
+                   class="message-body"
+                   v-html="formatMessage(message.content)">
+              </div>
+
+              <!-- AI消息：思维链显示区域 -->
+              <div v-if="message.role === 'assistant' && showThinkingChain && (message.thinking || (index === messages.length - 1 && (currentThinking || isThinking || isLoading)))"
+                   class="thinking-chain-container">
+                <div class="thinking-chain-header" @click="thinkingCollapsed = !thinkingCollapsed">
+                  <div class="thinking-chain-title">
+                    <el-icon><Brain /></el-icon>
+                    <span>推理过程</span>
+                    <span class="thinking-count" v-if="message.thinking || currentThinking">
+                      ({{ (message.thinking || currentThinking).length }} 字符)
+                    </span>
+                  </div>
+                  <el-icon class="collapse-icon" :class="{ 'collapsed': thinkingCollapsed }">
+                    <ArrowDown />
+                  </el-icon>
+                </div>
+
+                <div v-show="!thinkingCollapsed" class="thinking-chain-content">
+                  <div
+                      class="thinking-chain-body"
+                      :data-thinking-ref="index"
+                      v-html="formatMessage(message.thinking || (index === messages.length - 1 ? currentThinking : ''))"
+                  ></div>
+                </div>
+              </div>
+
+              <!-- AI消息：最终答案区域 -->
+              <div v-if="message.role === 'assistant'" class="final-answer-container">
+                <div v-if="showThinkingChain && (message.thinking || (index === messages.length - 1 && (currentThinking || isThinking || isLoading)))" class="answer-header">
+                  <el-icon><Lightbulb /></el-icon>
+                  <span>最终回答</span>
+                </div>
+
+                <div
+                    class="message-body final-answer-body"
+                    :class="{ 'has-thinking-chain': showThinkingChain && (message.thinking || (index === messages.length - 1 && (currentThinking || isThinking || isLoading))) }"
+                    :data-answer-ref="index"
+                    v-show="!(index === messages.length - 1 && isThinking && !finalAnswer)"
+                    v-html="formatMessage(message.content || (index === messages.length - 1 ? finalAnswer : ''))"
+                ></div>
+              </div>
+
+              <div class="message-actions" v-if="message.role === 'assistant' && (message.content || (index === messages.length - 1 && finalAnswer))">
+                <el-button link size="small" @click="copyMessageContent(message.content || finalAnswer)">
+                  <el-icon><CopyDocument /></el-icon> 复制回答
+                </el-button>
+                <el-button v-if="message.thinking || (index === messages.length - 1 && currentThinking)"
+                           link size="small"
+                           @click="copyMessageContent(message.thinking || currentThinking)">
+                  <el-icon><CopyDocument /></el-icon> 复制推理
                 </el-button>
                 <!-- 添加朗读按钮 -->
                 <el-button
                     link
                     size="small"
-                    @click="speakMessage(message.content, index)"
+                    @click="speakMessage(message.content || finalAnswer, index)"
                     :class="{ 'speaking': isSpeaking && currentSpeakingIndex === index }"
                 >
                   <el-icon><Headset /></el-icon>
@@ -158,13 +217,14 @@
             </div>
           </div>
 
-          <!-- 加载指示器 -->
-          <div v-if="isLoading" class="loading-container">
+          <!-- 修改加载指示器 -->
+          <div v-if="isLoading && !isThinking" class="loading-container">
             <div class="dots-loader">
               <div></div>
               <div></div>
               <div></div>
             </div>
+            <span class="loading-text">正在生成回复...</span>
           </div>
         </div>
       </div>
@@ -339,6 +399,17 @@
             启用后，AI将可以访问你的课表、成绩和考试信息以提供个性化建议。所有数据仅在本地处理，不会上传或储存到外部服务器。
           </div>
         </el-form-item>
+
+        <el-form-item label="思维链显示">
+          <el-switch
+              v-model="showThinkingChain"
+              active-text="显示AI推理过程"
+              inactive-text="仅显示最终答案"
+          />
+          <div class="setting-description">
+            启用后，将显示AI的完整推理过程，包括思考步骤和最终答案。适用于支持推理链的模型（如deepseek-reasoner）。
+          </div>
+        </el-form-item>
       </el-form>
       <template #footer>
     <span class="dialog-footer">
@@ -448,8 +519,12 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import {
   Plus, ArrowLeft, ArrowRight, Delete, Setting,
   CopyDocument, Position, More, ChatRound, Lock,
-  Microphone, Close, Headset, // 添加语音相关图标
-  Refresh, Connection // 新增的图标
+  Microphone, Close, Headset,
+  Refresh, Connection,
+  // 更好的图标替代
+  Cpu as Brain,           // CPU图标）
+  Star as Lightbulb,      // 星星图标
+  ArrowDown              // 向下箭头图标
 } from '@element-plus/icons-vue';
 import { debounce } from 'lodash';
 import aiAssistantService from '@/services/aiAssistantService';
@@ -479,6 +554,167 @@ const voiceChatRef = ref(null);
 function logDebug(...args) {
   console.log('[AI Chat]', ...args);
 }
+
+/**
+ * 解析思维链内容
+ */
+const parseThinkingContent = (text) => {
+  // 匹配 <think>...</think> 标签
+  const thinkingRegex = /<think>([\s\S]*?)<\/think>/g;
+  const matches = [];
+  let match;
+
+  while ((match = thinkingRegex.exec(text)) !== null) {
+    matches.push(match[1]);
+  }
+
+  return matches.join('\n\n');
+};
+
+/**
+ * 移除思维链标签，获取最终答案
+ */
+const extractFinalAnswer = (text) => {
+  // 移除所有 <think>...</think> 标签及其内容
+  return text.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+};
+
+/**
+ * 检查文本是否包含思维链开始标签
+ */
+const hasThinkingStart = (text) => {
+  return text.includes('<think>');
+};
+
+/**
+ * 检查文本是否包含完整的思维链
+ */
+const hasCompleteThinking = (text) => {
+  return /<think>[\s\S]*?<\/think>/.test(text);
+};
+
+/**
+ * 检查文本是否在思维链标签内
+ */
+const isInsideThinking = (text) => {
+  const thinkStart = text.indexOf('<think>');
+  const thinkEnd = text.indexOf('</think>');
+
+  if (thinkStart === -1) return false;
+  if (thinkEnd === -1) return true; // 有开始标签但没有结束标签
+
+  return false; // 有完整的标签对
+};
+
+/**
+ * 检查文本是否包含思维链
+ */
+const hasThinkingContent = (text) => {
+  return /<think>[\s\S]*?<\/think>/.test(text);
+};
+
+/**
+ * 实时解析流式响应中的思维链 - 修复版本
+ */
+const parseStreamingContent = (fullText) => {
+  // 检查是否包含思维链开始标签
+  const hasThinkStart = hasThinkingStart(fullText);
+
+  if (!hasThinkStart) {
+    // 没有思维链标签，全部作为答案
+    return {
+      thinking: '',
+      answer: fullText,
+      hasThinking: false,
+      isThinkingComplete: false
+    };
+  }
+
+  // 检查是否有完整的思维链
+  const hasComplete = hasCompleteThinking(fullText);
+
+  if (!hasComplete) {
+    // 有开始标签但还没完整，这意味着正在思考中
+    // 此时不应该显示任何答案内容
+    const thinkStart = fullText.indexOf('<think>');
+    const thinkingContent = fullText.slice(thinkStart + 7); // 跳过 '<think>'
+
+    return {
+      thinking: thinkingContent,
+      answer: '',
+      hasThinking: true,
+      isThinkingComplete: false
+    };
+  }
+
+  // 有完整的思维链，解析思维链和答案
+  const thinking = parseThinkingContent(fullText);
+  const answer = extractFinalAnswer(fullText);
+
+  return {
+    thinking: thinking,
+    answer: answer,
+    hasThinking: thinking.length > 0,
+    isThinkingComplete: true
+  };
+};
+
+/**
+ * 创建思维链渲染器 - 修复版本
+ */
+const createThinkingRenderer = () => {
+  let thinkingBuffer = '';
+  let answerBuffer = '';
+  let isInThinkingMode = false;
+  let thinkingComplete = false;
+
+  return {
+    addContent: (fullText) => {
+      // 解析完整文本
+      const parsed = parseStreamingContent(fullText);
+
+      // 更新思考模式状态
+      if (parsed.hasThinking && !isInThinkingMode) {
+        isInThinkingMode = true;
+        console.log('进入思考模式');
+      }
+
+      if (parsed.isThinkingComplete && !thinkingComplete) {
+        thinkingComplete = true;
+        console.log('思考完成，开始答案');
+      }
+
+      // 更新缓冲区
+      if (parsed.hasThinking) {
+        thinkingBuffer = parsed.thinking;
+
+        // 只有在思考完成后才更新答案
+        if (parsed.isThinkingComplete) {
+          answerBuffer = parsed.answer;
+        } else {
+          answerBuffer = ''; // 思考未完成时，答案区域保持空白
+        }
+      } else {
+        // 没有思维链，直接作为答案
+        answerBuffer = parsed.answer;
+      }
+
+      return {
+        thinking: thinkingBuffer,
+        answer: answerBuffer,
+        hasThinking: parsed.hasThinking,
+        isThinkingComplete: parsed.isThinkingComplete
+      };
+    },
+
+    finalize: () => {
+      return {
+        thinking: thinkingBuffer,
+        answer: answerBuffer
+      };
+    }
+  };
+};
 
 // 异步加载所需库
 async function loadDependencies() {
@@ -614,6 +850,13 @@ const messages = ref([]);
 const inputMessage = ref('');
 const isLoading = ref(false);
 const chatMessagesRef = ref(null);
+
+// 新增：思维链和状态控制变量
+const isThinking = ref(false); // AI是否在思考中
+const currentThinking = ref(''); // 当前思维链内容
+const finalAnswer = ref(''); // 最终答案内容
+const showThinkingChain = ref(true); // 是否显示思维链
+const thinkingCollapsed = ref(false); // 思维链是否折叠
 
 // 侧边栏状态
 const isSidebarCollapsed = ref(false);
@@ -1091,7 +1334,6 @@ const handlePrepareTurn = (wasSilence) => {
   }
 };
 
-
 /**
  * 停止所有语音活动
  */
@@ -1302,6 +1544,7 @@ const sendToAIWithStreamingSpeech = async (message) => {
   try {
     // 设置处理中状态
     isLoading.value = true;
+    isThinking.value = true; // 开始思考
     streamingSpeech.value = true;
 
     // 准备接收流式响应
@@ -1329,6 +1572,14 @@ const sendToAIWithStreamingSpeech = async (message) => {
         message,
         // 接收文本块的回调
         async (chunk) => {
+          // 第一次收到响应时，结束思考状态
+          if (isThinking.value) {
+            isThinking.value = false;
+            if (voiceChatRef.value) {
+              voiceChatRef.value.thinking = false;
+            }
+          }
+
           // 累积响应文本
           assistantMessage.content += chunk;
 
@@ -1357,6 +1608,7 @@ const sendToAIWithStreamingSpeech = async (message) => {
 
           // 重置状态
           isLoading.value = false;
+          isThinking.value = false;
           streamingSpeech.value = false;
 
           // 完成对话轮次
@@ -1369,11 +1621,13 @@ const sendToAIWithStreamingSpeech = async (message) => {
         (error) => {
           console.error('AI处理错误:', error);
           isLoading.value = false;
+          isThinking.value = false;
           streamingSpeech.value = false;
 
           // 显示错误
           if (voiceChatRef.value) {
             voiceChatRef.value.speaking = false;
+            voiceChatRef.value.thinking = false;
             voiceChatRef.value.showError('AI处理失败');
           }
         },
@@ -1383,10 +1637,12 @@ const sendToAIWithStreamingSpeech = async (message) => {
   } catch (error) {
     console.error('流式处理失败:', error);
     isLoading.value = false;
+    isThinking.value = false;
     streamingSpeech.value = false;
 
     if (voiceChatRef.value) {
       voiceChatRef.value.speaking = false;
+      voiceChatRef.value.thinking = false;
       voiceChatRef.value.showError('处理失败: ' + error.message);
     }
   }
@@ -1449,112 +1705,6 @@ const playCompleteResponse = async (text) => {
       voiceChatRef.value.speaking = false;
     }
   }
-};
-
-/**
- * 合成并播放文本块
- */
-const synthesizeAndPlayChunk = async (text) => {
-  try {
-    // 处理文本预处理
-    const processedText = preprocessTextForTTS(text);
-
-    // 创建一个Promise来跟踪这个音频块的完成
-    const audioPromise = new Promise((resolve, reject) => {
-      // 使用讯飞语音合成
-      speechService.startSynthesize(
-          processedText,
-          // 开始回调
-          () => {
-            console.log('音频块开始播放, 长度:', text.length);
-          },
-          // 完成回调
-          () => {
-            console.log('音频块播放完成');
-            resolve();
-          },
-          // 错误回调
-          (error) => {
-            console.error('语音合成错误:', error);
-            // 即使出错也要解决Promise，以继续流程
-            resolve();
-          },
-          // 合成选项
-          {
-            voice: speechSettings.value.voice,
-            speed: speechSettings.value.speed,
-            volume: speechSettings.value.volume,
-            pitch: speechSettings.value.pitch
-          }
-      );
-    });
-
-    // 将这个Promise添加到队列中
-    currentAudioQueue.value.push(audioPromise);
-
-    // 如果当前没有播放，开始播放流程
-    if (!isAudioPlaying.value) {
-      await playNextInQueue();
-    }
-  } catch (error) {
-    console.error('合成和播放文本块失败:', error);
-  }
-};
-
-/**
- * 播放队列中的下一个音频
- */
-const playNextInQueue = async () => {
-  if (currentAudioQueue.value.length === 0) {
-    isAudioPlaying.value = false;
-    return;
-  }
-
-  isAudioPlaying.value = true;
-
-  try {
-    // 获取队列中的第一个Promise并等待其完成
-    const audioPromise = currentAudioQueue.value.shift();
-    await audioPromise;
-
-    // 继续播放下一个
-    await playNextInQueue();
-  } catch (error) {
-    console.error('播放音频队列出错:', error);
-    // 即使出错也继续下一个
-    setTimeout(() => playNextInQueue(), 100);
-  }
-};
-
-/**
- * 等待所有音频播放完成
- */
-const waitForAllAudioToFinish = async () => {
-  console.log(`等待所有音频播放完成，队列长度: ${currentAudioQueue.value.length}`);
-
-  if (currentAudioQueue.value.length === 0 && !isAudioPlaying.value) {
-    return;
-  }
-
-  // 克隆当前队列里的所有Promise
-  const promises = [...currentAudioQueue.value];
-
-  // 等待所有已添加到队列中的Promise完成
-  await Promise.all(promises);
-
-  // 等待最后一个正在播放的完成
-  if (isAudioPlaying.value) {
-    await new Promise(resolve => {
-      const checkInterval = setInterval(() => {
-        if (!isAudioPlaying.value) {
-          clearInterval(checkInterval);
-          resolve();
-        }
-      }, 100);
-    });
-  }
-
-  console.log('所有音频播放完成');
 };
 
 /**
@@ -2232,7 +2382,7 @@ const stopVoiceConversation = () => {
 };
 
 /**
- * 发送消息
+ * 发送消息 - 修复思维链显示的版本
  */
 const sendMessage = async () => {
   const message = inputMessage.value.trim();
@@ -2249,16 +2399,22 @@ const sendMessage = async () => {
     // 清空输入框
     inputMessage.value = '';
 
-    // 滚动到底部
+    // 初始滚动到底部
     await scrollToBottom();
 
     // 设置加载状态
     isLoading.value = true;
+    isThinking.value = true;
+
+    // 重置思维链内容
+    currentThinking.value = '';
+    finalAnswer.value = '';
 
     // 准备接收流式响应
     let assistantMessage = {
       role: 'assistant',
       content: '',
+      thinking: '',
       timestamp: new Date().toISOString()
     };
 
@@ -2268,299 +2424,263 @@ const sendMessage = async () => {
     // 等待DOM更新
     await nextTick();
 
-    // 存储完整的AI响应（用于保存）
+    // 存储完整的AI响应
     let fullResponse = '';
+    let hasDetectedThinking = false;
+    let isThinkingPhase = false;
+
+    // 创建思维链渲染器
+    const thinkingRenderer = createThinkingRenderer();
 
     // 用于DOM操作的变量
-    let streamingElement = null;
-    let pendingContent = '';
-    let typingInterval = null;
+    let thinkingElement = null;
+    let answerElement = null;
 
-    // 创建实时markdown渲染器
-    const markdownRenderer = createRealtimeMarkdownRenderer();
-
-    // 确保有DOM元素
-    const waitForElement = () => {
+    // 获取DOM元素
+    const waitForElements = () => {
       return new Promise((resolve) => {
-        const checkElement = () => {
-          if (streamingElementRef.value) {
-            streamingElement = streamingElementRef.value;
+        const checkElements = () => {
+          const thinkingRef = document.querySelector(`[data-thinking-ref="${messages.value.length - 1}"]`);
+          const answerRef = document.querySelector(`[data-answer-ref="${messages.value.length - 1}"]`);
+
+          if (answerRef) {
+            thinkingElement = thinkingRef;
+            answerElement = answerRef;
             resolve();
           } else {
-            setTimeout(checkElement, 10);
+            setTimeout(checkElements, 10);
           }
         };
-        checkElement();
+        checkElements();
       });
     };
 
-    await waitForElement();
+    await waitForElements();
 
-    // 开始打字效果
-    const startTyping = () => {
-      if (typingInterval) return;
+    // 调试输出
+    console.log('DOM elements found:', {
+      thinkingElement: !!thinkingElement,
+      answerElement: !!answerElement,
+      isThinking: isThinking.value,
+      showThinkingChain: showThinkingChain.value
+    });
 
-      // 使用批处理来减少DOM更新频率
-      typingInterval = setInterval(() => {
-        if (pendingContent.length > 0) {
-          // 批量处理多个字符，减少DOM操作
-          const chunkSize = Math.min(3, pendingContent.length); // 每次处理3个字符
-          const chunk = pendingContent.slice(0, chunkSize);
-          pendingContent = pendingContent.slice(chunkSize);
-
-          // 批量处理字符
-          let renderedContent = null;
-          for (let i = 0; i < chunk.length; i++) {
-            renderedContent = markdownRenderer.add(chunk[i]);
-          }
-
-          // 只在有渲染内容时更新DOM
-          if (renderedContent && streamingElement) {
-            // 使用requestAnimationFrame来优化渲染
-            requestAnimationFrame(() => {
-              streamingElement.innerHTML = renderedContent;
-
-              // 移除旧光标
-              const oldCursor = streamingElement.querySelector('.typing-cursor');
-              if (oldCursor) {
-                oldCursor.remove();
-              }
-
-              // 添加新光标
-              const cursor = document.createElement('span');
-              cursor.className = 'typing-cursor';
-              cursor.textContent = '|';
-              streamingElement.appendChild(cursor);
-            });
-          }
-
-          // 使用节流来减少滚动频率
-          const throttledScroll = throttle(scrollToBottom, 100);
-          throttledScroll();
-        } else {
-          clearInterval(typingInterval);
-          typingInterval = null;
-
-          if (streamingElement) {
-            const finalContent = markdownRenderer.finalize();
-            requestAnimationFrame(() => {
-              streamingElement.innerHTML = finalContent;
-              // 移除光标
-              const cursor = streamingElement.querySelector('.typing-cursor');
-              if (cursor) {
-                cursor.remove();
-              }
-            });
-          }
-        }
-      }, 30);
-    };
-
-    // 在组件中添加节流函数
-    const throttle = (func, limit) => {
-      let inThrottle;
-      return function(...args) {
-        if (!inThrottle) {
-          func.apply(this, args);
-          inThrottle = true;
-          setTimeout(() => inThrottle = false, limit);
-        }
-      };
-    };
-
-    // 添加辅助函数：查找最后一个文本节点
-    const findLastTextNode = (element) => {
-      const walker = document.createTreeWalker(
-          element,
-          NodeFilter.SHOW_TEXT,
-          null,
-          false
-      );
-
-      let lastNode = null;
-      while (walker.nextNode()) {
-        if (walker.currentNode.textContent.trim().length > 0) {
-          lastNode = walker.currentNode;
-        }
+    // 直接更新思维链内容
+    const updateThinkingContent = (content) => {
+      const thinkingRef = document.querySelector(`[data-thinking-ref="${messages.value.length - 1}"]`);
+      if (thinkingRef && content) {
+        const formattedContent = formatMessage(content);
+        thinkingRef.innerHTML = formattedContent + '<span class="thinking-cursor">●</span>';
+        thinkingElement = thinkingRef;
       }
+    };
 
-      return lastNode;
+    // 直接更新答案内容
+    const updateAnswerContent = (content) => {
+      const answerRef = document.querySelector(`[data-answer-ref="${messages.value.length - 1}"]`);
+      if (answerRef && content) {
+        const formattedContent = formatMessage(content);
+        answerRef.innerHTML = formattedContent + '<span class="typing-cursor">|</span>';
+        answerElement = answerRef;
+      }
+    };
+
+    // 清空答案内容
+    const clearAnswerContent = () => {
+      const answerRef = document.querySelector(`[data-answer-ref="${messages.value.length - 1}"]`);
+      if (answerRef) {
+        answerRef.innerHTML = '';
+        answerElement = answerRef;
+      }
+    };
+
+    // 移除所有光标
+    const removeAllCursors = () => {
+      if (thinkingElement) {
+        const cursor = thinkingElement.querySelector('.thinking-cursor');
+        if (cursor) cursor.remove();
+      }
+      if (answerElement) {
+        const cursor = answerElement.querySelector('.typing-cursor');
+        if (cursor) cursor.remove();
+      }
     };
 
     // 发送请求并处理流式响应
     await aiAssistantService.sendStreamingRequest(
         message,
-        // 接收块的回调
+        // 接收块的回调 - 修复版本
         (chunk) => {
           fullResponse += chunk;
-          pendingContent += chunk;
 
-          // 如果还没开始打字，开始
-          if (!typingInterval) {
-            startTyping();
+          // 解析思维链和答案
+          const parsed = thinkingRenderer.addContent(fullResponse);
+
+          // 检测思维链开始
+          if (parsed.hasThinking && !hasDetectedThinking) {
+            hasDetectedThinking = true;
+            isThinkingPhase = true;
+            console.log('检测到思维链开始');
+
+            // 立即结束初始思考状态，显示思维链容器
+            isThinking.value = false;
+
+            // 清空答案区域（如果之前有错误内容）
+            clearAnswerContent();
+          }
+
+          // 更新思维链内容
+          if (parsed.thinking !== currentThinking.value) {
+            currentThinking.value = parsed.thinking;
+            if (currentThinking.value) {
+              updateThinkingContent(currentThinking.value);
+            }
+          }
+
+          // 更新答案内容（只在思考完成或没有思维链时）
+          if (parsed.answer !== finalAnswer.value) {
+            finalAnswer.value = parsed.answer;
+
+            // 只有在非思考阶段或思考完成时才更新答案
+            if (!isThinkingPhase || parsed.isThinkingComplete) {
+              if (finalAnswer.value) {
+                updateAnswerContent(finalAnswer.value);
+              }
+            }
+          }
+
+          // 检测思考完成
+          if (parsed.isThinkingComplete && isThinkingPhase) {
+            isThinkingPhase = false;
+            console.log('思考阶段完成，开始答案阶段');
+          }
+
+          // 没有思维链的情况下，第一次收到内容时结束思考状态
+          if (!parsed.hasThinking && isThinking.value && fullResponse.trim()) {
+            isThinking.value = false;
           }
         },
         // 完成时的回调
         (finalResponse) => {
-          logDebug('流式响应完成:', finalResponse.substring(0, 50) + '...');
+          console.log('AI响应完成');
 
-          // 等待所有字符显示完成
-          const waitForTypingComplete = () => {
-            if (pendingContent.length === 0 && !typingInterval) {
-              // 完成后更新消息内容
-              assistantMessage.content = fullResponse;
+          // 解析最终内容
+          const finalParsed = thinkingRenderer.finalize();
 
-              // 确保关闭加载状态
-              isLoading.value = false;
-
-              // 显示最终格式化的内容
-              nextTick(() => {
-                if (streamingElement) {
-                  streamingElement.innerHTML = formatMessage(fullResponse);
-                }
-
-                scrollToBottom();
-                setupCodeCopyButtons();
-              });
-
-              // 保存对话历史
-              if (currentConversationId.value) {
-                // 延迟一小段时间确保UI先更新
-                setTimeout(async () => {
-                  try {
-                    // 将AIAssistant组件的currentConversationId传递给service
-                    aiAssistantService.currentConversationId = currentConversationId.value;
-                    const saved = await saveCurrentConversation();
-
-                    if (saved) {
-                      console.log('对话保存成功，刷新列表');
-                      // 保存成功后立即刷新对话列表
-                      await loadConversations();
-                    } else {
-                      console.warn('对话保存失败');
-                      // 尝试再次保存
-                      setTimeout(async () => {
-                        const retrySaved = await saveCurrentConversation();
-                        if (retrySaved) {
-                          console.log('重试保存成功');
-                          await loadConversations();
-                        } else {
-                          console.error('重试保存仍然失败');
-                          ElMessage.warning('对话保存可能未成功，重启后可能无法恢复');
-                        }
-                      }, 1000); // 1秒后重试
-                    }
-                  } catch (error) {
-                    console.error('保存过程出错:', error);
-                  }
-                }, 100);
-              } else {
-                // 如果是新对话，创建一个ID并保存
-                currentConversationId.value = 'conv_' + Date.now();
-                console.log('创建新对话ID:', currentConversationId.value);
-
-                // 延迟一小段时间确保UI先更新
-                setTimeout(async () => {
-                  try {
-                    // 将新的ID传递给service
-                    aiAssistantService.currentConversationId = currentConversationId.value;
-                    const saved = await saveCurrentConversation();
-
-                    if (saved) {
-                      console.log('新对话保存成功，刷新列表');
-                      // 保存成功后立即加载对话列表以更新UI
-                      await loadConversations();
-                    } else {
-                      console.warn('新对话保存失败');
-                      // 尝试再次保存
-                      setTimeout(async () => {
-                        const retrySaved = await saveCurrentConversation();
-                        if (retrySaved) {
-                          console.log('新对话重试保存成功');
-                          await loadConversations();
-                        } else {
-                          console.error('新对话重试保存仍然失败');
-                          ElMessage.warning('对话保存可能未成功，重启后可能无法恢复');
-                        }
-                      }, 1000); // 1秒后重试
-                    }
-                  } catch (error) {
-                    console.error('保存新对话过程出错:', error);
-                  }
-                }, 100);
-              }
-
-              // 在消息发送完成后添加的代码 - 处理语音对话流程
-              // 如果启用了连续语音对话模式，在AI回复完成后自动开始下一轮语音输入
-              if (voiceConversationMode.value && voiceConversationActive.value) {
-                // 如果启用了语音对话模式，通知语音对话管理器
-                setTimeout(() => {
-                  // 获取最后一条消息
-                  const messageIndex = messages.value.length - 1;
-                  if (messageIndex >= 0 && messages.value[messageIndex].role === 'assistant') {
-                    voiceConversationManager.handleAIResponseComplete(messages.value[messageIndex].content);
-                  }
-                }, 500);
-              }
-
-              // 在消息处理完成后，如果启用了自动朗读，开始朗读最新的AI回复
-              if (autoReadMessages.value && !pauseAutoReading.value && !voiceConversationMode.value) {
-                // 获取最后一条消息的索引
-                const lastMessageIndex = messages.value.length - 1;
-
-                // 如果最后一条消息是AI回复，朗读它
-                if (lastMessageIndex >= 0 && messages.value[lastMessageIndex].role === 'assistant') {
-                  // 延迟一小段时间再开始朗读，确保UI更新完成
-                  setTimeout(() => {
-                    speakMessage(messages.value[lastMessageIndex].content, lastMessageIndex);
-                  }, 500);
-                }
-              }
-            } else {
-              // 继续等待
-              setTimeout(waitForTypingComplete, 100);
-            }
-          };
-
-          // 开始等待打字完成
-          waitForTypingComplete();
-        },
-        // 错误处理回调
-        (error) => {
-          logDebug('流式响应错误:', error);
-
-          // 停止打字
-          if (typingInterval) {
-            clearInterval(typingInterval);
-            typingInterval = null;
+          // 如果没有思维链，直接使用原始响应作为答案
+          if (!finalParsed.thinking && !finalParsed.answer) {
+            finalParsed.answer = finalResponse;
           }
+
+          // 更新消息内容
+          assistantMessage.content = finalParsed.answer || finalResponse;
+          assistantMessage.thinking = finalParsed.thinking;
+
+          // 移除所有光标
+          removeAllCursors();
 
           // 确保关闭加载状态
           isLoading.value = false;
+          isThinking.value = false;
 
-          // 显示错误
-          const errorMessage = '\n\n> ⚠️ *错误: ' + error.message + '*';
-          fullResponse += errorMessage;
-          assistantMessage.content = fullResponse;
-
-          if (streamingElement) {
-            streamingElement.innerHTML = formatMessage(fullResponse);
-          }
-
+          // 显示最终格式化的内容
           nextTick(() => {
+            if (thinkingElement && finalParsed.thinking) {
+              thinkingElement.innerHTML = formatMessage(finalParsed.thinking);
+            }
+            if (answerElement && (finalParsed.answer || finalResponse)) {
+              answerElement.innerHTML = formatMessage(finalParsed.answer || finalResponse);
+            }
+
+            // 只在最终完成时滚动到底部
             scrollToBottom();
             setupCodeCopyButtons();
           });
 
+          // 保存对话历史
+          saveConversationHistory();
+
+          // 处理语音对话
+          handleVoiceConversation(finalParsed.answer || finalResponse);
+
+          // 处理自动朗读
+          handleAutoReading(finalParsed.answer || finalResponse);
+        },
+        // 错误处理回调
+        (error) => {
+          console.error('流式响应错误:', error);
+
+          // 移除所有光标
+          removeAllCursors();
+
+          // 关闭加载状态
+          isLoading.value = false;
+          isThinking.value = false;
+
+          // 显示错误
           ElMessage.error('请求失败: ' + error.message);
         },
         // 系统消息
         settings.value.systemPrompt
     );
+
   } catch (error) {
     console.error('发送消息失败:', error);
     isLoading.value = false;
+    isThinking.value = false;
     ElMessage.error('发送消息失败: ' + error.message);
+  }
+};
+
+// 辅助函数
+const saveConversationHistory = () => {
+  if (currentConversationId.value) {
+    setTimeout(async () => {
+      try {
+        aiAssistantService.currentConversationId = currentConversationId.value;
+        const saved = await saveCurrentConversation();
+        if (saved) {
+          await loadConversations();
+        }
+      } catch (error) {
+        console.error('保存过程出错:', error);
+      }
+    }, 100);
+  } else {
+    currentConversationId.value = 'conv_' + Date.now();
+    setTimeout(async () => {
+      try {
+        aiAssistantService.currentConversationId = currentConversationId.value;
+        const saved = await saveCurrentConversation();
+        if (saved) {
+          await loadConversations();
+        }
+      } catch (error) {
+        console.error('保存新对话过程出错:', error);
+      }
+    }, 100);
+  }
+};
+
+const handleVoiceConversation = (content) => {
+  if (voiceConversationMode.value && voiceConversationActive.value) {
+    setTimeout(() => {
+      const messageIndex = messages.value.length - 1;
+      if (messageIndex >= 0 && messages.value[messageIndex].role === 'assistant') {
+        voiceConversationManager.handleAIResponseComplete(content);
+      }
+    }, 500);
+  }
+};
+
+const handleAutoReading = (content) => {
+  if (autoReadMessages.value && !pauseAutoReading.value && !voiceConversationMode.value) {
+    const lastMessageIndex = messages.value.length - 1;
+    if (lastMessageIndex >= 0 && messages.value[lastMessageIndex].role === 'assistant') {
+      setTimeout(() => {
+        speakMessage(content, lastMessageIndex);
+      }, 500);
+    }
   }
 };
 
@@ -4344,6 +4464,231 @@ pre code.hljs {
   box-shadow: var(--shadow-hover);
 }
 
+/* 思考指示器样式 */
+.thinking-indicator {
+  display: flex;
+  align-items: center;
+  padding: 12px 16px;
+  margin-bottom: 8px;
+  background-color: rgba(0, 122, 255, 0.05);
+  border-radius: 16px;
+  border: 1px solid rgba(0, 122, 255, 0.1);
+  animation: fadeIn 0.3s ease-out;
+}
+
+.thinking-dots {
+  display: flex;
+  align-items: center;
+  margin-right: 8px;
+}
+
+.thinking-dots span {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background-color: var(--primary-color);
+  margin: 0 2px;
+  animation: thinkingDot 1.4s infinite ease-in-out;
+}
+
+.thinking-dots span:nth-child(1) {
+  animation-delay: 0s;
+}
+
+.thinking-dots span:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.thinking-dots span:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+@keyframes thinkingDot {
+  0%, 80%, 100% {
+    transform: scale(0.8);
+    opacity: 0.5;
+  }
+  40% {
+    transform: scale(1.2);
+    opacity: 1;
+  }
+}
+
+.thinking-text {
+  font-size: 14px;
+  color: var(--primary-color);
+  font-style: italic;
+}
+
+/* 优化思维链容器显示 */
+.thinking-chain-container {
+  margin: 12px 0;
+  border: 1px solid rgba(0, 122, 255, 0.2);
+  border-radius: 12px;
+  background: linear-gradient(135deg, rgba(0, 122, 255, 0.03) 0%, rgba(0, 122, 255, 0.08) 100%);
+  overflow: hidden;
+  transition: all 0.3s ease;
+  animation: slideInFromLeft 0.3s ease-out;
+  min-height: 60px; /* 确保有最小高度 */
+}
+
+@keyframes slideInFromLeft {
+  from {
+    opacity: 0;
+    transform: translateX(-20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.thinking-chain-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  background: rgba(0, 122, 255, 0.1);
+  cursor: pointer;
+  transition: background-color 0.2s ease;
+  border-bottom: 1px solid rgba(0, 122, 255, 0.15);
+}
+
+.thinking-chain-header:hover {
+  background: rgba(0, 122, 255, 0.15);
+}
+
+.thinking-chain-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 500;
+  color: var(--primary-color);
+}
+
+.thinking-count {
+  font-size: 12px;
+  opacity: 0.7;
+  font-weight: normal;
+}
+
+.collapse-icon {
+  transition: transform 0.3s ease;
+  color: var(--primary-color);
+}
+
+.collapse-icon.collapsed {
+  transform: rotate(-90deg);
+}
+
+.thinking-chain-content {
+  animation: slideDown 0.3s ease-out;
+}
+
+@keyframes slideDown {
+  from {
+    opacity: 0;
+    max-height: 0;
+  }
+  to {
+    opacity: 1;
+    max-height: 1000px;
+  }
+}
+
+/* 思维链内容样式优化 */
+.thinking-chain-body {
+  padding: 16px;
+  background: rgba(255, 255, 255, 0.5);
+  border-radius: 0 0 12px 12px;
+  font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Roboto Mono', monospace;
+  font-size: 14px;
+  line-height: 1.6;
+  color: #2c3e50;
+  position: relative;
+  overflow-x: auto;
+  min-height: 20px;
+  transition: all 0.2s ease;
+}
+
+.thinking-chain-body:empty::before {
+  content: "正在分析思考中...";
+  color: var(--text-secondary);
+  font-style: italic;
+  opacity: 0.7;
+  display: block;
+  padding: 8px 0;
+}
+
+/* 思维链光标样式 */
+.thinking-cursor {
+  display: inline-block;
+  animation: thinkingBlink 1.2s step-end infinite;
+  margin-left: 4px;
+  color: var(--primary-color);
+  font-weight: bold;
+  font-size: 1.2em;
+}
+
+@keyframes thinkingBlink {
+  0%, 60% { opacity: 1; }
+  61%, 100% { opacity: 0; }
+}
+
+/* 最终答案容器优化 */
+.final-answer-container {
+  margin-top: 8px;
+  animation: slideInFromRight 0.3s ease-out;
+  min-height: 40px; /* 确保有最小高度 */
+}
+
+.final-answer-container .answer-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: linear-gradient(135deg, rgba(255, 193, 7, 0.1) 0%, rgba(255, 193, 7, 0.05) 100%);
+  border-radius: 8px 8px 0 0;
+  font-weight: 500;
+  color: #f57c00;
+  border: 1px solid rgba(255, 193, 7, 0.2);
+  border-bottom: none;
+  animation: slideInFromRight 0.3s ease-out 0.2s both;
+}
+
+.final-answer-body.has-thinking-chain {
+  border: 1px solid rgba(255, 193, 7, 0.2);
+  border-top: none;
+  border-radius: 0 0 8px 8px;
+  background: rgba(255, 193, 7, 0.02);
+}
+
+@keyframes slideInFromRight {
+  from {
+    opacity: 0;
+    transform: translateX(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+/* 答案区域渐入效果 */
+.final-answer-body {
+  min-height: 20px;
+  transition: all 0.2s ease;
+}
+
+.final-answer-body:empty::before {
+  content: "准备生成最终回答...";
+  color: var(--text-secondary);
+  font-style: italic;
+  opacity: 0.7;
+  display: block;
+  padding: 8px 0;
+}
+
 /* 优化消息容器间距 */
 .message-container {
   display: flex;
@@ -4357,11 +4702,11 @@ pre code.hljs {
 @keyframes messageAppear {
   from {
     opacity: 0;
-    transform: translateY(10px);
+    transform: translateY(15px) scale(0.98);
   }
   to {
     opacity: 1;
-    transform: translateY(0);
+    transform: translateY(0) scale(1);
   }
 }
 
@@ -4451,6 +4796,57 @@ pre code.hljs {
   display: flex;
   justify-content: flex-start;
   margin-top: 5px;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.message-actions .el-button {
+  padding: 4px 12px;
+  font-size: 12px;
+  border-radius: 16px;
+  transition: all 0.2s ease;
+}
+
+.message-actions .el-button:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(0, 122, 255, 0.2);
+}
+
+/* 思维链代码块特殊样式 */
+.thinking-chain-body pre {
+  background: rgba(0, 0, 0, 0.05);
+  border-radius: 6px;
+  padding: 12px;
+  margin: 8px 0;
+  border-left: 3px solid var(--primary-color);
+}
+
+.thinking-chain-body code {
+  background: rgba(0, 0, 0, 0.1);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 13px;
+}
+
+/* 优化打字机光标样式 */
+.typing-cursor {
+  display: inline-block;
+  animation: blink 1s step-end infinite;
+  margin: 0 2px;
+  color: var(--primary-color);
+  font-weight: bold;
+  vertical-align: baseline;
+  line-height: 1;
+  will-change: opacity;
+  background-color: var(--primary-color);
+  width: 2px;
+  height: 1em;
+  margin-left: 2px;
+}
+
+@keyframes blink {
+  0%, 50% { opacity: 1; }
+  51%, 100% { opacity: 0; }
 }
 
 /* 优化输入框样式 */
@@ -4505,11 +4901,23 @@ pre code.hljs {
   line-height: 1.4;
 }
 
-/* Loading indicator */
+/* 改进加载指示器 */
 .loading-container {
   display: flex;
-  justify-content: center;
-  margin: 10px 0;
+  flex-direction: column;
+  align-items: center;
+  margin: 16px 0;
+  padding: 20px;
+  background-color: rgba(0, 122, 255, 0.03);
+  border-radius: 12px;
+  border: 1px solid rgba(0, 122, 255, 0.08);
+}
+
+.loading-text {
+  margin-top: 8px;
+  font-size: 14px;
+  color: var(--text-secondary);
+  font-style: italic;
 }
 
 .dots-loader {
@@ -4537,8 +4945,14 @@ pre code.hljs {
 }
 
 @keyframes dots-loader {
-  0%, 80%, 100% { transform: scale(0); }
-  40% { transform: scale(1); }
+  0%, 80%, 100% {
+    transform: scale(0.6);
+    opacity: 0.3;
+  }
+  40% {
+    transform: scale(1);
+    opacity: 1;
+  }
 }
 
 /* Markdown表格样式 */
@@ -4583,18 +4997,6 @@ pre code.hljs {
   margin-bottom: 4px;
 }
 
-/* 打字光标动画优化 */
-.typing-cursor {
-  display: inline-block;
-  animation: blink 1s step-end infinite;
-  margin: 0 2px;
-  color: var(--text-primary);
-  font-weight: bold;
-  vertical-align: baseline;
-  line-height: 1;
-  will-change: opacity;
-}
-
 /* 语音按钮样式 */
 .voice-btn {
   margin-right: 10px;
@@ -4606,12 +5008,6 @@ pre code.hljs {
 }
 
 /* 录音中动画效果 */
-@keyframes pulse {
-  0% { transform: scale(1); }
-  50% { transform: scale(1.1); }
-  100% { transform: scale(1); }
-}
-
 .voice-btn.recording {
   animation: pulse 1.5s infinite;
   background-color: #f56c6c;
@@ -4662,16 +5058,9 @@ pre code.hljs {
   transition: height 0.1s ease;
 }
 
-/* 改进消息操作按钮 */
-.message-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.message-actions .el-button {
-  padding: 2px 8px;
-  font-size: 12px;
+/* 优化开关样式 */
+.chat-actions .el-switch {
+  margin: 0 8px;
 }
 
 /* 语音波形动画 */
@@ -4729,21 +5118,22 @@ pre code.hljs {
   text-align: center;
 }
 
-/* 响应式优化 */
-@media (max-width: 600px) {
-  .input-actions {
-    flex-direction: column;
-    gap: 8px;
-  }
-
-  .input-actions .el-button {
-    width: 100%;
-  }
+/* 流式消息特殊样式 */
+.streaming-message .message-body {
+  position: relative;
+  min-height: 24px;
 }
 
-@keyframes blink {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0; }
+.streaming-message .message-body::after {
+  content: '';
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background-color: var(--primary-color);
+  animation: pulse 2s infinite;
 }
 
 /* 响应式优化 */
@@ -4787,6 +5177,38 @@ pre code.hljs {
     border-radius: 0 4px 4px 0;
     box-shadow: 2px 0 5px rgba(0,0,0,0.1);
   }
+
+  .input-actions {
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .input-actions .el-button {
+    width: 100%;
+  }
+
+  .thinking-chain-header {
+    padding: 10px 12px;
+  }
+
+  .thinking-chain-body {
+    padding: 12px;
+    font-size: 13px;
+  }
+
+  .thinking-chain-title {
+    font-size: 14px;
+  }
+
+  .message-actions {
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .message-actions .el-button {
+    width: 100%;
+    justify-content: flex-start;
+  }
 }
 
 /* 暗黑模式主题 */
@@ -4818,6 +5240,44 @@ pre code.hljs {
 
   .assistant-message .message-body :deep(tr:nth-child(even)) {
     background-color: #1c1c1e;
+  }
+
+  .thinking-indicator {
+    background-color: rgba(0, 132, 255, 0.1);
+    border-color: rgba(0, 132, 255, 0.2);
+  }
+
+  .loading-container {
+    background-color: rgba(0, 132, 255, 0.05);
+    border-color: rgba(0, 132, 255, 0.1);
+  }
+
+  .typing-cursor {
+    background-color: var(--primary-color);
+  }
+
+  .thinking-chain-container {
+    background: linear-gradient(135deg, rgba(0, 132, 255, 0.05) 0%, rgba(0, 132, 255, 0.1) 100%);
+    border-color: rgba(0, 132, 255, 0.3);
+  }
+
+  .thinking-chain-header {
+    background: rgba(0, 132, 255, 0.15);
+  }
+
+  .thinking-chain-body {
+    background: rgba(0, 0, 0, 0.2);
+    color: #e0e0e0;
+  }
+
+  .answer-header {
+    background: linear-gradient(135deg, rgba(255, 193, 7, 0.15) 0%, rgba(255, 193, 7, 0.08) 100%);
+    border-color: rgba(255, 193, 7, 0.3);
+  }
+
+  .final-answer-body {
+    background: rgba(255, 193, 7, 0.03);
+    border-color: rgba(255, 193, 7, 0.3);
   }
 }
 </style>
