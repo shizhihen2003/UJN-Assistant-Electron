@@ -611,6 +611,7 @@ class AiAssistantService {
             const safeMessages = this.messages.map(msg => ({
                 role: msg.role || 'user',
                 content: msg.content || '',
+                thinking: msg.thinking || null,
                 timestamp: msg.timestamp || timestamp
             }));
 
@@ -644,19 +645,8 @@ class AiAssistantService {
                 try {
                     console.log(`尝试通过IPC保存对话: ${conversationId}`);
 
-                    // 创建一个精简版本的对话数据，减少传输量
-                    const simpleData = {
-                        id: conversationId,
-                        messages: safeMessages.map(msg => ({
-                            role: msg.role,
-                            content: msg.content,
-                            timestamp: msg.timestamp
-                        })),
-                        lastUpdated: timestamp
-                    };
-
                     // 序列化数据，确保可以安全传输
-                    const serialized = JSON.stringify(simpleData);
+                    const serialized = JSON.stringify(conversationData);
                     console.log(`序列化后数据长度: ${serialized.length}`);
 
                     // 如果数据过大，使用分片存储
@@ -680,14 +670,29 @@ class AiAssistantService {
                             throw new Error('元数据保存失败');
                         }
 
-                        // 分片保存消息
+                        // 分片保存消息 - 完整的数据验证
                         for (let i = 0; i < safeMessages.length; i++) {
+                            const message = safeMessages[i];
+                            const messageToSave = {
+                                role: message.role || 'user',
+                                content: message.content || '',
+                                timestamp: message.timestamp || new Date().toISOString()
+                            };
+
+                            // 只在thinking存在且不为空时添加
+                            if (message.thinking) {
+                                messageToSave.thinking = message.thinking;
+                            }
+
                             const msgSuccess = await window.electronStore.set(
                                 `ai_conversation_${conversationId}_msg_${i}`,
-                                safeMessages[i]
+                                messageToSave
                             );
+
                             if (!msgSuccess) {
                                 console.warn(`消息 ${i} 保存失败`);
+                            } else {
+                                console.log(`消息 ${i} 保存成功，包含thinking: ${!!messageToSave.thinking}`);
                             }
                         }
 

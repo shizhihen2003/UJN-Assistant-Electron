@@ -154,8 +154,8 @@
                     <el-icon><Brain /></el-icon>
                     <span>推理过程</span>
                     <span class="thinking-count" v-if="message.thinking || currentThinking">
-                      ({{ (message.thinking || currentThinking).length }} 字符)
-                    </span>
+        ({{ (message.thinking || currentThinking).length }} 字符)
+      </span>
                   </div>
                   <el-icon class="collapse-icon" :class="{ 'collapsed': thinkingCollapsed }">
                     <ArrowDown />
@@ -1710,13 +1710,20 @@ const playCompleteResponse = async (text) => {
 /**
  * 添加消息到历史记录
  */
-const addMessageToHistory = (role, content) => {
-  // 添加消息到历史
-  messages.value.push({
+const addMessageToHistory = (role, content, thinking = null) => {
+  // 添加消息到历史，包含思维链数据
+  const newMessage = {
     role,
     content,
     timestamp: new Date().toISOString()
-  });
+  };
+
+  // 如果有思维链数据，添加到消息中
+  if (thinking) {
+    newMessage.thinking = thinking;
+  }
+
+  messages.value.push(newMessage);
 
   // 如果是对话的第一条消息，创建新对话ID
   if (messages.value.length === 1 || !currentConversationId.value) {
@@ -2638,6 +2645,16 @@ const saveConversationHistory = () => {
     setTimeout(async () => {
       try {
         aiAssistantService.currentConversationId = currentConversationId.value;
+
+        // 确保保存的消息包含思维链数据
+        const messagesToSave = messages.value.map(msg => ({
+          role: msg.role,
+          content: msg.content,
+          thinking: msg.thinking, // 添加思维链字段
+          timestamp: msg.timestamp || new Date().toISOString()
+        }));
+
+        aiAssistantService.setMessages(messagesToSave);
         const saved = await saveCurrentConversation();
         if (saved) {
           await loadConversations();
@@ -2651,6 +2668,16 @@ const saveConversationHistory = () => {
     setTimeout(async () => {
       try {
         aiAssistantService.currentConversationId = currentConversationId.value;
+
+        // 确保保存的消息包含思维链数据
+        const messagesToSave = messages.value.map(msg => ({
+          role: msg.role,
+          content: msg.content,
+          thinking: msg.thinking, // 添加思维链字段
+          timestamp: msg.timestamp || new Date().toISOString()
+        }));
+
+        aiAssistantService.setMessages(messagesToSave);
         const saved = await saveCurrentConversation();
         if (saved) {
           await loadConversations();
@@ -2742,7 +2769,6 @@ const loadConversation = async (conversationId) => {
   try {
     console.log(`尝试加载对话: ${conversationId}`);
 
-    // 检查conversationId是否有效
     if (!conversationId) {
       throw new Error('对话ID无效');
     }
@@ -2766,94 +2792,139 @@ const loadConversation = async (conversationId) => {
       // 获取消息内容
       const serviceMessages = aiAssistantService.getMessages();
 
-      // 验证消息内容有效性
       if (!serviceMessages || !serviceMessages.length) {
-        console.warn('从service获取到的消息为空');
-        // 从localStorage再次尝试加载
-        try {
-          const storageKey = `ai_conversation_${conversationId}`;
-          const storedData = localStorage.getItem(storageKey);
+        console.warn('从service获取到的消息为空，尝试从localStorage加载');
 
-          if (storedData) {
-            const parsedData = JSON.parse(storedData);
-            if (parsedData && parsedData.messages && parsedData.messages.length) {
-              console.log(`从localStorage恢复了${parsedData.messages.length}条消息`);
-              messages.value = parsedData.messages.map(msg => ({
-                role: msg.role,
-                content: msg.content,
-                timestamp: msg.timestamp || new Date().toISOString()
-              }));
-
-              // 同步回service
-              aiAssistantService.setMessages(messages.value);
-
-              // 继续处理
-              await scrollToBottom();
-              setupCodeCopyButtons();
-              return;
-            }
-          }
-        } catch (storageError) {
-          console.error('从localStorage恢复失败:', storageError);
-        }
-
-        // 如果仍然失败，显示错误
-        ElMessage.error('对话内容为空，无法加载');
-        return;
-      }
-
-      // 将service中的消息转换为UI消息格式
-      messages.value = serviceMessages.map(msg => ({
-        role: msg.role,
-        content: msg.content,
-        timestamp: msg.timestamp || new Date().toISOString()
-      }));
-
-      // 滚动到底部
-      await scrollToBottom();
-
-      // 设置代码复制按钮
-      setupCodeCopyButtons();
-    } else {
-      console.error(`对话 ${conversationId} 加载失败`);
-
-      // 尝试从localStorage直接加载
-      try {
         const storageKey = `ai_conversation_${conversationId}`;
         const storedData = localStorage.getItem(storageKey);
 
         if (storedData) {
           const parsedData = JSON.parse(storedData);
           if (parsedData && parsedData.messages && parsedData.messages.length) {
-            console.log(`从localStorage直接加载了${parsedData.messages.length}条消息`);
+            console.log(`从localStorage恢复了${parsedData.messages.length}条消息`);
 
-            // 更新UI
-            currentConversationId.value = conversationId;
-            currentConversationTitle.value = getConversationTitle(parsedData);
+            // 加载时包含思维链数据，并添加调试信息
+            messages.value = parsedData.messages.map(msg => {
+              const processedMsg = {
+                role: msg.role,
+                content: msg.content,
+                thinking: msg.thinking || null, // 确保thinking字段存在
+                timestamp: msg.timestamp || new Date().toISOString()
+              };
 
-            messages.value = parsedData.messages.map(msg => ({
-              role: msg.role,
-              content: msg.content,
-              timestamp: msg.timestamp || new Date().toISOString()
-            }));
+              // 调试信息
+              if (processedMsg.thinking) {
+                console.log(`消息 ${msg.role} 包含思维链:`, processedMsg.thinking.substring(0, 100));
+              }
+
+              return processedMsg;
+            });
+
+            // 检查加载的消息中是否有thinking数据
+            const hasThinking = messages.value.some(msg => msg.thinking);
+            console.log('加载的消息中包含思维链:', hasThinking);
 
             // 同步回service
             aiAssistantService.setMessages(messages.value);
-            aiAssistantService.currentConversationId = conversationId;
 
-            // 继续处理
+            // 强制更新UI并等待DOM更新
+            await nextTick();
             await scrollToBottom();
             setupCodeCopyButtons();
+
+            // 强制触发响应式更新
+            showThinkingChain.value = showThinkingChain.value;
+
             return;
           }
         }
 
-        // 如果仍然无法加载
-        ElMessage.error('加载对话失败，无法找到对话数据');
-      } catch (directLoadError) {
-        console.error('从localStorage直接加载失败:', directLoadError);
-        ElMessage.error('加载对话失败: ' + directLoadError.message);
+        ElMessage.error('对话内容为空，无法加载');
+        return;
       }
+
+      // 将service中的消息转换为UI消息格式，包含思维链数据
+      messages.value = serviceMessages.map(msg => {
+        const processedMsg = {
+          role: msg.role,
+          content: msg.content,
+          thinking: msg.thinking || null, // 确保thinking字段存在
+          timestamp: msg.timestamp || new Date().toISOString()
+        };
+
+        // 调试信息
+        if (processedMsg.thinking) {
+          console.log(`消息 ${msg.role} 包含思维链:`, processedMsg.thinking.substring(0, 100));
+        }
+
+        return processedMsg;
+      });
+
+      // 检查加载的消息中是否有thinking数据
+      const hasThinking = messages.value.some(msg => msg.thinking);
+      console.log('加载的消息中包含思维链:', hasThinking);
+
+      // 强制更新UI并等待DOM更新
+      await nextTick();
+      await scrollToBottom();
+      setupCodeCopyButtons();
+
+      // 强制触发响应式更新
+      showThinkingChain.value = showThinkingChain.value;
+
+    } else {
+      console.error(`对话 ${conversationId} 加载失败，尝试直接从localStorage加载`);
+
+      const storageKey = `ai_conversation_${conversationId}`;
+      const storedData = localStorage.getItem(storageKey);
+
+      if (storedData) {
+        const parsedData = JSON.parse(storedData);
+        if (parsedData && parsedData.messages && parsedData.messages.length) {
+          console.log(`从localStorage直接加载了${parsedData.messages.length}条消息`);
+
+          // 更新UI
+          currentConversationId.value = conversationId;
+          currentConversationTitle.value = getConversationTitle(parsedData);
+
+          // 加载时包含思维链数据
+          messages.value = parsedData.messages.map(msg => {
+            const processedMsg = {
+              role: msg.role,
+              content: msg.content,
+              thinking: msg.thinking || null, // 确保thinking字段存在
+              timestamp: msg.timestamp || new Date().toISOString()
+            };
+
+            // 调试信息
+            if (processedMsg.thinking) {
+              console.log(`消息 ${msg.role} 包含思维链:`, processedMsg.thinking.substring(0, 100));
+            }
+
+            return processedMsg;
+          });
+
+          // 检查加载的消息中是否有thinking数据
+          const hasThinking = messages.value.some(msg => msg.thinking);
+          console.log('直接加载的消息中包含思维链:', hasThinking);
+
+          // 同步回service
+          aiAssistantService.setMessages(messages.value);
+          aiAssistantService.currentConversationId = conversationId;
+
+          // 强制更新UI并等待DOM更新
+          await nextTick();
+          await scrollToBottom();
+          setupCodeCopyButtons();
+
+          // 强制触发响应式更新
+          showThinkingChain.value = showThinkingChain.value;
+
+          return;
+        }
+      }
+
+      ElMessage.error('加载对话失败，无法找到对话数据');
     }
   } catch (error) {
     console.error('加载对话失败:', error);
@@ -2870,12 +2941,20 @@ const saveCurrentConversation = async () => {
   try {
     console.log('保存对话ID:', currentConversationId.value);
 
-    // 深拷贝消息，避免引用问题
+    // 深拷贝消息，确保包含思维链数据
     const messagesToSave = JSON.parse(JSON.stringify(messages.value.map(msg => ({
       role: msg.role,
       content: msg.content,
+      thinking: msg.thinking || null, // 确保thinking字段存在
       timestamp: msg.timestamp || new Date().toISOString()
     }))));
+
+    // 打印调试信息
+    console.log('保存的消息数据:', messagesToSave);
+
+    // 检查是否有thinking数据
+    const hasThinking = messagesToSave.some(msg => msg.thinking);
+    console.log('保存的消息中包含思维链:', hasThinking);
 
     // 确保消息非空
     if (!messagesToSave.length) {
@@ -2887,13 +2966,11 @@ const saveCurrentConversation = async () => {
     aiAssistantService.currentConversationId = currentConversationId.value;
     aiAssistantService.setMessages(messagesToSave);
 
-// 保存对话
+    // 保存对话
     const success = await aiAssistantService.saveConversation(currentConversationId.value);
 
     if (success) {
       console.log('保存对话成功');
-
-      // 刷新对话列表
       await loadConversations();
 
       // 如果是新对话，设置标题
@@ -3258,15 +3335,13 @@ const saveSettings = async () => {
   try {
     // 根据服务类型设置对应的配置
     if (settings.value.serviceType === 'ollama') {
-      // 本地Ollama配置
       aiAssistantService.setConfig({
-        apiKey: '', // Ollama不需要API Key
+        apiKey: '',
         apiUrl: `${settings.value.ollamaUrl}/v1/chat/completions`,
         model: settings.value.ollamaModel,
         shareStudentData: settings.value.shareStudentData
       });
     } else {
-      // DeepSeek在线服务配置
       aiAssistantService.setConfig({
         apiKey: settings.value.apiKey,
         apiUrl: settings.value.apiUrl,
@@ -3275,7 +3350,7 @@ const saveSettings = async () => {
       });
     }
 
-    // 保存到本地存储
+    // 保存到本地存储，包含思维链显示设置
     const settingsToSave = {
       serviceType: settings.value.serviceType,
       apiKey: settings.value.apiKey,
@@ -3284,7 +3359,8 @@ const saveSettings = async () => {
       ollamaModel: settings.value.ollamaModel,
       model: settings.value.model,
       systemPrompt: settings.value.systemPrompt,
-      shareStudentData: settings.value.shareStudentData
+      shareStudentData: settings.value.shareStudentData,
+      showThinkingChain: showThinkingChain.value // 保存思维链显示设置
     };
 
     try {
@@ -3344,11 +3420,16 @@ const loadSettings = async () => {
         apiKey: savedSettings.apiKey || '',
         apiUrl: savedSettings.apiUrl || 'https://api.deepseek.com/chat/completions',
         ollamaUrl: savedSettings.ollamaUrl || 'http://localhost:11434',
-        ollamaModel: savedSettings.ollamaModel || '', // 空字符串让自动检测
+        ollamaModel: savedSettings.ollamaModel || '',
         model: savedSettings.model || 'deepseek-chat',
         systemPrompt: savedSettings.systemPrompt || '你是一个乐于助人的助手，专注于帮助济南大学的学生。请提供准确、有用的信息和建议。',
         shareStudentData: savedSettings.shareStudentData || false
       };
+
+      // 加载思维链显示设置
+      showThinkingChain.value = savedSettings.showThinkingChain !== undefined ? savedSettings.showThinkingChain : true;
+
+      console.log('思维链显示设置:', showThinkingChain.value);
 
       // 根据设置更新服务配置
       if (settings.value.serviceType === 'ollama') {
@@ -3366,20 +3447,27 @@ const loadSettings = async () => {
           shareStudentData: settings.value.shareStudentData
         });
       }
+    } else {
+      // 使用默认设置
+      settings.value = {
+        serviceType: 'deepseek',
+        apiKey: '',
+        apiUrl: 'https://api.deepseek.com/chat/completions',
+        ollamaUrl: 'http://localhost:11434',
+        ollamaModel: '',
+        model: 'deepseek-chat',
+        systemPrompt: '你是一个乐于助人的助手，专注于帮助济南大学的学生。请提供准确、有用的信息和建议。',
+        shareStudentData: false
+      };
+
+      // 默认显示思维链
+      showThinkingChain.value = true;
+      console.log('使用默认思维链显示设置:', showThinkingChain.value);
     }
   } catch (error) {
     console.error('加载设置失败:', error);
     // 使用默认设置
-    settings.value = {
-      serviceType: 'deepseek',
-      apiKey: '',
-      apiUrl: 'https://api.deepseek.com/chat/completions',
-      ollamaUrl: 'http://localhost:11434',
-      ollamaModel: '',
-      model: 'deepseek-chat',
-      systemPrompt: '你是一个乐于助人的助手，专注于帮助济南大学的学生。请提供准确、有用的信息和建议。',
-      shareStudentData: false
-    };
+    showThinkingChain.value = true;
   }
 };
 
