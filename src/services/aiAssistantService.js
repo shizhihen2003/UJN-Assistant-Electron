@@ -360,10 +360,10 @@ class AiAssistantService {
     }
 
     /**
-     * 发送流式请求到AI模型 - 支持Ollama
+     * 发送流式请求到AI模型 - 支持DeepSeek官方API和本地模型
      * @param {string} userMessage 用户消息
-     * @param {Function} onChunk 接收块的回调函数
-     * @param {Function} onComplete 完成时的回调函数
+     * @param {Function} onChunk 接收块的回调函数 (contentChunk, reasoningChunk, type)
+     * @param {Function} onComplete 完成时的回调函数 (finalContent, finalReasoning)
      * @param {Function} onError 错误处理回调
      * @param {string} systemMessage 系统消息
      * @returns {Promise<void>}
@@ -388,7 +388,6 @@ class AiAssistantService {
             if (this.shareStudentData) {
                 const studentData = await this.collectStudentData();
                 if (studentData) {
-                    // 将学生数据添加到系统消息中
                     enhancedSystemMessage += `\n\n以下是用户的学生数据，请根据这些信息提供更加个性化的回答：\n${JSON.stringify(studentData, null, 2)}`;
                 }
             }
@@ -397,7 +396,6 @@ class AiAssistantService {
             if (this.messages.length === 0 || this.messages[0].role !== 'system') {
                 this.messages.unshift({ role: 'system', content: enhancedSystemMessage, timestamp: new Date().toISOString() });
             } else if (this.shareStudentData) {
-                // 如果已有系统消息，但需要添加学生数据，则更新系统消息
                 this.messages[0].content = enhancedSystemMessage;
             }
 
@@ -427,8 +425,64 @@ class AiAssistantService {
             // 设置流式标志
             this.isStreaming = true;
 
-            // 存储完整的AI响应
+            // 存储完整的AI响应和思维链
             let fullResponse = '';
+            let fullReasoning = '';
+
+            // 检测API类型：DeepSeek官方API 还是 本地模型
+            let isDeepSeekOfficial = false;
+            let useThinkTagParser = false;
+
+            // 创建思维链解析器（用于本地模型的<think>标签格式）
+            const createThinkingRenderer = () => {
+                let thinkingBuffer = '';
+                let answerBuffer = '';
+                let isInThinkingMode = false;
+                let thinkingComplete = false;
+
+                return {
+                    addContent: (fullText) => {
+                        const parsed = this.parseStreamingContent(fullText);
+
+                        if (parsed.hasThinking && !isInThinkingMode) {
+                            isInThinkingMode = true;
+                            console.log('进入思考模式');
+                        }
+
+                        if (parsed.isThinkingComplete && !thinkingComplete) {
+                            thinkingComplete = true;
+                            console.log('思考完成，开始答案');
+                        }
+
+                        if (parsed.hasThinking) {
+                            thinkingBuffer = parsed.thinking;
+                            if (parsed.isThinkingComplete) {
+                                answerBuffer = parsed.answer;
+                            } else {
+                                answerBuffer = '';
+                            }
+                        } else {
+                            answerBuffer = parsed.answer;
+                        }
+
+                        return {
+                            thinking: thinkingBuffer,
+                            answer: answerBuffer,
+                            hasThinking: parsed.hasThinking,
+                            isThinkingComplete: parsed.isThinkingComplete
+                        };
+                    },
+
+                    finalize: () => {
+                        return {
+                            thinking: thinkingBuffer,
+                            answer: answerBuffer
+                        };
+                    }
+                };
+            };
+
+            const thinkingRenderer = createThinkingRenderer();
 
             // 发送请求
             const response = await fetch(this.apiUrl, {
@@ -447,12 +501,10 @@ class AiAssistantService {
                     const errorText = await response.text();
                     console.log('错误响应内容:', errorText);
 
-                    // 尝试解析错误JSON
                     try {
                         const errorData = JSON.parse(errorText);
                         errorMessage = errorData.error?.message || errorData.message || errorMessage;
                     } catch (e) {
-                        // 如果不是JSON，使用原始文本
                         if (errorText.trim()) {
                             errorMessage = errorText;
                         }
@@ -492,6 +544,9 @@ class AiAssistantService {
             const decoder = new TextDecoder('utf-8');
             let buffer = '';
 
+            // 用于累积完整的响应内容（本地模型需要）
+            let accumulatedContent = '';
+
             // 处理数据流
             while (this.isStreaming) {
                 const { done, value } = await reader.read();
@@ -500,10 +555,7 @@ class AiAssistantService {
                     break;
                 }
 
-                // 解码接收到的数据
                 buffer += decoder.decode(value, { stream: true });
-
-                // 处理buffer中完整的SSE消息
                 let lines = buffer.split('\n');
                 buffer = lines.pop() || '';
 
@@ -511,29 +563,66 @@ class AiAssistantService {
                     if (line.startsWith('data: ')) {
                         let data = line.slice(6);
 
-                        // 如果数据是[DONE]，则完成
                         if (data.trim() === '[DONE]') {
                             this.isStreaming = false;
                             break;
                         }
 
-                        // 解析JSON数据
                         try {
                             const jsonData = JSON.parse(data);
                             const chunk = jsonData.choices?.[0];
 
                             if (chunk) {
-                                // 处理内容
-                                let content = '';
-                                if (chunk.delta?.content) {
-                                    content = chunk.delta.content;
-                                } else if (chunk.message?.content) {
-                                    content = chunk.message.content;
-                                }
+                                // 检测是否是DeepSeek官方API格式（有reasoning_content字段）
+                                if (chunk.delta?.reasoning_content !== undefined) {
+                                    isDeepSeekOfficial = true;
 
-                                if (content) {
-                                    fullResponse += content;
-                                    onChunk(content);
+                                    // 处理DeepSeek官方API的思维链
+                                    if (chunk.delta.reasoning_content) {
+                                        fullReasoning += chunk.delta.reasoning_content;
+                                        onChunk('', chunk.delta.reasoning_content, 'thinking');
+                                    }
+
+                                    // 处理DeepSeek官方API的最终答案
+                                    if (chunk.delta.content) {
+                                        fullResponse += chunk.delta.content;
+                                        onChunk(chunk.delta.content, '', 'answer');
+                                    }
+                                } else {
+                                    // 处理本地模型或其他API格式（使用<think>标签）
+                                    useThinkTagParser = true;
+
+                                    let content = '';
+                                    if (chunk.delta?.content) {
+                                        content = chunk.delta.content;
+                                    } else if (chunk.message?.content) {
+                                        content = chunk.message.content;
+                                    }
+
+                                    if (content) {
+                                        accumulatedContent += content;
+
+                                        // 使用思维链解析器处理累积的内容
+                                        const parsed = thinkingRenderer.addContent(accumulatedContent);
+
+                                        // 检查思维链更新
+                                        if (parsed.thinking !== fullReasoning) {
+                                            const newThinking = parsed.thinking.slice(fullReasoning.length);
+                                            if (newThinking) {
+                                                fullReasoning = parsed.thinking;
+                                                onChunk('', newThinking, 'thinking');
+                                            }
+                                        }
+
+                                        // 检查答案更新
+                                        if (parsed.answer !== fullResponse) {
+                                            const newAnswer = parsed.answer.slice(fullResponse.length);
+                                            if (newAnswer) {
+                                                fullResponse = parsed.answer;
+                                                onChunk(newAnswer, '', 'answer');
+                                            }
+                                        }
+                                    }
                                 }
 
                                 // 检查是否完成
@@ -548,19 +637,60 @@ class AiAssistantService {
 
                             // 如果解析失败，可能是纯文本响应（某些本地模型）
                             if (data.trim() && !data.includes('{')) {
-                                fullResponse += data;
-                                onChunk(data);
+                                accumulatedContent += data;
+
+                                // 使用思维链解析器处理
+                                const parsed = thinkingRenderer.addContent(accumulatedContent);
+
+                                if (parsed.thinking !== fullReasoning) {
+                                    const newThinking = parsed.thinking.slice(fullReasoning.length);
+                                    if (newThinking) {
+                                        fullReasoning = parsed.thinking;
+                                        onChunk('', newThinking, 'thinking');
+                                    }
+                                }
+
+                                if (parsed.answer !== fullResponse) {
+                                    const newAnswer = parsed.answer.slice(fullResponse.length);
+                                    if (newAnswer) {
+                                        fullResponse = parsed.answer;
+                                        onChunk(newAnswer, '', 'answer');
+                                    }
+                                }
                             }
                         }
                     }
                 }
             }
 
-            // 添加助手回复到历史
-            this.addMessage('assistant', fullResponse);
+            // 如果使用了<think>标签解析器，获取最终结果
+            if (useThinkTagParser && !isDeepSeekOfficial) {
+                const finalParsed = thinkingRenderer.finalize();
+                fullResponse = finalParsed.answer;
+                fullReasoning = finalParsed.thinking;
+            }
+
+            // 添加助手回复到历史，包含思维链
+            const assistantMessage = {
+                role: 'assistant',
+                content: fullResponse,
+                thinking: fullReasoning || null,
+                timestamp: new Date().toISOString()
+            };
+
+            this.messages.push(assistantMessage);
 
             // 触发完成回调
-            onComplete(fullResponse);
+            onComplete(fullResponse, fullReasoning);
+
+            console.log('响应完成:', {
+                isDeepSeekOfficial,
+                useThinkTagParser,
+                hasThinking: !!fullReasoning,
+                contentLength: fullResponse.length,
+                thinkingLength: fullReasoning.length
+            });
+
         } catch (error) {
             console.error('AI流式请求失败:', error);
 
@@ -584,6 +714,68 @@ class AiAssistantService {
             // 触发错误回调
             onError(new Error(errorMessage));
         }
+    }
+
+    /**
+     * 解析流式响应中的思维链 - 用于本地模型的<think>标签格式
+     */
+    parseStreamingContent(fullText) {
+        const hasThinkStart = fullText.includes('<think>');
+
+        if (!hasThinkStart) {
+            return {
+                thinking: '',
+                answer: fullText,
+                hasThinking: false,
+                isThinkingComplete: false
+            };
+        }
+
+        const hasComplete = /<think>[\s\S]*?<\/think>/.test(fullText);
+
+        if (!hasComplete) {
+            const thinkStart = fullText.indexOf('<think>');
+            const thinkingContent = fullText.slice(thinkStart + 7);
+
+            return {
+                thinking: thinkingContent,
+                answer: '',
+                hasThinking: true,
+                isThinkingComplete: false
+            };
+        }
+
+        const thinking = this.parseThinkingContent(fullText);
+        const answer = this.extractFinalAnswer(fullText);
+
+        return {
+            thinking: thinking,
+            answer: answer,
+            hasThinking: thinking.length > 0,
+            isThinkingComplete: true
+        };
+    }
+
+    /**
+     * 解析思维链内容
+     */
+    parseThinkingContent(text) {
+        const thinkingRegex = /<think>([\s\S]*?)<\/think>/g;
+        const matches = [];
+        let match;
+
+        while ((match = thinkingRegex.exec(text)) !== null) {
+            matches.push(match[1]);
+        }
+
+        return matches.join('\n\n');
+    }
+
+    /**
+     * 移除思维链标签，获取最终答案
+     */
+    extractFinalAnswer(text) {
+        return text.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
     }
 
     /**

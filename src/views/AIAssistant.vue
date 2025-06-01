@@ -2389,7 +2389,7 @@ const stopVoiceConversation = () => {
 };
 
 /**
- * 发送消息 - 修复思维链显示的版本
+ * 发送消息 - 兼容DeepSeek官方API和本地模型的思维链显示
  */
 const sendMessage = async () => {
   const message = inputMessage.value.trim();
@@ -2430,14 +2430,6 @@ const sendMessage = async () => {
 
     // 等待DOM更新
     await nextTick();
-
-    // 存储完整的AI响应
-    let fullResponse = '';
-    let hasDetectedThinking = false;
-    let isThinkingPhase = false;
-
-    // 创建思维链渲染器
-    const thinkingRenderer = createThinkingRenderer();
 
     // 用于DOM操作的变量
     let thinkingElement = null;
@@ -2513,75 +2505,66 @@ const sendMessage = async () => {
       }
     };
 
+    // 跟踪状态
+    let hasDetectedThinking = false;
+    let isThinkingPhase = false;
+
     // 发送请求并处理流式响应
     await aiAssistantService.sendStreamingRequest(
         message,
-        // 接收块的回调 - 修复版本
-        (chunk) => {
-          fullResponse += chunk;
+        // 接收块的回调 - 兼容新格式
+        (contentChunk, reasoningChunk, type) => {
+          console.log('收到块:', { contentChunk, reasoningChunk, type });
 
-          // 解析思维链和答案
-          const parsed = thinkingRenderer.addContent(fullResponse);
+          if (type === 'thinking' && reasoningChunk) {
+            // 处理思维链内容
+            if (!hasDetectedThinking) {
+              hasDetectedThinking = true;
+              isThinkingPhase = true;
+              console.log('检测到思维链开始');
 
-          // 检测思维链开始
-          if (parsed.hasThinking && !hasDetectedThinking) {
-            hasDetectedThinking = true;
-            isThinkingPhase = true;
-            console.log('检测到思维链开始');
+              // 立即结束初始思考状态，显示思维链容器
+              isThinking.value = false;
 
-            // 立即结束初始思考状态，显示思维链容器
-            isThinking.value = false;
-
-            // 清空答案区域（如果之前有错误内容）
-            clearAnswerContent();
-          }
-
-          // 更新思维链内容
-          if (parsed.thinking !== currentThinking.value) {
-            currentThinking.value = parsed.thinking;
-            if (currentThinking.value) {
-              updateThinkingContent(currentThinking.value);
+              // 清空答案区域（如果之前有错误内容）
+              clearAnswerContent();
             }
-          }
 
-          // 更新答案内容（只在思考完成或没有思维链时）
-          if (parsed.answer !== finalAnswer.value) {
-            finalAnswer.value = parsed.answer;
+            // 更新思维链内容
+            currentThinking.value += reasoningChunk;
+            updateThinkingContent(currentThinking.value);
 
-            // 只有在非思考阶段或思考完成时才更新答案
-            if (!isThinkingPhase || parsed.isThinkingComplete) {
-              if (finalAnswer.value) {
-                updateAnswerContent(finalAnswer.value);
-              }
+          } else if (type === 'answer' && contentChunk) {
+            // 处理最终答案内容
+
+            // 如果还没有检测到思维链，直接结束思考状态
+            if (!hasDetectedThinking && isThinking.value) {
+              isThinking.value = false;
+              console.log('直接答案模式，无思维链');
             }
-          }
 
-          // 检测思考完成
-          if (parsed.isThinkingComplete && isThinkingPhase) {
-            isThinkingPhase = false;
-            console.log('思考阶段完成，开始答案阶段');
-          }
+            // 检测思考完成（从思维链模式切换到答案模式）
+            if (isThinkingPhase) {
+              isThinkingPhase = false;
+              console.log('思考阶段完成，开始答案阶段');
+            }
 
-          // 没有思维链的情况下，第一次收到内容时结束思考状态
-          if (!parsed.hasThinking && isThinking.value && fullResponse.trim()) {
-            isThinking.value = false;
+            // 更新最终答案内容
+            finalAnswer.value += contentChunk;
+            updateAnswerContent(finalAnswer.value);
           }
         },
-        // 完成时的回调
-        (finalResponse) => {
-          console.log('AI响应完成');
+        // 完成时的回调 - 兼容新格式
+        (finalResponse, finalReasoning) => {
+          console.log('AI响应完成:', {
+            finalResponse: finalResponse?.substring(0, 100),
+            finalReasoning: finalReasoning?.substring(0, 100),
+            hasReasoning: !!finalReasoning
+          });
 
-          // 解析最终内容
-          const finalParsed = thinkingRenderer.finalize();
-
-          // 如果没有思维链，直接使用原始响应作为答案
-          if (!finalParsed.thinking && !finalParsed.answer) {
-            finalParsed.answer = finalResponse;
-          }
-
-          // 更新消息内容
-          assistantMessage.content = finalParsed.answer || finalResponse;
-          assistantMessage.thinking = finalParsed.thinking;
+          // 更新消息内容，包含思维链
+          assistantMessage.content = finalResponse || finalAnswer.value;
+          assistantMessage.thinking = finalReasoning || currentThinking.value;
 
           // 移除所有光标
           removeAllCursors();
@@ -2592,11 +2575,11 @@ const sendMessage = async () => {
 
           // 显示最终格式化的内容
           nextTick(() => {
-            if (thinkingElement && finalParsed.thinking) {
-              thinkingElement.innerHTML = formatMessage(finalParsed.thinking);
+            if (thinkingElement && assistantMessage.thinking) {
+              thinkingElement.innerHTML = formatMessage(assistantMessage.thinking);
             }
-            if (answerElement && (finalParsed.answer || finalResponse)) {
-              answerElement.innerHTML = formatMessage(finalParsed.answer || finalResponse);
+            if (answerElement && assistantMessage.content) {
+              answerElement.innerHTML = formatMessage(assistantMessage.content);
             }
 
             // 只在最终完成时滚动到底部
@@ -2608,10 +2591,10 @@ const sendMessage = async () => {
           saveConversationHistory();
 
           // 处理语音对话
-          handleVoiceConversation(finalParsed.answer || finalResponse);
+          handleVoiceConversation(assistantMessage.content);
 
           // 处理自动朗读
-          handleAutoReading(finalParsed.answer || finalResponse);
+          handleAutoReading(assistantMessage.content);
         },
         // 错误处理回调
         (error) => {
@@ -2639,7 +2622,7 @@ const sendMessage = async () => {
   }
 };
 
-// 辅助函数
+// 辅助函数保持不变
 const saveConversationHistory = () => {
   if (currentConversationId.value) {
     setTimeout(async () => {
@@ -3342,10 +3325,11 @@ const saveSettings = async () => {
         shareStudentData: settings.value.shareStudentData
       });
     } else {
+      // DeepSeek配置
       aiAssistantService.setConfig({
         apiKey: settings.value.apiKey,
         apiUrl: settings.value.apiUrl,
-        model: settings.value.model,
+        model: settings.value.model, // 这里会是 deepseek-reasoner
         shareStudentData: settings.value.shareStudentData
       });
     }
@@ -3360,7 +3344,7 @@ const saveSettings = async () => {
       model: settings.value.model,
       systemPrompt: settings.value.systemPrompt,
       shareStudentData: settings.value.shareStudentData,
-      showThinkingChain: showThinkingChain.value // 保存思维链显示设置
+      showThinkingChain: showThinkingChain.value
     };
 
     try {
