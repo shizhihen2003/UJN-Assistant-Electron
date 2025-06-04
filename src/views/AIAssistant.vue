@@ -239,7 +239,8 @@
             @keydown.enter.prevent="handleEnterKey"
             :disabled="isLoading || isRecognizing"
         />
-        <div v-if="isRecognizing" class="voice-wave-container">
+        <!-- 语音波形显示 - 仅在非语音对话模式下显示 -->
+        <div v-if="isRecognizing && !voiceChatMode" class="voice-wave-container">
           <div class="voice-wave">
             <span></span>
             <span></span>
@@ -250,16 +251,16 @@
           <div class="recognition-text">{{ recognitionResult || '正在聆听...' }}</div>
         </div>
         <div class="input-actions">
-          <!-- 添加语音输入按钮 -->
+          <!-- 添加语音输入按钮 - 仅在非语音对话模式下可用 -->
           <el-button
               @click="toggleVoiceInput"
               :type="isRecognizing ? 'danger' : 'default'"
-              :disabled="isVoiceButtonDisabled || isLoading"
+              :disabled="isLoading || voiceChatMode"
               class="voice-btn"
-              :class="{ 'recording': isRecognizing }"
+              :class="{ 'recording': isRecognizing && !voiceChatMode }"
           >
             <el-icon><Microphone v-if="!isRecognizing" /><Close v-else /></el-icon>
-            {{ isRecognizing ? '停止录音' : '语音输入' }}
+            {{ voiceChatMode ? '语音对话模式中' : (isRecognizing ? '停止录音' : '语音输入') }}
           </el-button>
 
           <el-button type="primary" @click="sendMessage" :loading="isLoading" :disabled="!inputMessage.trim()">
@@ -498,16 +499,14 @@
       </template>
     </el-dialog>
 
-    <!-- 语音对话模式覆盖层 -->
+    <!-- 语音对话模式覆盖层 - 修改后的事件绑定 -->
     <voice-chat
         ref="voiceChatRef"
         :active="voiceChatMode"
         @start-listening="startVoiceRecognition"
         @stop-listening="stopVoiceRecognition"
-        @speech-result="handleVoiceCommand"
         @stop-speaking="stopAllSpeechActivities"
         @exit-voice-mode="exitVoiceChatMode"
-        @prepare-next-turn="handlePrepareTurn"
     />
   </div>
 </template>
@@ -889,16 +888,22 @@ const showDeleteDialog = ref(false);
 const renameTitle = ref('');
 const actionTargetId = ref('');
 
-// 语音识别状态
+// =============================================================================
+// 语音相关状态 - 重构后的简化版本
+// =============================================================================
+
+// 基础语音状态
 const isRecognizing = ref(false);
 const recognitionResult = ref('');
-const isVoiceButtonDisabled = ref(false);
-
-// 语音合成状态
 const isSpeaking = ref(false);
 const currentSpeakingIndex = ref(-1);
 
-// 语音设置对话框
+// 语音对话模式 - 简化的状态管理
+const voiceConversationMode = ref(false); // UI开关状态
+const voiceChatMode = ref(false);          // 语音对话覆盖层激活状态
+const isProcessingVoice = ref(false);      // 防止重复处理的锁
+
+// 语音设置
 const showSpeechSettings = ref(false);
 const speechSettings = ref({
   appId: '',
@@ -912,28 +917,9 @@ const speechSettings = ref({
   pitch: 50, // 音调
 });
 
-// 语音对话模式
-const voiceConversationMode = ref(false);
-const voiceConversationActive = ref(false);
-const autoListeningTimeout = ref(null);
 const autoReadMessages = ref(false);
-const pauseAutoReading = ref(false);
 
-// 语音识别增强
-const silenceTimer = ref(null);
-const speechTimeout = ref(null);
-const lastSpeechTimestamp = ref(Date.now());
-const silenceThreshold = 3000; // 3秒静音自动结束
-
-// 新增: 语音对话模式覆盖层状态
-const voiceChatMode = ref(false);
-const streamingSpeech = ref(false);
-const speechSynthesizer = ref(null);
-const currentAudioQueue = ref([]);
-const isAudioPlaying = ref(false);
-const pendingAudioChunks = ref([]);
-
-// 新增本地模型状态变量
+// 本地模型状态变量
 const testingConnection = ref(false);
 const refreshingModels = ref(false);
 const availableModels = ref([]);
@@ -986,293 +972,18 @@ const selectedModelInfo = computed(() => {
   return availableModels.value.find(model => model.name === settings.value.ollamaModel);
 });
 
-// 语音对话管理器
-const voiceConversationManager = {
-  // 状态变量
-  active: false,
-  listening: false,
-  speaking: false,
-  waitingForAI: false,
-
-  // 超时计时器
-  silenceTimer: null,
-  inactivityTimer: null,
-
-  // 配置参数
-  config: {
-    silenceThreshold: 3000,   // 静音检测阈值（毫秒）
-    inactivityTimeout: 60000, // 无活动自动关闭（毫秒）
-    minTextLength: 5,         // 最小文本长度，短于此长度不发送
-    endPunctuations: ['.', '。', '?', '？', '!', '！'] // 结束标点
-  },
-
-  // 初始化
-  init() {
-    this.resetTimers();
-  },
-
-  // 开始语音对话
-  start() {
-    this.active = true;
-    this.resetTimers();
-
-    // 设置无活动自动关闭定时器
-    this.inactivityTimer = setTimeout(() => {
-      if (this.active && !this.speaking && !this.listening && !this.waitingForAI) {
-        console.log('检测到长时间无活动，自动关闭语音对话模式');
-        this.stop();
-        voiceConversationMode.value = false;
-        ElMessage.info('检测到长时间无活动，已自动关闭语音对话模式');
-      }
-    }, this.config.inactivityTimeout);
-
-    return this.startListening();
-  },
-
-  // 停止语音对话
-  stop() {
-    this.active = false;
-    this.resetTimers();
-
-    // 如果正在朗读，停止朗读
-    if (this.speaking) {
-      speechService.stopPlayback();
-      this.speaking = false;
-    }
-
-    // 如果正在收听，停止收听
-    if (this.listening) {
-      return this.stopListening();
-    }
-
-    return Promise.resolve();
-  },
-
-  // 开始语音识别
-  async startListening() {
-    if (this.speaking) {
-      // 如果正在朗读，先停止
-      speechService.stopPlayback();
-      this.speaking = false;
-    }
-
-    this.listening = true;
-
-    // 重置识别文本
-    recognitionResult.value = '';
-    inputMessage.value = '';
-
-    // 播放开始识别的音频反馈
-    playAudioFeedback('start');
-
-    try {
-      // 开始语音识别
-      await toggleVoiceInput();
-
-      // 启动静音检测定时器
-      this.silenceTimer = setTimeout(() => {
-        if (this.listening && !this.waitingForAI) {
-          console.log('检测到长时间静音，自动停止语音识别');
-          this.stopListening().then(() => {
-            // 如果语音识别文本太少，不发送，而是重新开始收听
-            if (inputMessage.value.length < this.config.minTextLength) {
-              setTimeout(() => {
-                if (this.active) {
-                  this.startListening();
-                }
-              }, 1000);
-            }
-          });
-        }
-      }, this.config.silenceThreshold);
-
-      return true;
-    } catch (error) {
-      console.error('开始语音识别失败:', error);
-      this.listening = false;
-      return false;
-    }
-  },
-
-  // 停止语音识别
-  async stopListening() {
-    this.listening = false;
-
-    // 清除静音检测定时器
-    if (this.silenceTimer) {
-      clearTimeout(this.silenceTimer);
-      this.silenceTimer = null;
-    }
-
-    // 播放停止识别的音频反馈
-    playAudioFeedback('stop');
-
-    try {
-      await toggleVoiceInput();
-
-      // 如果有足够长的识别文本，发送消息
-      if (inputMessage.value.length >= this.config.minTextLength) {
-        this.waitingForAI = true;
-        await sendMessage();
-      }
-
-      return true;
-    } catch (error) {
-      console.error('停止语音识别失败:', error);
-      return false;
-    }
-  },
-
-  // 开始朗读 AI 回复
-  async startSpeaking(text, onComplete) {
-    if (this.listening) {
-      // 如果正在识别语音，先停止
-      await this.stopListening();
-    }
-
-    this.speaking = true;
-
-    try {
-      // 预处理文本以获得更好的朗读效果
-      const processedText = preprocessTextForTTS(text);
-
-      // 获取动态调整的TTS参数
-      const ttsParams = dynamicAdjustTtsParams(processedText);
-
-      // 开始朗读
-      await speechService.startSynthesize(
-          processedText,
-          // 开始回调
-          () => {
-            console.log('开始朗读AI回复');
-          },
-          // 结束回调
-          () => {
-            console.log('AI回复朗读完成');
-            this.speaking = false;
-
-            // 如果语音对话仍然活跃，等待一小段时间后重新开始收听
-            if (this.active && !this.waitingForAI) {
-              setTimeout(() => {
-                if (this.active && !this.listening && !this.speaking && !this.waitingForAI) {
-                  this.startListening();
-                }
-              }, 1000);
-            }
-
-            if (onComplete) onComplete();
-          },
-          // 错误回调
-          (error) => {
-            console.error('语音合成错误:', error);
-            ElMessage.error('语音合成失败: ' + error.message);
-            this.speaking = false;
-
-            // 出错时也尝试继续对话
-            if (this.active && !this.waitingForAI) {
-              setTimeout(() => {
-                if (this.active && !this.listening && !this.speaking && !this.waitingForAI) {
-                  this.startListening();
-                }
-              }, 1000);
-            }
-
-            if (onComplete) onComplete();
-          },
-          // 合成选项
-          ttsParams
-      );
-
-      return true;
-    } catch (error) {
-      console.error('开始AI回复朗读失败:', error);
-      this.speaking = false;
-
-      if (onComplete) onComplete();
-      return false;
-    }
-  },
-
-  // 处理AI回复完成事件
-  handleAIResponseComplete(response) {
-    this.waitingForAI = false;
-
-    // 如果不再活跃，不做任何处理
-    if (!this.active) return;
-
-    // 如果启用了自动朗读，开始朗读回复
-    if (autoReadMessages.value && !pauseAutoReading.value) {
-      this.startSpeaking(response);
-    } else {
-      // 否则直接重新开始语音识别
-      setTimeout(() => {
-        if (this.active && !this.listening && !this.speaking) {
-          this.startListening();
-        }
-      }, 1000);
-    }
-  },
-
-  // 重置所有计时器
-  resetTimers() {
-    if (this.silenceTimer) {
-      clearTimeout(this.silenceTimer);
-      this.silenceTimer = null;
-    }
-
-    if (this.inactivityTimer) {
-      clearTimeout(this.inactivityTimer);
-      this.inactivityTimer = null;
-    }
-  }
-};
+// =============================================================================
+// 语音对话核心方法 - 重构后的简化版本
+// =============================================================================
 
 /**
- * 初始化语音合成器
+ * 处理语音对话模式切换
  */
-const initSpeechSynthesizer = async () => {
-  try {
-    speechSynthesizer.value = {
-      // 存储加载的语音上下文
-      audioContext: null,
-
-      // 初始化
-      async init() {
-        if (!this.audioContext) {
-          this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
-          if (this.audioContext.state === 'suspended') {
-            await this.audioContext.resume();
-          }
-        }
-        return this.audioContext;
-      },
-
-      // 播放音频数据
-      async play(audioBuffer) {
-        const context = await this.init();
-        const source = context.createBufferSource();
-        source.buffer = audioBuffer;
-        source.connect(context.destination);
-        source.start(0);
-        return new Promise(resolve => {
-          source.onended = resolve;
-        });
-      },
-
-      // 解码音频数据
-      async decode(audioData) {
-        const context = await this.init();
-        return context.decodeAudioData(audioData);
-      }
-    };
-
-    // 初始化音频上下文
-    await speechSynthesizer.value.init();
-    console.log('语音合成器初始化成功');
-    return true;
-  } catch (error) {
-    console.error('初始化语音合成器失败:', error);
-    return false;
+const handleVoiceConversationModeChange = (value) => {
+  if (value) {
+    enterVoiceChatMode();
+  } else {
+    exitVoiceChatMode();
   }
 };
 
@@ -1281,21 +992,21 @@ const initSpeechSynthesizer = async () => {
  */
 const enterVoiceChatMode = async () => {
   try {
-    // 初始化语音合成器
-    await initSpeechSynthesizer();
+    console.log('[AI] 进入语音对话模式');
 
-    // 激活语音对话模式
+    // 重置所有语音相关状态
+    isProcessingVoice.value = false;
+
+    // 激活语音对话覆盖层
     voiceChatMode.value = true;
+    voiceConversationMode.value = true;
 
-    console.log('已进入语音对话模式');
-
-    // 显示欢迎消息
     ElMessage.success({
-      message: '已进入语音对话模式，点击麦克风开始',
-      duration: 3000
+      message: '已进入语音对话模式',
+      duration: 2000
     });
   } catch (error) {
-    console.error('进入语音对话模式失败:', error);
+    console.error('[AI] 进入语音对话模式失败:', error);
     ElMessage.error('启动语音对话模式失败: ' + error.message);
   }
 };
@@ -1304,40 +1015,459 @@ const enterVoiceChatMode = async () => {
  * 退出语音对话模式
  */
 const exitVoiceChatMode = () => {
+  console.log('[AI] 退出语音对话模式');
+
   // 停止所有语音活动
   stopAllSpeechActivities();
 
-  // 退出语音对话模式
+  // 重置状态
   voiceChatMode.value = false;
   voiceConversationMode.value = false;
-  streamingSpeech.value = false;
-  pendingAudioChunks.value = [];
+  isProcessingVoice.value = false;
 
-  console.log('已退出语音对话模式');
+  // 通知VoiceChat组件重置
+  if (voiceChatRef.value) {
+    voiceChatRef.value.cleanup();
+  }
+
   ElMessage.success('已退出语音对话模式');
 };
 
 /**
- * 处理下一轮准备的方法
+ * 开始语音识别（VoiceChat组件调用）
  */
-const handlePrepareTurn = (wasSilence) => {
-  console.log('准备开始下一轮对话', { wasSilence });
+const startVoiceRecognition = async () => {
+  if (isProcessingVoice.value) {
+    console.log('[AI] 正在处理语音，忽略新的识别请求');
+    return;
+  }
 
-  // 如果还在语音模式，延迟后自动开始下一轮
-  if (voiceChatMode.value && !isLoading.value) {
-    setTimeout(() => {
-      if (voiceChatMode.value && !isLoading.value && voiceChatRef.value) {
-        console.log('自动开始下一轮对话');
-        voiceChatRef.value.startListening();
-      }
-    }, 1500);
+  try {
+    console.log('[AI] 开始语音识别');
+
+    // 设置处理状态
+    isProcessingVoice.value = true;
+
+    // 重置识别结果
+    recognitionResult.value = '';
+    inputMessage.value = '';
+
+    // 更新语音识别状态
+    isRecognizing.value = true;
+
+    // 启动语音识别服务
+    await speechService.startRecognize(
+        // 识别结果回调
+        (text, isLast) => {
+          console.log('[AI] 识别结果:', text, 'isLast:', isLast);
+
+          recognitionResult.value = text;
+          inputMessage.value = text;
+
+          // 通知VoiceChat组件更新显示
+          if (voiceChatRef.value) {
+            voiceChatRef.value.handleSpeechResult(text);
+          }
+
+          // 如果是最终结果，不在这里处理，等待stopVoiceRecognition调用
+        },
+        // 错误回调
+        (error) => {
+          console.error('[AI] 语音识别错误:', error);
+          isRecognizing.value = false;
+          isProcessingVoice.value = false;
+
+          if (voiceChatRef.value) {
+            voiceChatRef.value.handleError('语音识别失败: ' + error.message);
+          }
+
+          ElMessage.error('语音识别失败: ' + error.message);
+        }
+    );
+
+  } catch (error) {
+    console.error('[AI] 启动语音识别失败:', error);
+    isRecognizing.value = false;
+    isProcessingVoice.value = false;
+
+    if (voiceChatRef.value) {
+      voiceChatRef.value.handleError('启动语音识别失败');
+    }
   }
 };
 
 /**
- * 停止所有语音活动
+ * 停止语音识别（VoiceChat组件调用）
+ */
+const stopVoiceRecognition = async (isSilence, recognizedText) => {
+  if (!isRecognizing.value) {
+    console.log('[AI] 未在进行语音识别');
+    return;
+  }
+
+  try {
+    console.log('[AI] 停止语音识别, 静音触发:', isSilence, '识别文本:', recognizedText);
+
+    // 停止语音识别服务
+    await speechService.stopRecognize();
+    isRecognizing.value = false;
+
+    // 检查识别文本长度
+    const finalText = recognizedText || recognitionResult.value || inputMessage.value;
+
+    if (!finalText || finalText.trim().length < 2) {
+      console.log('[AI] 识别文本太短，不处理:', finalText);
+      isProcessingVoice.value = false;
+
+      // 如果在语音对话模式且不是用户主动停止，重新开始
+      if (voiceChatMode.value && isSilence) {
+        setTimeout(() => {
+          if (voiceChatRef.value && voiceChatMode.value) {
+            voiceChatRef.value.startListening();
+          }
+        }, 1000);
+      }
+      return;
+    }
+
+    // 处理识别到的文本
+    await handleVoiceCommand(finalText.trim());
+
+  } catch (error) {
+    console.error('[AI] 停止语音识别失败:', error);
+    isRecognizing.value = false;
+    isProcessingVoice.value = false;
+
+    if (voiceChatRef.value) {
+      voiceChatRef.value.handleError('停止语音识别失败');
+    }
+  }
+};
+
+/**
+ * 处理语音命令
+ */
+const handleVoiceCommand = async (text) => {
+  if (!text || !text.trim()) {
+    isProcessingVoice.value = false;
+    return;
+  }
+
+  console.log('[AI] 处理语音命令:', text);
+
+  try {
+    // 检查是否是退出命令
+    if (isExitCommand(text)) {
+      exitVoiceChatMode();
+      return;
+    }
+
+    // 通知VoiceChat组件进入思考状态
+    if (voiceChatRef.value) {
+      voiceChatRef.value.startThinking();
+    }
+
+    // 添加用户消息到历史
+    addMessageToHistory('user', text);
+
+    // 发送到AI处理
+    await sendToAIWithVoiceResponse(text);
+
+  } catch (error) {
+    console.error('[AI] 处理语音命令失败:', error);
+    isProcessingVoice.value = false;
+
+    if (voiceChatRef.value) {
+      voiceChatRef.value.handleError('处理失败: ' + error.message);
+    }
+  }
+};
+
+/**
+ * 检查是否是退出命令
+ */
+const isExitCommand = (text) => {
+  const exitKeywords = ['退出', '结束', '退出语音模式', '关闭语音模式', '停止对话'];
+  return exitKeywords.some(keyword => text.toLowerCase().includes(keyword));
+};
+
+/**
+ * 发送到AI并处理语音响应
+ */
+const sendToAIWithVoiceResponse = async (message) => {
+  try {
+    console.log('[AI] 发送到AI处理:', message);
+
+    // 设置加载状态
+    isLoading.value = true;
+    isThinking.value = true;
+
+    // 重置思维链内容
+    currentThinking.value = '';
+    finalAnswer.value = '';
+
+    // 准备接收AI响应
+    let assistantMessage = {
+      role: 'assistant',
+      content: '',
+      thinking: '',
+      timestamp: new Date().toISOString()
+    };
+
+    // 添加到消息历史
+    messages.value.push(assistantMessage);
+
+    await nextTick();
+    await scrollToBottom();
+
+    // 获取DOM元素用于实时更新
+    let thinkingElement = null;
+    let answerElement = null;
+
+    const waitForElements = () => {
+      return new Promise((resolve) => {
+        const checkElements = () => {
+          const thinkingRef = document.querySelector(`[data-thinking-ref="${messages.value.length - 1}"]`);
+          const answerRef = document.querySelector(`[data-answer-ref="${messages.value.length - 1}"]`);
+
+          if (answerRef) {
+            thinkingElement = thinkingRef;
+            answerElement = answerRef;
+            resolve();
+          } else {
+            setTimeout(checkElements, 10);
+          }
+        };
+        checkElements();
+      });
+    };
+
+    await waitForElements();
+
+    // 直接更新思维链内容
+    const updateThinkingContent = (content) => {
+      const thinkingRef = document.querySelector(`[data-thinking-ref="${messages.value.length - 1}"]`);
+      if (thinkingRef && content) {
+        const formattedContent = formatMessage(content);
+        thinkingRef.innerHTML = formattedContent + '<span class="thinking-cursor">●</span>';
+        thinkingElement = thinkingRef;
+      }
+    };
+
+    // 直接更新答案内容
+    const updateAnswerContent = (content) => {
+      const answerRef = document.querySelector(`[data-answer-ref="${messages.value.length - 1}"]`);
+      if (answerRef && content) {
+        const formattedContent = formatMessage(content);
+        answerRef.innerHTML = formattedContent + '<span class="typing-cursor">|</span>';
+        answerElement = answerRef;
+      }
+    };
+
+    // 清空答案内容
+    const clearAnswerContent = () => {
+      const answerRef = document.querySelector(`[data-answer-ref="${messages.value.length - 1}"]`);
+      if (answerRef) {
+        answerRef.innerHTML = '';
+        answerElement = answerRef;
+      }
+    };
+
+    // 移除所有光标
+    const removeAllCursors = () => {
+      if (thinkingElement) {
+        const cursor = thinkingElement.querySelector('.thinking-cursor');
+        if (cursor) cursor.remove();
+      }
+      if (answerElement) {
+        const cursor = answerElement.querySelector('.typing-cursor');
+        if (cursor) cursor.remove();
+      }
+    };
+
+    // 跟踪状态
+    let hasDetectedThinking = false;
+    let isThinkingPhase = false;
+
+    // 发送流式请求
+    await aiAssistantService.sendStreamingRequest(
+        message,
+        // 接收文本块的回调
+        (contentChunk, reasoningChunk, type) => {
+          console.log('[AI] 收到块:', { contentChunk, reasoningChunk, type });
+
+          if (type === 'thinking' && reasoningChunk) {
+            // 处理思维链内容
+            if (!hasDetectedThinking) {
+              hasDetectedThinking = true;
+              isThinkingPhase = true;
+              console.log('[AI] 检测到思维链开始');
+
+              // 立即结束初始思考状态，显示思维链容器
+              isThinking.value = false;
+
+              // 清空答案区域（如果之前有错误内容）
+              clearAnswerContent();
+            }
+
+            // 更新思维链内容
+            currentThinking.value += reasoningChunk;
+            updateThinkingContent(currentThinking.value);
+
+          } else if (type === 'answer' && contentChunk) {
+            // 处理最终答案内容
+
+            // 如果还没有检测到思维链，直接结束思考状态
+            if (!hasDetectedThinking && isThinking.value) {
+              isThinking.value = false;
+              console.log('[AI] 直接答案模式，无思维链');
+            }
+
+            // 检测思考完成（从思维链模式切换到答案模式）
+            if (isThinkingPhase) {
+              isThinkingPhase = false;
+              console.log('[AI] 思考阶段完成，开始答案阶段');
+            }
+
+            // 更新最终答案内容
+            finalAnswer.value += contentChunk;
+            updateAnswerContent(finalAnswer.value);
+          }
+        },
+        // 完成时的回调
+        async (finalResponse, finalReasoning) => {
+          console.log('[AI] AI响应完成');
+
+          // 更新消息内容，包含思维链
+          assistantMessage.content = finalResponse || finalAnswer.value;
+          assistantMessage.thinking = finalReasoning || currentThinking.value;
+
+          // 移除所有光标
+          removeAllCursors();
+
+          // 确保关闭加载状态
+          isLoading.value = false;
+          isThinking.value = false;
+
+          // 显示最终格式化的内容
+          await nextTick();
+          if (thinkingElement && assistantMessage.thinking) {
+            thinkingElement.innerHTML = formatMessage(assistantMessage.thinking);
+          }
+          if (answerElement && assistantMessage.content) {
+            answerElement.innerHTML = formatMessage(assistantMessage.content);
+          }
+
+          // 保存对话
+          saveConversationHistory();
+
+          // 通知VoiceChat组件开始语音播放
+          if (voiceChatRef.value) {
+            voiceChatRef.value.startSpeaking(assistantMessage.content);
+          }
+
+          // 开始语音播放
+          await playVoiceResponse(assistantMessage.content);
+        },
+        // 错误处理
+        (error) => {
+          console.error('[AI] AI处理错误:', error);
+
+          // 移除所有光标
+          removeAllCursors();
+
+          // 重置状态
+          isLoading.value = false;
+          isThinking.value = false;
+          isProcessingVoice.value = false;
+
+          if (voiceChatRef.value) {
+            voiceChatRef.value.handleError('AI处理失败: ' + error.message);
+          }
+        },
+        // 系统提示
+        settings.value.systemPrompt
+    );
+
+  } catch (error) {
+    console.error('[AI] 发送到AI失败:', error);
+
+    // 重置状态
+    isLoading.value = false;
+    isThinking.value = false;
+    isProcessingVoice.value = false;
+
+    if (voiceChatRef.value) {
+      voiceChatRef.value.handleError('发送失败: ' + error.message);
+    }
+  }
+};
+
+/**
+ * 播放语音响应
+ */
+const playVoiceResponse = async (text) => {
+  try {
+    console.log('[AI] 开始播放语音响应');
+
+    // 预处理文本
+    const processedText = preprocessTextForTTS(text);
+
+    // 开始语音合成
+    await speechService.startSynthesize(
+        processedText,
+        // 开始回调
+        () => {
+          console.log('[AI] 语音播放开始');
+        },
+        // 结束回调
+        () => {
+          console.log('[AI] 语音播放结束');
+
+          // 重置处理状态
+          isProcessingVoice.value = false;
+
+          // 通知VoiceChat组件播放完成
+          if (voiceChatRef.value) {
+            voiceChatRef.value.completeSpeaking();
+          }
+        },
+        // 错误回调
+        (error) => {
+          console.error('[AI] 语音播放错误:', error);
+
+          // 重置状态
+          isProcessingVoice.value = false;
+
+          if (voiceChatRef.value) {
+            voiceChatRef.value.handleError('语音播放失败');
+          }
+        },
+        // 语音参数
+        {
+          voice: speechSettings.value.voice,
+          speed: speechSettings.value.speed,
+          volume: speechSettings.value.volume,
+          pitch: speechSettings.value.pitch
+        }
+    );
+
+  } catch (error) {
+    console.error('[AI] 播放语音响应失败:', error);
+    isProcessingVoice.value = false;
+
+    if (voiceChatRef.value) {
+      voiceChatRef.value.handleError('播放失败: ' + error.message);
+    }
+  }
+};
+
+/**
+ * 停止语音播放（VoiceChat组件调用）
  */
 const stopAllSpeechActivities = () => {
+  console.log('[AI] 停止所有语音活动');
+
   // 停止语音识别
   if (isRecognizing.value) {
     speechService.stopRecognize();
@@ -1347,363 +1477,13 @@ const stopAllSpeechActivities = () => {
   // 停止语音合成
   speechService.stopPlayback();
 
-  // 清空音频队列
-  currentAudioQueue.value = [];
-  isAudioPlaying.value = false;
+  // 重置状态
+  isProcessingVoice.value = false;
 
-  console.log('已停止所有语音活动');
-};
-
-/**
- * 开始语音识别 (用于语音对话覆盖层)
- */
-const startVoiceRecognition = async () => {
-  // 确保不在处理中
-  if (isRecognizing.value || isLoading.value) {
-    console.log('语音识别或AI处理进行中，无法启动新识别');
-    return;
-  }
-
-  try {
-    // 重置识别结果
-    recognitionResult.value = '';
-    inputMessage.value = '';
-
-    // 更新UI状态
-    if (voiceChatRef.value) {
-      voiceChatRef.value.listening = true;
-      voiceChatRef.value.thinking = false;
-      voiceChatRef.value.speaking = false;
-    }
-
-    // 启动语音识别
-    isRecognizing.value = true;
-
-    await speechService.startRecognize(
-        // 识别结果回调
-        (text, isLast) => {
-          recognitionResult.value = text;
-          // 更新最后说话时间
-          lastSpeechTimestamp.value = Date.now();
-
-          // 重置静音检测定时器
-          if (silenceTimer.value) {
-            clearTimeout(silenceTimer.value);
-          }
-
-          // 设置静音检测
-          silenceTimer.value = setTimeout(() => {
-            // 超过静音阈值时自动停止
-            if (isRecognizing.value && Date.now() - lastSpeechTimestamp.value > silenceThreshold) {
-              console.log('检测到静音，自动停止录音');
-              // 使用静音停止方式
-              stopVoiceRecognitionBySilence();
-            }
-          }, silenceThreshold);
-
-          if (isLast && text) {
-            // 处理完整的识别结果
-            handleVoiceCommand(text);
-          }
-        },
-        // 错误回调
-        (error) => {
-          console.error('语音识别错误:', error);
-          isRecognizing.value = false;
-
-          // 更新UI状态
-          if (voiceChatRef.value) {
-            voiceChatRef.value.listening = false;
-            voiceChatRef.value.showError('无法识别语音');
-          }
-        }
-    );
-
-    console.log('语音识别已启动');
-  } catch (error) {
-    console.error('启动语音识别失败:', error);
-    isRecognizing.value = false;
-
-    if (voiceChatRef.value) {
-      voiceChatRef.value.listening = false;
-    }
-
-    ElMessage.error('启动语音识别失败: ' + error.message);
-  }
-};
-
-const stopVoiceRecognitionBySilence = async () => {
-  if (!isRecognizing.value) return;
-
-  try {
-    // 清除静音检测定时器
-    if (silenceTimer.value) {
-      clearTimeout(silenceTimer.value);
-      silenceTimer.value = null;
-    }
-
-    // 更新UI状态
-    if (voiceChatRef.value) {
-      // 通知组件这是静音触发的停止
-      voiceChatRef.value.stopListeningByTimeout();
-    }
-
-    await speechService.stopRecognize();
-    isRecognizing.value = false;
-
-    // 如果识别到的文本很短或为空，则不处理
-    if (!recognitionResult.value || recognitionResult.value.length < 3) {
-      console.log('识别文本过短，不处理');
-      // 重新开始语音识别
-      setTimeout(() => {
-        if (voiceChatMode.value && !isLoading.value) {
-          startVoiceRecognition();
-        }
-      }, 1000);
-      return;
-    }
-
-    // 否则处理识别文本
-    handleVoiceCommand(recognitionResult.value);
-
-    console.log('静音触发语音识别停止');
-  } catch (error) {
-    console.error('静音停止语音识别失败:', error);
-    isRecognizing.value = false;
-  }
-};
-
-/**
- * 停止语音识别 (用于语音对话覆盖层)
- */
-const stopVoiceRecognition = async () => {
-  if (!isRecognizing.value) return;
-
-  try {
-    // 清除静音检测定时器
-    if (silenceTimer.value) {
-      clearTimeout(silenceTimer.value);
-      silenceTimer.value = null;
-    }
-
-    // 更新UI状态
-    if (voiceChatRef.value) {
-      voiceChatRef.value.stopListening();
-    }
-
-    await speechService.stopRecognize();
-    isRecognizing.value = false;
-
-    console.log('语音识别已停止');
-  } catch (error) {
-    console.error('停止语音识别失败:', error);
-    isRecognizing.value = false;
-  }
-};
-
-/**
- * 处理语音命令 (用于语音对话覆盖层)
- */
-const handleVoiceCommand = async (text) => {
-  if (!text || !text.trim()) {
-    // 如果没有识别到文本，重新开始聆听
-    if (voiceChatRef.value && voiceChatMode.value) {
-      setTimeout(() => {
-        if (voiceChatMode.value && !isLoading.value) {
-          voiceChatRef.value.startListening();
-        }
-      }, 1000);
-    }
-    return;
-  }
-
-  console.log('处理语音命令:', text);
-
-  // 检查是否是退出命令
-  if (['退出', '结束', '退出语音模式', '关闭语音模式'].includes(text.toLowerCase().trim())) {
-    exitVoiceChatMode();
-    return;
-  }
-
-  // 添加用户消息到历史
-  addMessageToHistory('user', text);
-
-  // 设置思考状态
-  if (voiceChatRef.value) {
-    voiceChatRef.value.thinking = true;
-  }
-
-  // 发送到AI处理并直接流式合成语音
-  await sendToAIWithStreamingSpeech(text);
-};
-
-/**
- * 向AI发送消息并流式合成语音
- */
-const sendToAIWithStreamingSpeech = async (message) => {
-  try {
-    // 设置处理中状态
-    isLoading.value = true;
-    isThinking.value = true; // 开始思考
-    streamingSpeech.value = true;
-
-    // 准备接收流式响应
-    let assistantMessage = {
-      role: 'assistant',
-      content: '',
-      timestamp: new Date().toISOString()
-    };
-
-    // 清空并重置所有语音相关状态
-    pendingAudioChunks.value = [];
-
-    // 确保停止任何正在播放的音频
-    speechService.stopPlayback();
-
-    // 更新UI状态
-    if (voiceChatRef.value) {
-      voiceChatRef.value.thinking = true;
-      voiceChatRef.value.listening = false;
-      voiceChatRef.value.speaking = false;
-    }
-
-    // 发送请求并处理流式响应
-    await aiAssistantService.sendStreamingRequest(
-        message,
-        // 接收文本块的回调
-        async (chunk) => {
-          // 第一次收到响应时，结束思考状态
-          if (isThinking.value) {
-            isThinking.value = false;
-            if (voiceChatRef.value) {
-              voiceChatRef.value.thinking = false;
-            }
-          }
-
-          // 累积响应文本
-          assistantMessage.content += chunk;
-
-          // 收集这个块用于显示
-          if (streamingElementRef.value) {
-            streamingElementRef.value.innerHTML = formatMessage(assistantMessage.content);
-          }
-
-          // 不在这里收集单个小文本块，等完整响应
-        },
-        // 完成时的回调
-        async (finalResponse) => {
-          console.log('AI响应完成，准备播放语音');
-
-          // 更新UI
-          if (voiceChatRef.value) {
-            voiceChatRef.value.thinking = false;
-            voiceChatRef.value.speaking = true;
-          }
-
-          // 更新消息历史
-          addMessageToHistory('assistant', assistantMessage.content);
-
-          // 播放完整响应的语音
-          await playCompleteResponse(assistantMessage.content);
-
-          // 重置状态
-          isLoading.value = false;
-          isThinking.value = false;
-          streamingSpeech.value = false;
-
-          // 完成对话轮次
-          if (voiceChatRef.value) {
-            // 通知语音组件完成对话轮次
-            voiceChatRef.value.completeTurn();
-          }
-        },
-        // 错误处理回调
-        (error) => {
-          console.error('AI处理错误:', error);
-          isLoading.value = false;
-          isThinking.value = false;
-          streamingSpeech.value = false;
-
-          // 显示错误
-          if (voiceChatRef.value) {
-            voiceChatRef.value.speaking = false;
-            voiceChatRef.value.thinking = false;
-            voiceChatRef.value.showError('AI处理失败');
-          }
-        },
-        // 系统提示
-        settings.value.systemPrompt
-    );
-  } catch (error) {
-    console.error('流式处理失败:', error);
+  // 如果正在加载，也停止
+  if (isLoading.value) {
     isLoading.value = false;
     isThinking.value = false;
-    streamingSpeech.value = false;
-
-    if (voiceChatRef.value) {
-      voiceChatRef.value.speaking = false;
-      voiceChatRef.value.thinking = false;
-      voiceChatRef.value.showError('处理失败: ' + error.message);
-    }
-  }
-};
-
-/**
- * 处理语音对话完整响应的语音播放
- */
-const playCompleteResponse = async (text) => {
-  try {
-    // 预处理文本以获得更好的朗读效果
-    const processedText = preprocessTextForTTS(text);
-
-    console.log('开始朗读完整AI响应');
-
-    // 使用与朗读功能相同的方式直接调用语音合成服务
-    await speechService.startSynthesize(
-        processedText,
-        // 开始回调
-        () => {
-          console.log('AI响应朗读开始');
-          if (voiceChatRef.value) {
-            voiceChatRef.value.speaking = true;
-          }
-        },
-        // 结束回调
-        () => {
-          console.log('AI响应朗读结束');
-          if (voiceChatRef.value) {
-            // 朗读结束后，需要手动触发对话完成
-            voiceChatRef.value.speaking = false;
-
-            // 短暂延迟后开始下一轮
-            setTimeout(() => {
-              if (voiceChatMode.value && voiceChatRef.value) {
-                voiceChatRef.value.startListening();
-              }
-            }, 1500);
-          }
-        },
-        // 错误回调
-        (error) => {
-          console.error('AI响应朗读错误:', error);
-          if (voiceChatRef.value) {
-            voiceChatRef.value.speaking = false;
-            voiceChatRef.value.showError('语音合成失败');
-          }
-        },
-        // 合成选项
-        {
-          voice: speechSettings.value.voice,
-          speed: speechSettings.value.speed,
-          volume: speechSettings.value.volume,
-          pitch: speechSettings.value.pitch
-        }
-    );
-  } catch (error) {
-    console.error('AI响应朗读失败:', error);
-    if (voiceChatRef.value) {
-      voiceChatRef.value.speaking = false;
-    }
   }
 };
 
@@ -1711,28 +1491,173 @@ const playCompleteResponse = async (text) => {
  * 添加消息到历史记录
  */
 const addMessageToHistory = (role, content, thinking = null) => {
-  // 添加消息到历史，包含思维链数据
   const newMessage = {
     role,
     content,
     timestamp: new Date().toISOString()
   };
 
-  // 如果有思维链数据，添加到消息中
   if (thinking) {
     newMessage.thinking = thinking;
   }
 
   messages.value.push(newMessage);
 
-  // 如果是对话的第一条消息，创建新对话ID
   if (messages.value.length === 1 || !currentConversationId.value) {
     currentConversationId.value = 'conv_' + Date.now();
   }
 
-  // 保存对话历史
   saveCurrentConversation();
 };
+
+/**
+ * 预处理TTS文本
+ */
+const preprocessTextForTTS = (text) => {
+  return text
+      .replace(/\*\*(.*?)\*\*/g, '$1')
+      .replace(/\*(.*?)\*/g, '$1')
+      .replace(/\[(.*?)\]\((.*?)\)/g, '$1')
+      .replace(/`(.*?)`/g, '$1')
+      .replace(/```[\s\S]*?```/g, '代码块已省略')
+      .replace(/#+\s+(.*?)(?:\n|$)/g, '$1。')
+      .replace(/\n+/g, '。')
+      .replace(/[*\-+] (.*?)(?:\n|$)/g, '$1。')
+      .replace(/\s{2,}/g, ' ')
+      .trim();
+};
+
+// =============================================================================
+// 非语音对话模式的语音输入（保留原有功能）
+// =============================================================================
+
+/**
+ * 切换语音输入 - 仅用于非语音对话模式
+ */
+const toggleVoiceInput = async () => {
+  // 如果在语音对话模式，不使用此方法
+  if (voiceChatMode.value) return;
+
+  try {
+    if (isRecognizing.value) {
+      console.log('[AI] 停止普通语音输入');
+      await speechService.stopRecognize();
+      isRecognizing.value = false;
+    } else {
+      console.log('[AI] 开始普通语音输入');
+      recognitionResult.value = '';
+      inputMessage.value = '';
+      isRecognizing.value = true;
+
+      await speechService.startRecognize(
+          (text, isLast) => {
+            recognitionResult.value = text;
+            inputMessage.value = text;
+          },
+          (error) => {
+            console.error('[AI] 普通语音识别错误:', error);
+            isRecognizing.value = false;
+            ElMessage.error('语音识别失败: ' + error.message);
+          }
+      );
+    }
+  } catch (error) {
+    console.error('[AI] 语音输入切换失败:', error);
+    isRecognizing.value = false;
+    ElMessage.error('语音操作失败: ' + error.message);
+  }
+};
+
+/**
+ * 朗读消息
+ */
+const speakMessage = async (text, index, onComplete) => {
+  try {
+    // 如果当前正在朗读这条消息，点击停止
+    if (isSpeaking.value && currentSpeakingIndex.value === index) {
+      console.log('停止当前消息朗读');
+      speechService.stopPlayback();
+
+      // 确保UI状态立即更新
+      isSpeaking.value = false;
+      currentSpeakingIndex.value = -1;
+
+      // 如果提供了回调，调用回调
+      if (onComplete) onComplete();
+      return;
+    }
+
+    // 如果正在朗读其他消息，先停止
+    if (isSpeaking.value) {
+      console.log('停止其他消息朗读');
+      speechService.stopPlayback();
+
+      // 确保UI状态立即更新
+      isSpeaking.value = false;
+      currentSpeakingIndex.value = -1;
+
+      // 添加足够的延迟确保所有资源都被清理
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+
+    // 设置状态
+    isSpeaking.value = true;
+    currentSpeakingIndex.value = index;
+
+    // 预处理文本以获得更好的朗读效果
+    const processedText = preprocessTextForTTS(text);
+
+    // 获取动态调整的TTS参数
+    const ttsParams = {
+      voice: speechSettings.value.voice,
+      speed: speechSettings.value.speed,
+      volume: speechSettings.value.volume,
+      pitch: speechSettings.value.pitch
+    };
+
+    // 启动语音合成
+    await speechService.startSynthesize(
+        processedText,
+        // 开始回调
+        () => {
+          console.log('开始朗读');
+        },
+        // 结束回调
+        () => {
+          console.log('朗读结束');
+          isSpeaking.value = false;
+          currentSpeakingIndex.value = -1;
+
+          // 如果提供了回调，调用回调
+          if (onComplete) onComplete();
+        },
+        // 错误回调
+        (error) => {
+          console.error('语音合成错误:', error);
+          ElMessage.error('语音合成失败: ' + error.message);
+          isSpeaking.value = false;
+          currentSpeakingIndex.value = -1;
+
+          // 如果提供了回调，调用回调
+          if (onComplete) onComplete();
+        },
+        // 合成选项
+        ttsParams
+    );
+  } catch (error) {
+    console.error('启动语音合成失败:', error);
+    ElMessage.error('启动语音合成失败: ' + error.message);
+    isSpeaking.value = false;
+    currentSpeakingIndex.value = -1;
+
+    // 如果提供了回调，调用回调
+    if (onComplete) onComplete();
+  }
+};
+
+// =============================================================================
+// 核心聊天功能（保持不变）
+// =============================================================================
 
 /**
  * 检查用户认证状态
@@ -1946,7 +1871,6 @@ const useTemplate = (templateType) => {
 
 /**
  * 创建实时markdown解析器
- * @returns {{add: ((function(*): (string|*|undefined|null|undefined))|*), finalize: (function(): string|*)}}
  */
 const createRealtimeMarkdownRenderer = () => {
   let buffer = '';
@@ -2155,240 +2079,6 @@ const checkUnclosedMarkdown = (text) => {
 };
 
 /**
- * 语音输入相关函数
- */
-
-// 播放音频反馈
-const playAudioFeedback = (type) => {
-  try {
-    const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-    const oscillator = audioContext.createOscillator();
-    const gainNode = audioContext.createGain();
-
-    // 设置音效特性
-    if (type === 'start') {
-      // 启动音效 - 上升音调
-      oscillator.type = 'sine';
-      oscillator.frequency.setValueAtTime(440, audioContext.currentTime);
-      oscillator.frequency.linearRampToValueAtTime(880, audioContext.currentTime + 0.2);
-      gainNode.gain.setValueAtTime(0.1, audioContext.currentTime);
-      gainNode.gain.linearRampToValueAtTime(0, audioContext.currentTime + 0.3);
-    } else {
-      // 停止音效 - 下降音调
-      oscillator.type = 'sine';
-      oscillator.frequency.setValueAtTime(880, audioContext.currentTime);
-      oscillator.frequency.linearRampToValueAtTime(440, audioContext.currentTime + 0.2);
-      gainNode.gain.setValueAtTime(0.1, audioContext.currentTime);
-      gainNode.gain.linearRampToValueAtTime(0, audioContext.currentTime + 0.3);
-    }
-
-    // 连接节点并播放
-    oscillator.connect(gainNode);
-    gainNode.connect(audioContext.destination);
-    oscillator.start();
-
-    // 短暂播放后停止
-    setTimeout(() => {
-      oscillator.stop();
-      audioContext.close();
-    }, 300);
-  } catch (e) {
-    console.warn('无法播放音频反馈:', e);
-  }
-};
-
-// 语音命令处理 - 处理特殊的语音命令
-const processVoiceCommands = (text) => {
-  // 转换为小写并去除空格，用于命令匹配
-  const normalizedText = text.toLowerCase().trim();
-
-  // 定义一些特殊的语音命令
-  if (normalizedText === '清空对话' || normalizedText === '清除对话') {
-    ElMessageBox.confirm(
-        '确定要清空当前对话吗？此操作不可撤销。',
-        '语音命令确认',
-        {
-          confirmButtonText: '确定',
-          cancelButtonText: '取消',
-          type: 'warning'
-        }
-    ).then(() => {
-      clearChat();
-      ElMessage.success('对话已清空');
-      // 如果在连续对话模式，暂停一段时间后重新开始
-      if (voiceConversationMode.value) {
-        setTimeout(() => {
-          startVoiceConversation();
-        }, 1500);
-      }
-    }).catch(() => {
-      ElMessage.info('已取消清空操作');
-      // 如果在连续对话模式，继续语音识别
-      if (voiceConversationMode.value) {
-        startVoiceConversation();
-      }
-    });
-    return true;
-  }
-
-  if (normalizedText === '关闭语音模式' || normalizedText === '退出语音模式') {
-    voiceConversationMode.value = false;
-    handleVoiceConversationModeChange(false);
-    ElMessage.success('已关闭语音对话模式');
-    return true;
-  }
-
-  // 更多语音命令可以在这里添加
-
-  // 如果没有匹配的命令，返回false
-  return false;
-};
-
-// 语音合成增强函数
-
-// 预处理文本，提高朗读质量
-const preprocessTextForTTS = (text) => {
-  // 移除Markdown格式符号，以避免朗读它们
-  let processedText = text
-      .replace(/\*\*(.*?)\*\*/g, '$1') // 移除加粗标记
-      .replace(/\*(.*?)\*/g, '$1')     // 移除斜体标记
-      .replace(/\[(.*?)\]\((.*?)\)/g, '$1') // 移除链接，只读链接文本
-      .replace(/`(.*?)`/g, '$1')       // 移除行内代码标记
-      .replace(/```[\s\S]*?```/g, '代码块已省略') // 替换代码块
-      .replace(/#+\s+(.*?)(?:\n|$)/g, '$1。') // 将标题转换为普通文本，并在末尾添加句号
-      .replace(/\n+/g, '。') // 将多个换行符替换为句号，表示段落分隔
-      .replace(/[*\-+] (.*?)(?:\n|$)/g, '$1。') // 处理列表项
-      .replace(/\s{2,}/g, ' '); // 压缩多个空格
-
-  // 处理常见的缩写和特殊字符，使语音更自然
-  processedText = processedText
-      .replace(/(\d+)([A-Za-z]+)/g, '$1 $2') // 在数字和字母之间添加空格
-      .replace(/([A-Za-z]+)(\d+)/g, '$1 $2') // 在字母和数字之间添加空格
-      .replace(/(\.[^\.\s])/g, '. $1') // 在句点后添加空格，如果没有
-      .replace(/([^0-9])\.([^0-9\s\.])/g, '$1. $2'); // 确保句点后有空格
-
-  // 替换一些常见的英文缩写
-  const abbreviations = {
-    'e.g.': '例如',
-    'i.e.': '也就是',
-    'etc.': '等等',
-    'vs.': '对比',
-    'AI': 'A I',
-    'API': 'A P I',
-    'JSON': 'J S O N',
-    'HTML': 'H T M L',
-    'CSS': 'C S S',
-    'URL': 'U R L'
-  };
-
-  for (const [abbr, expanded] of Object.entries(abbreviations)) {
-    const regex = new RegExp('\\b' + abbr.replace(/\./g, '\\.') + '\\b', 'g');
-    processedText = processedText.replace(regex, expanded);
-  }
-
-  return processedText;
-};
-
-// 根据文本内容动态调整参数
-const dynamicAdjustTtsParams = (text) => {
-  // 默认使用配置的参数
-  const params = {
-    voice: speechSettings.value.voice,
-    speed: speechSettings.value.speed,
-    volume: speechSettings.value.volume,
-    pitch: speechSettings.value.pitch
-  };
-
-  // 如果文本包含问号，稍微提高音调表示疑问语气
-  if (text.includes('?') || text.includes('？')) {
-    params.pitch = Math.min(100, params.pitch + 10);
-  }
-
-  // 如果文本包含感叹号，稍微提高音量表示强调
-  if (text.includes('!') || text.includes('！')) {
-    params.volume = Math.min(100, params.volume + 10);
-  }
-
-  // 如果是很长的段落，稍微加快语速
-  if (text.length > 100) {
-    params.speed = Math.min(100, params.speed + 5);
-  }
-
-  return params;
-};
-
-// 临时禁用自动朗读（在某些情况下避免打扰用户）
-const temporarilyDisableAutoReading = (duration = 5000) => {
-  pauseAutoReading.value = true;
-  setTimeout(() => {
-    pauseAutoReading.value = false;
-  }, duration);
-};
-
-// 连续语音对话模式相关
-const handleVoiceConversationModeChange = (value) => {
-  if (value) {
-    // 启用连续语音对话模式
-    ElMessage.info('已启用语音对话模式，可以直接通过语音与AI助手对话');
-
-    // 启动新版语音对话模式
-    enterVoiceChatMode();
-  } else {
-    // 停止连续语音对话
-    if (voiceChatMode.value) {
-      exitVoiceChatMode();
-    } else {
-      voiceConversationManager.stop();
-      voiceConversationActive.value = false;
-    }
-    ElMessage.info('已关闭语音对话模式');
-  }
-};
-
-// 启动语音对话
-const startVoiceConversation = async () => {
-  // 如果正在加载（AI正在响应），则不启动语音识别
-  if (isLoading.value) return;
-
-  voiceConversationActive.value = true;
-
-  // 清除所有超时器
-  if (autoListeningTimeout.value) {
-    clearTimeout(autoListeningTimeout.value);
-    autoListeningTimeout.value = null;
-  }
-
-  // 启动语音识别
-  try {
-    await toggleVoiceInput();
-    ElMessage.success({
-      message: '请开始说话...',
-      duration: 1500
-    });
-  } catch (error) {
-    console.error('启动语音识别失败:', error);
-    voiceConversationActive.value = false;
-    ElMessage.error('启动语音识别失败，请检查麦克风权限和设置');
-  }
-};
-
-// 停止语音对话
-const stopVoiceConversation = () => {
-  voiceConversationActive.value = false;
-
-  // 清除所有超时器
-  if (autoListeningTimeout.value) {
-    clearTimeout(autoListeningTimeout.value);
-    autoListeningTimeout.value = null;
-  }
-
-  // 如果正在识别，停止语音识别
-  if (isRecognizing.value) {
-    toggleVoiceInput();
-  }
-};
-
-/**
  * 发送消息 - 兼容DeepSeek官方API和本地模型的思维链显示
  */
 const sendMessage = async () => {
@@ -2590,9 +2280,6 @@ const sendMessage = async () => {
           // 保存对话历史
           saveConversationHistory();
 
-          // 处理语音对话
-          handleVoiceConversation(assistantMessage.content);
-
           // 处理自动朗读
           handleAutoReading(assistantMessage.content);
         },
@@ -2622,7 +2309,7 @@ const sendMessage = async () => {
   }
 };
 
-// 辅助函数保持不变
+// 辅助函数
 const saveConversationHistory = () => {
   if (currentConversationId.value) {
     setTimeout(async () => {
@@ -2672,19 +2359,8 @@ const saveConversationHistory = () => {
   }
 };
 
-const handleVoiceConversation = (content) => {
-  if (voiceConversationMode.value && voiceConversationActive.value) {
-    setTimeout(() => {
-      const messageIndex = messages.value.length - 1;
-      if (messageIndex >= 0 && messages.value[messageIndex].role === 'assistant') {
-        voiceConversationManager.handleAIResponseComplete(content);
-      }
-    }, 500);
-  }
-};
-
 const handleAutoReading = (content) => {
-  if (autoReadMessages.value && !pauseAutoReading.value && !voiceConversationMode.value) {
+  if (autoReadMessages.value && !voiceConversationMode.value) {
     const lastMessageIndex = messages.value.length - 1;
     if (lastMessageIndex >= 0 && messages.value[lastMessageIndex].role === 'assistant') {
       setTimeout(() => {
@@ -3564,262 +3240,9 @@ const saveSpeechSettings = async () => {
   }
 };
 
-/**
- * 切换语音输入 - 使用锁机制防止重复触发
- */
-const toggleVoiceInput = async () => {
-  // 如果按钮已禁用，直接返回
-  if (isVoiceButtonDisabled.value) {
-    console.log('操作进行中，请等待完成');
-    ElMessage.warning('操作进行中，请等待完成');
-    return;
-  }
-
-  // 立即禁用按钮，防止重复点击
-  isVoiceButtonDisabled.value = true;
-
-  try {
-    // 在启动语音识别前清空之前的识别结果，提供更好的用户体验
-    if (!isRecognizing.value) {
-      recognitionResult.value = '';
-      inputMessage.value = '';
-
-      // 播放开始识别的音频反馈
-      playAudioFeedback('start');
-    } else {
-      // 播放停止识别的音频反馈
-      playAudioFeedback('stop');
-    }
-
-    if (isRecognizing.value) {
-      console.log('开始停止语音识别...');
-      // 先更新UI状态
-      isRecognizing.value = false;
-
-      // 然后执行停止操作
-      await speechService.stopRecognize();
-      console.log('语音识别已完全停止');
-
-      // 停止后等待额外时间，确保所有资源都释放完毕
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      console.log('等待完成，资源已完全释放');
-    } else {
-      // 检查语音服务状态
-      if (speechService.recognitionState !== 'idle') {
-        console.warn(`语音服务状态不是空闲(${speechService.recognitionState})，等待变为空闲...`);
-
-        // 等待服务状态变为空闲
-        await new Promise((resolveState) => {
-          const checkState = () => {
-            if (speechService.recognitionState === 'idle') {
-              resolveState();
-            } else {
-              setTimeout(checkState, 100);
-            }
-          };
-          checkState();
-        });
-
-        console.log('语音服务状态已变为空闲，可以开始新录音');
-
-        // 额外等待确保资源完全释放
-        await new Promise(resolve => setTimeout(resolve, 500));
-      }
-
-      console.log('开始启动语音识别...');
-      // 先更新UI状态
-      isRecognizing.value = true;
-
-      // 启动语音识别
-      await speechService.startRecognize(
-          // 结果回调
-          (text, isLast) => {
-            // 更新输入框
-            recognitionResult.value = text;
-            inputMessage.value = recognitionResult.value;
-
-            // 更新最后说话时间戳，用于静音检测
-            lastSpeechTimestamp.value = Date.now();
-
-            // 如果有静音检测定时器，重置它
-            if (silenceTimer.value) {
-              clearTimeout(silenceTimer.value);
-              silenceTimer.value = null;
-            }
-
-            // 设置新的静音检测定时器
-            if (isRecognizing.value && voiceConversationMode.value) {
-              silenceTimer.value = setTimeout(() => {
-                // 如果已经静音超过阈值，自动结束识别
-                if (Date.now() - lastSpeechTimestamp.value > silenceThreshold && isRecognizing.value) {
-                  console.log('检测到长时间静音，自动结束语音识别');
-                  toggleVoiceInput();
-                }
-              }, silenceThreshold);
-            }
-
-            // 如果使用了句点或问号等终止符，也可以考虑在短暂延迟后自动结束
-            const endPunctuations = ['.', '。', '?', '？', '!', '！'];
-            if (text && endPunctuations.some(p => text.trim().endsWith(p)) && voiceConversationMode.value) {
-              // 只在句子比较完整时才自动结束
-              if (text.length > 10) {
-                if (speechTimeout.value) {
-                  clearTimeout(speechTimeout.value);
-                }
-
-                speechTimeout.value = setTimeout(() => {
-                  if (isRecognizing.value) {
-                    console.log('检测到完整句子，自动结束语音识别');
-                    toggleVoiceInput();
-                  }
-                }, 1500); // 1.5秒后结束，给用户思考的时间
-              }
-            }
-
-            // 如果是最后一帧，结束识别
-            if (isLast) {
-              isRecognizing.value = false;
-              // 在回调中不释放按钮禁用状态，让主函数统一处理
-            }
-
-            // 检查是否是语音命令
-            const isCommand = processVoiceCommands(text);
-
-            // 如果是命令，自动停止语音识别
-            if (isCommand) {
-              // 清空输入框，防止命令被发送为消息
-              recognitionResult.value = '';
-              inputMessage.value = '';
-
-              // 停止语音识别
-              if (isRecognizing.value) {
-                toggleVoiceInput();
-              }
-            }
-          },
-          // 错误回调
-          (error) => {
-            console.error('语音识别错误:', error);
-            ElMessage.error('语音识别失败: ' + error.message);
-            isRecognizing.value = false;
-            // 在回调中不释放按钮禁用状态，让主函数统一处理
-          }
-      );
-    }
-  } catch (error) {
-    console.error('语音操作失败:', error);
-    ElMessage.error(error.message || '操作失败');
-    // 恢复正确状态
-    isRecognizing.value = false;
-  } finally {
-    // 操作完成后延长禁用时间，确保所有状态都已同步完成
-    setTimeout(() => {
-      isVoiceButtonDisabled.value = false;
-      console.log('操作完成，按钮已启用');
-
-      // 处理连续对话模式下的自动重启识别
-      // 如果停止了识别，且处于连续对话模式，且不是因为加载状态而停止的
-      if (!isRecognizing.value && voiceConversationMode.value && voiceConversationActive.value && !isLoading.value) {
-        // 语音输入结束后，如果有足够长的输入，自动发送
-        if (inputMessage.value.trim().length > 3) {
-          sendMessage();
-        } else {
-          // 如果输入太短，等待一段时间后重新开始语音识别
-          autoListeningTimeout.value = setTimeout(() => {
-            if (voiceConversationMode.value && voiceConversationActive.value && !isLoading.value) {
-              startVoiceConversation();
-            }
-          }, 1000); // 1秒后重新开始
-        }
-      }
-    }, 500); // 延迟0.5秒，确保完全同步
-  }
-};
-
-/**
- * 朗读消息
- * @param {string} text 要朗读的文本
- * @param {number} index 消息索引
- * @param {Function} onComplete 完成回调
- */
-const speakMessage = async (text, index, onComplete) => {
-  try {
-    // 如果当前正在朗读这条消息，点击停止
-    if (isSpeaking.value && currentSpeakingIndex.value === index) {
-      console.log('停止当前消息朗读');
-      speechService.stopPlayback();
-
-      // 确保UI状态立即更新
-      isSpeaking.value = false;
-      currentSpeakingIndex.value = -1;
-
-      // 如果提供了回调，调用回调
-      if (onComplete) onComplete();
-      return;
-    }
-
-    // 如果正在朗读其他消息，先停止
-    if (isSpeaking.value) {
-      console.log('停止其他消息朗读');
-      speechService.stopPlayback();
-
-      // 确保UI状态立即更新
-      isSpeaking.value = false;
-      currentSpeakingIndex.value = -1;
-
-      // 添加足够的延迟确保所有资源都被清理
-      await new Promise(resolve => setTimeout(resolve, 500));
-    }
-
-    // 设置状态
-    isSpeaking.value = true;
-    currentSpeakingIndex.value = index;
-
-    // 预处理文本以获得更好的朗读效果
-    const processedText = preprocessTextForTTS(text);
-
-    // 获取动态调整的TTS参数
-    const ttsParams = dynamicAdjustTtsParams(processedText);
-
-    // 启动语音合成
-    await speechService.startSynthesize(
-        processedText,
-        // 开始回调
-        () => {
-          console.log('开始朗读');
-        },
-        // 结束回调
-        () => {
-          console.log('朗读结束');
-          isSpeaking.value = false;
-          currentSpeakingIndex.value = -1;
-
-          // 如果提供了回调，调用回调
-          if (onComplete) onComplete();
-        },
-        // 错误回调
-        (error) => {
-          console.error('语音合成错误:', error);
-          ElMessage.error('语音合成失败: ' + error.message);
-          isSpeaking.value = false;
-          currentSpeakingIndex.value = -1;
-
-          // 如果提供了回调，调用回调
-          if (onComplete) onComplete();
-        },
-        // 合成选项
-        ttsParams
-    );
-  } catch (error) {
-    console.error('启动语音合成失败:', error);
-    ElMessage.error('启动语音合成失败: ' + error.message);
-    isSpeaking.value = false;
-    currentSpeakingIndex.value = -1;
-
-    // 如果提供了回调，调用回调
-    if (onComplete) onComplete();
-  }
-};
+// =============================================================================
+// 监听器
+// =============================================================================
 
 // 监听设置对话框打开状态
 watch(showSettings, async (newValue) => {
@@ -3846,6 +3269,39 @@ watch(() => settings.value.ollamaUrl, async (newUrl, oldUrl) => {
     await autoDetectModels();
   }
 });
+
+// 监听认证状态变化
+watch(
+    () => authService.getLoginStatus(),
+    (newStatus) => {
+      isAuthenticated.value = newStatus.eas || newStatus.ipass;
+
+      // 如果变为已认证状态，重新初始化
+      if (isAuthenticated.value && messages.value.length === 0) {
+        loadUserInfo();
+        loadConversations();
+      }
+    },
+    { deep: true }
+);
+
+// 监听消息变化，以便更新代码高亮和复制按钮
+watch(
+    () => messages.value,
+    () => {
+      nextTick(() => {
+        // 应用代码高亮
+        applyCodeHighlighting();
+        // 设置代码复制按钮
+        setupCodeCopyButtons();
+      });
+    },
+    { deep: true }
+);
+
+// =============================================================================
+// 生命周期钩子
+// =============================================================================
 
 // 初始化
 onMounted(async () => {
@@ -3875,9 +3331,6 @@ onMounted(async () => {
 
   // 加载语音设置
   await loadSpeechSettings();
-
-  // 初始化语音对话管理器
-  voiceConversationManager.init();
 
   // 从URL参数加载对话
   try {
@@ -3943,100 +3396,16 @@ onMounted(async () => {
   }
 });
 
-// 监听认证状态变化
-watch(
-    () => authService.getLoginStatus(),
-    (newStatus) => {
-      isAuthenticated.value = newStatus.eas || newStatus.ipass;
-
-      // 如果变为已认证状态，重新初始化
-      if (isAuthenticated.value && messages.value.length === 0) {
-        loadUserInfo();
-        loadConversations();
-      }
-    },
-    { deep: true }
-);
-
-// 监听消息变化，以便更新代码高亮和复制按钮
-watch(
-    () => messages.value,
-    () => {
-      nextTick(() => {
-        // 应用代码高亮
-        applyCodeHighlighting();
-        // 设置代码复制按钮
-        setupCodeCopyButtons();
-      });
-    },
-    { deep: true }
-);
-
-// 监听识别结果变化
-watch(
-    () => recognitionResult.value,
-    (newVal, oldVal) => {
-      if (newVal && newVal !== oldVal) {
-        // 只要有新的识别结果，更新最后说话时间戳
-        lastSpeechTimestamp.value = Date.now();
-
-        // 如果有静音检测定时器，重置它
-        if (silenceTimer.value) {
-          clearTimeout(silenceTimer.value);
-          silenceTimer.value = null;
-        }
-
-        // 设置新的静音检测定时器
-        if (isRecognizing.value && voiceConversationMode.value) {
-          silenceTimer.value = setTimeout(() => {
-            // 如果已经静音超过阈值，自动结束识别
-            if (Date.now() - lastSpeechTimestamp.value > silenceThreshold && isRecognizing.value) {
-              console.log('检测到长时间静音，自动结束语音识别');
-              toggleVoiceInput();
-            }
-          }, silenceThreshold);
-        }
-      }
-    }
-);
-
 // 在组件卸载时清理语音资源
 onBeforeUnmount(async () => {
-  // 停止语音识别
-  if (isRecognizing.value) {
-    await speechService.stopRecognize();
-  }
+  console.log('[AI] 组件卸载，清理语音资源');
 
-  // 停止语音合成
-  if (isSpeaking.value) {
-    speechService.stopPlayback();
-  }
+  // 停止所有语音活动
+  stopAllSpeechActivities();
 
-  // 停止语音对话
-  if (voiceConversationMode.value) {
-    if (voiceChatMode.value) {
-      exitVoiceChatMode();
-    } else {
-      voiceConversationManager.stop();
-    }
-    voiceConversationMode.value = false;
-    voiceConversationActive.value = false;
-  }
-
-  // 清除所有定时器
-  if (silenceTimer.value) {
-    clearTimeout(silenceTimer.value);
-    silenceTimer.value = null;
-  }
-
-  if (speechTimeout.value) {
-    clearTimeout(speechTimeout.value);
-    speechTimeout.value = null;
-  }
-
-  if (autoListeningTimeout.value) {
-    clearTimeout(autoListeningTimeout.value);
-    autoListeningTimeout.value = null;
+  // 退出语音对话模式
+  if (voiceChatMode.value) {
+    exitVoiceChatMode();
   }
 });
 </script>
