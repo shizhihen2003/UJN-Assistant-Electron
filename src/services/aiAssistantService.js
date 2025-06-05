@@ -16,6 +16,11 @@ class AiAssistantService {
         this.shareStudentData = false; // 是否分享学生数据
         this.currentConversationId = null; // 新增：记录当前对话ID
 
+        // 新增：停止控制
+        this.abortController = null; // 用于停止fetch请求
+        this.streamReader = null; // 保存流读取器引用
+        this.stopRequested = false; // 停止请求标志
+
         // 新增：本地Ollama支持
         this.isLocalOllama = false;
         this.ollamaUrl = 'http://localhost:11434';
@@ -152,6 +157,58 @@ class AiAssistantService {
      */
     addMessage(role, content) {
         this.messages.push({ role, content, timestamp: new Date().toISOString() });
+    }
+
+    /**
+     * 停止当前的AI响应
+     * @returns {Promise<void>}
+     */
+    async stopCurrentResponse() {
+        console.log('[AI Service] 请求停止当前AI响应');
+
+        try {
+            // 设置停止标志
+            this.stopRequested = true;
+            this.isStreaming = false;
+
+            // 停止fetch请求
+            if (this.abortController) {
+                console.log('[AI Service] 中断fetch请求');
+                this.abortController.abort();
+            }
+
+            // 关闭流读取器
+            if (this.streamReader) {
+                try {
+                    console.log('[AI Service] 关闭流读取器');
+                    await this.streamReader.cancel();
+                } catch (readerError) {
+                    console.warn('[AI Service] 关闭流读取器失败:', readerError);
+                }
+            }
+
+            console.log('[AI Service] AI响应已停止');
+        } catch (error) {
+            console.error('[AI Service] 停止AI响应时出错:', error);
+        }
+    }
+
+
+    /**
+     * 检查是否应该停止处理
+     * @returns {boolean}
+     */
+    shouldStop() {
+        return this.stopRequested;
+    }
+
+    /**
+     * 重置停止状态
+     */
+    resetStopState() {
+        this.stopRequested = false;
+        this.abortController = null;
+        this.streamReader = null;
     }
 
     /**
@@ -370,6 +427,9 @@ class AiAssistantService {
      */
     async sendStreamingRequest(userMessage, onChunk, onComplete, onError, systemMessage = "You are a helpful assistant.") {
         try {
+            // 重置停止状态
+            this.resetStopState();
+
             // 如果是本地Ollama，先检查状态
             if (this.isLocalOllama) {
                 const isOllamaAvailable = await this.checkOllamaStatus();
@@ -420,7 +480,9 @@ class AiAssistantService {
             }
 
             console.log('发送请求到:', this.apiUrl);
-            console.log('请求体:', JSON.stringify(requestBody, null, 2));
+
+            // 创建AbortController用于停止请求 - 只用于停止，不影响正常流程
+            this.abortController = new AbortController();
 
             // 设置流式标志
             this.isStreaming = true;
@@ -456,12 +518,15 @@ class AiAssistantService {
 
                         if (parsed.hasThinking) {
                             thinkingBuffer = parsed.thinking;
+
+                            // 只有在思考完成后才更新答案
                             if (parsed.isThinkingComplete) {
                                 answerBuffer = parsed.answer;
                             } else {
-                                answerBuffer = '';
+                                answerBuffer = ''; // 思考未完成时，答案区域保持空白
                             }
                         } else {
+                            // 没有思维链，直接作为答案
                             answerBuffer = parsed.answer;
                         }
 
@@ -488,7 +553,8 @@ class AiAssistantService {
             const response = await fetch(this.apiUrl, {
                 method: 'POST',
                 headers: headers,
-                body: JSON.stringify(requestBody)
+                body: JSON.stringify(requestBody),
+                signal: this.abortController.signal // 添加停止信号
             });
 
             console.log('响应状态:', response.status, response.statusText);
@@ -541,13 +607,14 @@ class AiAssistantService {
 
             // 获取响应流
             const reader = response.body.getReader();
+            this.streamReader = reader; // 保存读取器引用
             const decoder = new TextDecoder('utf-8');
             let buffer = '';
 
             // 用于累积完整的响应内容（本地模型需要）
             let accumulatedContent = '';
 
-            // 处理数据流
+            // 处理数据流 - 恢复原有的简单逻辑
             while (this.isStreaming) {
                 const { done, value } = await reader.read();
 
@@ -694,8 +761,11 @@ class AiAssistantService {
         } catch (error) {
             console.error('AI流式请求失败:', error);
 
-            // 重置流状态
-            this.isStreaming = false;
+            // 如果是abort错误，说明是用户主动停止
+            if (error.name === 'AbortError' || this.stopRequested) {
+                console.log('[AI Service] 请求被用户停止');
+                return;
+            }
 
             // 提供更详细的错误信息
             let errorMessage = error.message;
@@ -713,8 +783,15 @@ class AiAssistantService {
 
             // 触发错误回调
             onError(new Error(errorMessage));
+        } finally {
+            // 清理资源 - 简化版本
+            this.isStreaming = false;
+            this.stopRequested = false;
+            this.abortController = null;
+            this.streamReader = null;
         }
     }
+
 
     /**
      * 解析流式响应中的思维链 - 用于本地模型的<think>标签格式
@@ -779,10 +856,10 @@ class AiAssistantService {
     }
 
     /**
-     * 取消流式请求
+     * 取消流式请求 - 保持向后兼容
      */
     cancelStream() {
-        this.isStreaming = false;
+        return this.stopCurrentResponse();
     }
 
     /**

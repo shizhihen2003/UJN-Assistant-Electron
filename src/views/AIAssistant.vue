@@ -65,6 +65,20 @@
           {{ currentConversationTitle || '新对话' }}
         </div>
         <div class="chat-actions">
+          <!-- 新增：停止AI回答按钮 -->
+          <el-tooltip content="停止AI回答" v-if="canStopAI">
+            <el-button
+                link
+                type="danger"
+                @click="stopAIResponse"
+                class="stop-ai-button"
+                :loading="false"
+            >
+              <el-icon><Close /></el-icon>
+              停止回答
+            </el-button>
+          </el-tooltip>
+
           <el-tooltip content="清空对话">
             <el-button link @click="clearChat">
               <el-icon><Delete /></el-icon>
@@ -117,7 +131,8 @@
               :class="{
                 'user-message': message.role === 'user',
                 'assistant-message': message.role === 'assistant',
-                'streaming-message': message.role === 'assistant' && index === messages.length - 1 && isLoading
+                'streaming-message': message.role === 'assistant' && index === messages.length - 1 && isLoading,
+                'message-stopped': message.isStopped
               }"
           >
             <div class="message-avatar">
@@ -132,12 +147,25 @@
 
               <!-- 思考状态指示器 -->
               <div v-if="message.role === 'assistant' && index === messages.length - 1 && isThinking" class="thinking-indicator">
-                <div class="thinking-dots">
-                  <span></span>
-                  <span></span>
-                  <span></span>
+                <div class="thinking-content">
+                  <div class="thinking-dots">
+                    <span></span>
+                    <span></span>
+                    <span></span>
+                  </div>
+                  <span class="thinking-text">AI正在思考中...</span>
                 </div>
-                <span class="thinking-text">AI正在思考中...</span>
+                <!-- 思考状态中的停止按钮 -->
+                <el-button
+                    size="small"
+                    type="danger"
+                    plain
+                    @click="stopAIResponse"
+                    class="thinking-stop-button"
+                >
+                  <el-icon><Close /></el-icon>
+                  停止
+                </el-button>
               </div>
 
               <!-- 用户消息直接显示 -->
@@ -219,12 +247,25 @@
 
           <!-- 修改加载指示器 -->
           <div v-if="isLoading && !isThinking" class="loading-container">
-            <div class="dots-loader">
-              <div></div>
-              <div></div>
-              <div></div>
+            <div class="loading-header">
+              <div class="dots-loader">
+                <div></div>
+                <div></div>
+                <div></div>
+              </div>
+              <span class="loading-text">正在生成回复...</span>
+              <!-- 加载状态中的停止按钮 -->
+              <el-button
+                  size="small"
+                  type="danger"
+                  plain
+                  @click="stopAIResponse"
+                  class="loading-stop-button"
+              >
+                <el-icon><Close /></el-icon>
+                停止
+              </el-button>
             </div>
-            <span class="loading-text">正在生成回复...</span>
           </div>
         </div>
       </div>
@@ -251,6 +292,18 @@
           <div class="recognition-text">{{ recognitionResult || '正在聆听...' }}</div>
         </div>
         <div class="input-actions">
+          <!-- 新增：停止AI回答按钮 - 在输入区域 -->
+          <el-button
+              v-if="canStopAI"
+              type="danger"
+              @click="stopAIResponse"
+              class="stop-ai-input-button"
+              plain
+          >
+            <el-icon><Close /></el-icon>
+            停止回答
+          </el-button>
+
           <!-- 添加语音输入按钮 - 仅在非语音对话模式下可用 -->
           <el-button
               @click="toggleVoiceInput"
@@ -263,7 +316,12 @@
             {{ voiceChatMode ? '语音对话模式中' : (isRecognizing ? '停止录音' : '语音输入') }}
           </el-button>
 
-          <el-button type="primary" @click="sendMessage" :loading="isLoading" :disabled="!inputMessage.trim()">
+          <el-button
+              type="primary"
+              @click="sendMessage"
+              :loading="isLoading"
+              :disabled="!inputMessage.trim() || canStopAI"
+          >
             <el-icon><Position /></el-icon>
             发送
           </el-button>
@@ -889,6 +947,80 @@ const renameTitle = ref('');
 const actionTargetId = ref('');
 
 // =============================================================================
+// 停止AI回答功能
+// =============================================================================
+
+/**
+ * 停止当前AI回答
+ */
+const stopAIResponse = async () => {
+  try {
+    console.log('[AI] 用户请求停止AI回答');
+
+    // 显示确认消息
+    ElMessage.info('正在停止AI回答...');
+
+    // 停止AI服务
+    await aiAssistantService.stopCurrentResponse();
+
+    // 重置UI状态
+    isLoading.value = false;
+    isThinking.value = false;
+    isProcessingVoice.value = false;
+
+    // 如果在语音对话模式，也停止语音相关功能
+    if (voiceChatMode.value) {
+      stopAllSpeechActivities();
+
+      // 通知VoiceChat组件停止
+      if (voiceChatRef.value) {
+        voiceChatRef.value.handleAIStop();
+      }
+    }
+
+    // 清理当前思维链和答案内容
+    currentThinking.value = '';
+    finalAnswer.value = '';
+
+    // 移除最后一条未完成的AI消息（如果存在）
+    if (messages.value.length > 0) {
+      const lastMessage = messages.value[messages.value.length - 1];
+      if (lastMessage.role === 'assistant' && (!lastMessage.content || lastMessage.content.trim() === '')) {
+        messages.value.pop();
+        console.log('[AI] 移除了未完成的AI消息');
+      } else if (lastMessage.role === 'assistant') {
+        // 如果有部分内容，标记为已停止
+        lastMessage.content += '\n\n[回答已被用户停止]';
+        lastMessage.isStopped = true;
+      }
+    }
+
+    // 移除所有打字光标
+    await nextTick();
+    const cursors = document.querySelectorAll('.typing-cursor, .thinking-cursor');
+    cursors.forEach(cursor => cursor.remove());
+
+    // 保存当前对话状态
+    if (currentConversationId.value) {
+      saveConversationHistory();
+    }
+
+    ElMessage.success('AI回答已停止');
+
+  } catch (error) {
+    console.error('[AI] 停止AI回答失败:', error);
+    ElMessage.error('停止失败: ' + error.message);
+  }
+};
+
+/**
+ * 检查是否可以停止（UI状态检查）
+ */
+const canStopAI = computed(() => {
+  return isLoading.value || isThinking.value || isProcessingVoice.value;
+});
+
+// =============================================================================
 // 语音相关状态 - 重构后的简化版本
 // =============================================================================
 
@@ -1192,7 +1324,7 @@ const isExitCommand = (text) => {
 };
 
 /**
- * 发送到AI并处理语音响应
+ * 发送到AI并处理语音响应 - 修改版本，添加停止支持
  */
 const sendToAIWithVoiceResponse = async (message) => {
   try {
@@ -1294,6 +1426,12 @@ const sendToAIWithVoiceResponse = async (message) => {
         message,
         // 接收文本块的回调
         (contentChunk, reasoningChunk, type) => {
+          // 检查是否被停止
+          if (!isLoading.value || aiAssistantService.shouldStop()) {
+            console.log('[AI] 检测到停止状态，忽略语音对话数据块');
+            return;
+          }
+
           console.log('[AI] 收到块:', { contentChunk, reasoningChunk, type });
 
           if (type === 'thinking' && reasoningChunk) {
@@ -1336,6 +1474,16 @@ const sendToAIWithVoiceResponse = async (message) => {
         },
         // 完成时的回调
         async (finalResponse, finalReasoning) => {
+          // 检查是否被停止
+          if (aiAssistantService.shouldStop()) {
+            console.log('[AI] 语音对话AI响应被停止，跳过语音播放');
+            isProcessingVoice.value = false;
+            if (voiceChatRef.value) {
+              voiceChatRef.value.handleAIStop();
+            }
+            return;
+          }
+
           console.log('[AI] AI响应完成');
 
           // 更新消息内容，包含思维链
@@ -1381,7 +1529,8 @@ const sendToAIWithVoiceResponse = async (message) => {
           isThinking.value = false;
           isProcessingVoice.value = false;
 
-          if (voiceChatRef.value) {
+          // 只有在非用户主动停止的情况下才显示错误
+          if (!aiAssistantService.shouldStop() && voiceChatRef.value) {
             voiceChatRef.value.handleError('AI处理失败: ' + error.message);
           }
         },
@@ -1397,7 +1546,8 @@ const sendToAIWithVoiceResponse = async (message) => {
     isThinking.value = false;
     isProcessingVoice.value = false;
 
-    if (voiceChatRef.value) {
+    // 只有在非用户主动停止的情况下才显示错误
+    if (!aiAssistantService.shouldStop() && voiceChatRef.value) {
       voiceChatRef.value.handleError('发送失败: ' + error.message);
     }
   }
@@ -1463,10 +1613,15 @@ const playVoiceResponse = async (text) => {
 };
 
 /**
- * 停止语音播放（VoiceChat组件调用）
+ * 停止所有语音活动 - 修改版本，包含AI停止
  */
 const stopAllSpeechActivities = () => {
   console.log('[AI] 停止所有语音活动');
+
+  // 停止AI响应
+  if (isLoading.value || isThinking.value) {
+    aiAssistantService.stopCurrentResponse();
+  }
 
   // 停止语音识别
   if (isRecognizing.value) {
@@ -1479,12 +1634,8 @@ const stopAllSpeechActivities = () => {
 
   // 重置状态
   isProcessingVoice.value = false;
-
-  // 如果正在加载，也停止
-  if (isLoading.value) {
-    isLoading.value = false;
-    isThinking.value = false;
-  }
+  isLoading.value = false;
+  isThinking.value = false;
 };
 
 /**
@@ -2079,7 +2230,7 @@ const checkUnclosedMarkdown = (text) => {
 };
 
 /**
- * 发送消息 - 兼容DeepSeek官方API和本地模型的思维链显示
+ * 发送消息 - 修改版本，添加停止功能支持
  */
 const sendMessage = async () => {
   const message = inputMessage.value.trim();
@@ -2204,6 +2355,12 @@ const sendMessage = async () => {
         message,
         // 接收块的回调 - 兼容新格式
         (contentChunk, reasoningChunk, type) => {
+          // 检查是否被停止
+          if (!isLoading.value || aiAssistantService.shouldStop()) {
+            console.log('检测到停止状态，忽略新的数据块');
+            return;
+          }
+
           console.log('收到块:', { contentChunk, reasoningChunk, type });
 
           if (type === 'thinking' && reasoningChunk) {
@@ -2246,6 +2403,12 @@ const sendMessage = async () => {
         },
         // 完成时的回调 - 兼容新格式
         (finalResponse, finalReasoning) => {
+          // 检查是否被停止
+          if (aiAssistantService.shouldStop()) {
+            console.log('AI响应被停止，跳过完成回调');
+            return;
+          }
+
           console.log('AI响应完成:', {
             finalResponse: finalResponse?.substring(0, 100),
             finalReasoning: finalReasoning?.substring(0, 100),
@@ -2294,8 +2457,10 @@ const sendMessage = async () => {
           isLoading.value = false;
           isThinking.value = false;
 
-          // 显示错误
-          ElMessage.error('请求失败: ' + error.message);
+          // 只有在非用户主动停止的情况下才显示错误
+          if (!aiAssistantService.shouldStop()) {
+            ElMessage.error('请求失败: ' + error.message);
+          }
         },
         // 系统消息
         settings.value.systemPrompt
@@ -2305,7 +2470,11 @@ const sendMessage = async () => {
     console.error('发送消息失败:', error);
     isLoading.value = false;
     isThinking.value = false;
-    ElMessage.error('发送消息失败: ' + error.message);
+
+    // 只有在非用户主动停止的情况下才显示错误
+    if (!aiAssistantService.shouldStop()) {
+      ElMessage.error('发送消息失败: ' + error.message);
+    }
   }
 };
 
@@ -3816,6 +3985,54 @@ pre code.hljs {
   align-items: center;
 }
 
+/* 停止AI回答按钮样式 */
+.stop-ai-button {
+  margin-right: 10px;
+  color: #f56c6c;
+  transition: all 0.3s ease;
+  border: 1px solid transparent;
+  border-radius: 16px;
+  padding: 6px 12px;
+  font-size: 13px;
+}
+
+.stop-ai-button:hover {
+  background-color: rgba(245, 108, 108, 0.1);
+  border-color: rgba(245, 108, 108, 0.3);
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(245, 108, 108, 0.2);
+}
+
+.stop-ai-button .el-icon {
+  margin-right: 4px;
+}
+
+/* 输入区域停止按钮 */
+.stop-ai-input-button {
+  margin-right: 10px;
+  border-radius: 20px;
+  transition: all 0.3s ease;
+  animation: pulse-red 2s infinite;
+}
+
+.stop-ai-input-button:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(245, 108, 108, 0.3);
+}
+
+/* 脉冲动画 */
+@keyframes pulse-red {
+  0% {
+    box-shadow: 0 0 0 0 rgba(245, 108, 108, 0.4);
+  }
+  70% {
+    box-shadow: 0 0 0 10px rgba(245, 108, 108, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(245, 108, 108, 0);
+  }
+}
+
 /* 语音对话状态指示器 */
 .voice-conversation-indicator {
   display: flex;
@@ -3909,12 +4126,18 @@ pre code.hljs {
 .thinking-indicator {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   padding: 12px 16px;
   margin-bottom: 8px;
   background-color: rgba(0, 122, 255, 0.05);
   border-radius: 16px;
   border: 1px solid rgba(0, 122, 255, 0.1);
   animation: fadeIn 0.3s ease-out;
+}
+
+.thinking-content {
+  display: flex;
+  align-items: center;
 }
 
 .thinking-dots {
@@ -3959,6 +4182,20 @@ pre code.hljs {
   font-size: 14px;
   color: var(--primary-color);
   font-style: italic;
+}
+
+.thinking-stop-button {
+  font-size: 12px;
+  padding: 4px 12px;
+  border-radius: 16px;
+  margin-left: 12px;
+  transition: all 0.2s ease;
+  flex-shrink: 0;
+}
+
+.thinking-stop-button:hover {
+  transform: scale(1.05);
+  box-shadow: 0 2px 8px rgba(245, 108, 108, 0.2);
 }
 
 /* 优化思维链容器显示 */
@@ -4162,6 +4399,21 @@ pre code.hljs {
   margin-right: auto;
 }
 
+/* 停止状态指示器 */
+.message-stopped {
+  opacity: 0.8;
+  border-left: 3px solid #f56c6c;
+  padding-left: 12px;
+}
+
+.message-stopped .message-body::after {
+  content: " [已停止]";
+  color: #f56c6c;
+  font-size: 12px;
+  font-style: italic;
+  opacity: 0.7;
+}
+
 .message-avatar {
   margin: 0 12px;
   transition: transform 0.2s ease;
@@ -4334,6 +4586,12 @@ pre code.hljs {
   box-shadow: 0 4px 12px rgba(0, 122, 255, 0.2);
 }
 
+/* 禁用发送按钮样式 */
+.input-actions .el-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 /* 设置项说明文本 */
 .setting-description {
   font-size: 12px;
@@ -4354,11 +4612,29 @@ pre code.hljs {
   border: 1px solid rgba(0, 122, 255, 0.08);
 }
 
+.loading-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
 .loading-text {
   margin-top: 8px;
   font-size: 14px;
   color: var(--text-secondary);
   font-style: italic;
+}
+
+.loading-stop-button {
+  font-size: 12px;
+  padding: 4px 12px;
+  border-radius: 16px;
+  transition: all 0.2s ease;
+}
+
+.loading-stop-button:hover {
+  transform: scale(1.05);
+  box-shadow: 0 2px 8px rgba(245, 108, 108, 0.2);
 }
 
 .dots-loader {
@@ -4628,6 +4904,12 @@ pre code.hljs {
     width: 100%;
   }
 
+  .stop-ai-input-button {
+    width: 100%;
+    margin-right: 0;
+    margin-bottom: 8px;
+  }
+
   .thinking-chain-header {
     padding: 10px 12px;
   }
@@ -4649,6 +4931,31 @@ pre code.hljs {
   .message-actions .el-button {
     width: 100%;
     justify-content: flex-start;
+  }
+
+  .stop-ai-button {
+    padding: 4px 8px;
+    font-size: 12px;
+  }
+
+  .stop-ai-button .el-icon {
+    margin-right: 2px;
+  }
+
+  .loading-header {
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .thinking-indicator {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+
+  .thinking-stop-button {
+    margin-left: 0;
+    align-self: flex-end;
   }
 }
 
@@ -4719,6 +5026,33 @@ pre code.hljs {
   .final-answer-body {
     background: rgba(255, 193, 7, 0.03);
     border-color: rgba(255, 193, 7, 0.3);
+  }
+
+  .stop-ai-button {
+    color: #ff7875;
+  }
+
+  .stop-ai-button:hover {
+    background-color: rgba(255, 120, 117, 0.1);
+    border-color: rgba(255, 120, 117, 0.3);
+  }
+
+  .loading-container {
+    background-color: rgba(255, 120, 117, 0.05);
+    border-color: rgba(255, 120, 117, 0.1);
+  }
+
+  .thinking-indicator {
+    background-color: rgba(255, 120, 117, 0.05);
+    border-color: rgba(255, 120, 117, 0.1);
+  }
+
+  .message-stopped {
+    border-left-color: #ff7875;
+  }
+
+  .message-stopped .message-body::after {
+    color: #ff7875;
   }
 }
 </style>
