@@ -282,7 +282,7 @@ import store from '@/utils/store';
 import authService from '@/services/authService';
 
 const router = useRouter();
-const appVersion = ref('2.0.0');
+const appVersion = ref('2.0.1');
 
 // 设置表单
 const settingsForm = reactive({
