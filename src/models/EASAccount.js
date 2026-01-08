@@ -53,13 +53,15 @@ class EASAccount extends Account {
             throw new Error("初始化失败：无法获取有效的教务主机地址");
         }
 
-        console.log(`初始化 EASAccount: 使用主机 ${host}`);
+        // 根据学校配置决定使用HTTP还是HTTPS
+        const scheme = UJNAPI.EA_USE_HTTPS ? 'https' : 'http';
+        console.log(`初始化 EASAccount: 使用主机 ${host}, 协议: ${scheme}`);
 
         super(
             host,
             'EAS_ACCOUNT',
             'EAS_PASSWORD',
-            'http',
+            scheme,
             'eaCookie'
         );
 
@@ -122,6 +124,18 @@ class EASAccount extends Account {
         }
 
         return EASAccount.instance;
+    }
+
+    /**
+     * 重置单例实例（学校切换时调用）
+     * 这将强制下次 getInstance 时创建新实例
+     */
+    static resetInstance() {
+        if (EASAccount.instance) {
+            console.log('重置 EASAccount 单例实例');
+            EASAccount.instance.clearCookies();
+            EASAccount.instance = null;
+        }
     }
 
     /**
@@ -465,6 +479,27 @@ class EASAccount extends Account {
             }
 
             const loginPageHtml = loginPageResult.data;
+
+            // 检测是否需要密码加密（从页面隐藏字段mmsfjm获取，0=不加密，非0=加密）
+            let passwordNeedsEncryption = true;  // 默认需要加密
+            const mmsfjmMatch = loginPageHtml.match(/<input[^>]+name="mmsfjm"[^>]+value=\s*(\d+)/i);
+            if (mmsfjmMatch) {
+                const mmsfjmValue = parseInt(mmsfjmMatch[1], 10);
+                passwordNeedsEncryption = mmsfjmValue !== 0;
+                console.log(`检测到mmsfjm参数: ${mmsfjmValue}, 密码${passwordNeedsEncryption ? '需要' : '不需要'}加密`);
+            } else {
+                // 也检查配置中的设置
+                if (UJNAPI.PLAINTEXT_PASSWORD === true) {
+                    passwordNeedsEncryption = false;
+                    console.log("配置强制使用明文密码");
+                } else if (UJNAPI.PLAINTEXT_PASSWORD === false) {
+                    passwordNeedsEncryption = true;
+                    console.log("配置强制使用加密密码");
+                } else {
+                    console.log("未检测到mmsfjm参数，默认使用RSA加密");
+                }
+            }
+
             // 提取CSRF令牌
             const csrfTokenRegex = /<input[^>]+name="csrftoken"[^>]+value="([^"]+)"/i;
             const csrfTokenMatch = loginPageHtml.match(csrfTokenRegex);
@@ -475,96 +510,172 @@ class EASAccount extends Account {
                 return false;
             }
 
-            const csrfToken = csrfTokenMatch[1];
+            // 处理CSRF令牌 - 某些系统需要完整值，某些只需要第一部分
+            let csrfToken = csrfTokenMatch[1];
+            if (csrfToken.includes(',')) {
+                if (UJNAPI.KEEP_FULL_CSRF_TOKEN) {
+                    console.log("保留完整CSRF令牌（包含逗号分隔的多个值）");
+                    // 保持完整值，但逗号需要URL编码
+                    console.log("完整CSRF令牌:", csrfToken);
+                } else {
+                    console.log("CSRF令牌包含多个值，原始值:", csrfToken);
+                    csrfToken = csrfToken.split(',')[0].trim();
+                    console.log("使用第一个值:", csrfToken);
+                }
+            }
             console.log("成功获取CSRF令牌:", csrfToken);
 
-            // 步骤2: 获取RSA公钥
-            console.log(`\n[步骤2] 获取RSA公钥`);
+            // 步骤1.5: 如果配置要求，登录前先调用登出接口
+            if (UJNAPI.LOGOUT_BEFORE_LOGIN && UJNAPI.EA_LOGOUT) {
+                console.log(`\n[步骤1.5] 登录前调用登出接口`);
+                const logoutUrl = this.getFullUrl(UJNAPI.EA_LOGOUT);
+                console.log(`登出URL: ${logoutUrl}`);
 
-            const publicKeyUrl = this.getFullUrl(UJNAPI.EA_LOGIN_PUBLIC_KEY);
-            console.log(`请求公钥URL: ${publicKeyUrl}`);
+                try {
+                    // 获取当前Cookie
+                    let logoutCookies = await (EASAccount.useVpn ?
+                        IPassAccount.getInstance().vpnCookieJar.getCookies() :
+                        this.cookieJar.getCookies());
 
-            const publicKeyParams = { time: timestamp, _: timestamp };
-            const publicKeyHeaders = {
-                'Referer': loginPageUrl
-            };
+                    const logoutHeaders = {
+                        'X-Requested-With': 'XMLHttpRequest',
+                        'Referer': loginPageUrl,
+                        'Origin': EASAccount.useVpn ? 'https://webvpn.ujn.edu.cn' : this.getFullUrl('')
+                    };
 
-            // 获取当前Cookie
-            let currentCookies;
-            if (EASAccount.useVpn) {
-                const ipassAccount = IPassAccount.getInstance();
-                currentCookies = await ipassAccount.vpnCookieJar.getCookies();
-            } else {
-                currentCookies = await this.cookieJar.getCookies();
+                    const logoutResult = await postMethod(
+                        logoutUrl,
+                        '',  // 空body
+                        {
+                            headers: logoutHeaders,
+                            cookies: logoutCookies
+                        }
+                    );
+                    console.log(`登出接口响应状态: ${logoutResult.status}`);
+                } catch (logoutError) {
+                    console.warn("登出接口调用失败（可能不影响登录）:", logoutError);
+                }
             }
 
-            let publicKeyResult;
-            try {
-                publicKeyResult = await getMethod(
-                    publicKeyUrl,
-                    {
-                        params: publicKeyParams,
-                        headers: publicKeyHeaders,
-                        cookies: currentCookies
-                    }
-                );
+            // 步骤2: 获取RSA公钥（如果需要加密）
+            let rsaPassword = password;  // 默认使用明文密码
 
-                if (!publicKeyResult.success) {
-                    console.error("获取公钥失败:", publicKeyResult.error || '未知错误');
+            if (passwordNeedsEncryption) {
+                console.log(`\n[步骤2] 获取RSA公钥`);
+
+                const publicKeyUrl = this.getFullUrl(UJNAPI.EA_LOGIN_PUBLIC_KEY);
+                console.log(`请求公钥URL: ${publicKeyUrl}`);
+
+                const publicKeyParams = { time: timestamp, _: timestamp };
+                const publicKeyHeaders = {
+                    'Referer': loginPageUrl
+                };
+
+                // 获取当前Cookie
+                let currentCookies;
+                if (EASAccount.useVpn) {
+                    const ipassAccount = IPassAccount.getInstance();
+                    currentCookies = await ipassAccount.vpnCookieJar.getCookies();
+                } else {
+                    currentCookies = await this.cookieJar.getCookies();
+                }
+
+                let publicKeyResult;
+                try {
+                    publicKeyResult = await getMethod(
+                        publicKeyUrl,
+                        {
+                            params: publicKeyParams,
+                            headers: publicKeyHeaders,
+                            cookies: currentCookies
+                        }
+                    );
+
+                    if (!publicKeyResult.success) {
+                        console.error("获取公钥失败:", publicKeyResult.error || '未知错误');
+                        return false;
+                    }
+                } catch (requestError) {
+                    console.error("获取公钥请求失败:", requestError);
                     return false;
                 }
-            } catch (requestError) {
-                console.error("获取公钥请求失败:", requestError);
-                return false;
+
+                let publicKeyData;
+                try {
+                    publicKeyData = JSON.parse(publicKeyResult.data);
+                } catch (e) {
+                    console.error("解析公钥JSON失败:", e);
+                    console.log("公钥响应内容:", publicKeyResult.data);
+                    return false;
+                }
+
+                if (!publicKeyData.modulus) {
+                    console.error("公钥数据不完整");
+                    console.log("公钥响应内容:", publicKeyResult.data);
+                    return false;
+                }
+
+                console.log("成功获取公钥:");
+                console.log("- 模数(modulus)前20字符:", publicKeyData.modulus.substring(0, 20) + "...");
+                console.log("- 指数(exponent):", publicKeyData.exponent);
+
+                // 步骤3: 加密密码
+                console.log(`\n[步骤3] 加密密码`);
+
+                // 使用原始的cryptoUtils.js中的加密方法
+                rsaPassword = getenPassword(password, publicKeyData.modulus, publicKeyData.exponent);
+                if (!rsaPassword) {
+                    console.error("密码加密失败");
+                    return false;
+                }
+
+                console.log("密码加密成功");
+            } else {
+                console.log(`\n[步骤2&3] 跳过公钥获取和加密（使用明文密码）`);
+                rsaPassword = password;
             }
-
-            let publicKeyData;
-            try {
-                publicKeyData = JSON.parse(publicKeyResult.data);
-            } catch (e) {
-                console.error("解析公钥JSON失败:", e);
-                console.log("公钥响应内容:", publicKeyResult.data);
-                return false;
-            }
-
-            if (!publicKeyData.modulus) {
-                console.error("公钥数据不完整");
-                console.log("公钥响应内容:", publicKeyResult.data);
-                return false;
-            }
-
-            console.log("成功获取公钥:");
-            console.log("- 模数(modulus)前20字符:", publicKeyData.modulus.substring(0, 20) + "...");
-            console.log("- 指数(exponent):", publicKeyData.exponent);
-
-            // 步骤3: 加密密码
-            console.log(`\n[步骤3] 加密密码`);
-
-            // 使用原始的cryptoUtils.js中的加密方法
-            const rsaPassword = getenPassword(password, publicKeyData.modulus, publicKeyData.exponent);
-            if (!rsaPassword) {
-                console.error("密码加密失败");
-                return false;
-            }
-
-            console.log("密码加密成功");
 
             // 步骤4: 提交登录请求
             console.log(`\n[步骤4] 提交登录请求`);
 
-            // 构造登录表单数据
-            const loginData = {
-                csrftoken: csrfToken,
-                language: 'zh_CN',
-                yhm: account,
-                mm: rsaPassword
+            // 构造登录表单数据 - 使用字符串格式，参照iOS实现
+            // iOS版本发送两个相同的mm参数，这可能是正方教务系统的特殊要求
+            const urlEncodeComponent = (str) => {
+                // 自定义URL编码，确保特殊字符被正确编码
+                return encodeURIComponent(str);
             };
 
-            console.log("登录表单数据:");
-            console.log("- csrftoken:", csrfToken);
+            // 按照抓包数据的顺序构建表单：csrftoken, language, ydType, yhm, mm, mm
+            const loginDataParts = [
+                `csrftoken=${urlEncodeComponent(csrfToken)}`
+            ];
+
+            // 添加language参数
+            loginDataParts.push(`language=zh_CN`);
+
+            // 如果配置要求，添加ydType参数
+            if (UJNAPI.REQUIRE_YD_TYPE) {
+                loginDataParts.push(`ydType=`);  // 空值
+            }
+
+            // 添加用户名
+            loginDataParts.push(`yhm=${urlEncodeComponent(account)}`);
+
+            // 添加密码（发送两次）
+            loginDataParts.push(`mm=${urlEncodeComponent(rsaPassword)}`);
+            loginDataParts.push(`mm=${urlEncodeComponent(rsaPassword)}`);  // 重复mm参数，与抓包一致
+
+            const loginData = loginDataParts.join('&');
+
+            console.log("登录表单数据 (字符串格式):");
+            console.log("- csrftoken:", csrfToken.substring(0, 50) + (csrfToken.length > 50 ? '...' : ''));
             console.log("- language: zh_CN");
+            if (UJNAPI.REQUIRE_YD_TYPE) {
+                console.log("- ydType: (空)");
+            }
             console.log("- yhm:", account);
-            console.log("- mm: [已加密]");
+            console.log(`- mm: ${passwordNeedsEncryption ? '[已加密]' : '[明文]'} (发送两次)`);
+            console.log("表单字符串:", loginData.substring(0, 100) + "...");
 
             const loginUrl = this.getFullUrl(UJNAPI.EA_LOGIN);
             console.log("登录请求URL:", loginUrl);
@@ -672,10 +783,12 @@ class EASAccount extends Account {
                 console.log("验证方法1 (重定向): 失败");
             }
 
-            // 备用验证: 访问个人信息页面
+            // 备用验证: 访问学年数据页面（使用配置的API路径）
             console.log("\n尝试备用验证方式");
-            const personalInfoUrl = this.getFullUrl('jwglxt/xsxxxggl/xsxxwh_cxCkDgxsxx.html?gnmkdm=N100801');
-            console.log("请求个人信息页面:", personalInfoUrl);
+            // 使用配置的学年数据API进行验证，而不是硬编码的路径
+            const verifyApiPath = UJNAPI.EA_YEAR_DATA || 'xtgl/index_cxAreaFive.html?localeKey=zh_CN&gnmkdm=index';
+            const personalInfoUrl = this.getFullUrl(verifyApiPath);
+            console.log("请求验证页面:", personalInfoUrl);
 
             // 使用当前保存的Cookie和合适的请求头
             const savedCookies = await (EASAccount.useVpn ?
@@ -703,7 +816,22 @@ class EASAccount extends Account {
             }
 
             // 使用统一方法检查响应是否有效
-            const hasStudentInfo = this.isValidLoggedInPage(personalInfoResult.data);
+            let hasStudentInfo = false;
+
+            // 首先检查是否是JSON格式的有效响应
+            if (personalInfoResult.data) {
+                try {
+                    const jsonData = JSON.parse(personalInfoResult.data);
+                    // 如果成功解析JSON并且有数据，说明已登录
+                    if (jsonData && (jsonData.xnm || jsonData.xqm || jsonData.xh || Array.isArray(jsonData))) {
+                        hasStudentInfo = true;
+                        console.log("JSON响应包含有效数据，验证通过");
+                    }
+                } catch (e) {
+                    // 不是JSON，使用HTML检查方式
+                    hasStudentInfo = this.isValidLoggedInPage(personalInfoResult.data);
+                }
+            }
 
             console.log(`备用验证: ${hasStudentInfo ? '通过' : '失败'}`);
 

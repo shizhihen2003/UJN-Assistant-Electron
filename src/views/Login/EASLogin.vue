@@ -169,7 +169,9 @@ const checkServerStatus = async () => {
 
     const host = hosts[loginForm.nodeIndex] || hosts[0]
     const loginApi = UJNAPI.EA_LOGIN || 'jwglxt/xtgl/login_slogin.html'
-    const url = `http://${host}/${loginApi}`
+    // 根据学校配置决定协议
+    const scheme = UJNAPI.EA_USE_HTTPS ? 'https' : 'http'
+    const url = `${scheme}://${host}/${loginApi}`
 
     loading.value = true
     serverStatus.value = { message: '正在检查教务服务器状态...', type: 'info' }
@@ -324,7 +326,7 @@ watch(() => loginForm.nodeIndex, () => {
 onMounted(async () => {
   // 刷新学校配置
   refreshSchoolConfig()
-  
+
   try {
     // 检查是否已登录
     const status = authService.getLoginStatus()

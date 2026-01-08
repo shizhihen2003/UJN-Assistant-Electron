@@ -244,19 +244,119 @@ function setupIPC() {
                 console.log(`[主进程] Cookie内容:`, responseCookies);
             }
 
+            // 获取重定向位置
+            const location = response.headers.get('location');
+
             // 特殊处理302重定向状态码
             const isLoginRedirect = method === 'POST' && url.includes('login') && response.status === 302;
-            const isLoginSuccess = isLoginRedirect && !response.headers.get('location')?.includes('login');
+            const isLoginSuccess = isLoginRedirect && !location?.includes('login');
+
+            // 判断是否为重定向响应（3xx状态码）
+            const isRedirect = response.status >= 300 && response.status < 400;
 
             console.log(`[主进程] 是否为登录重定向: ${isLoginRedirect}, 登录是否成功: ${isLoginSuccess}`);
 
+            // 如果是GET请求的重定向，且有重定向地址，尝试跟随重定向获取内容
+            if (method === 'GET' && isRedirect && location) {
+                console.log(`[主进程] GET请求收到${response.status}重定向，重定向到: ${location}`);
+
+                // 最大重定向次数
+                const maxRedirects = 5;
+                let currentUrl = url;
+                let currentLocation = location;
+                let currentResponse = response;
+                let allCookies = [...responseCookies];
+                let redirectCount = 0;
+
+                while (currentLocation && redirectCount < maxRedirects) {
+                    redirectCount++;
+
+                    // 构建完整的重定向URL
+                    let redirectUrl = currentLocation;
+                    if (!currentLocation.startsWith('http')) {
+                        const originalUrl = new URL(currentUrl);
+                        if (currentLocation.startsWith('/')) {
+                            redirectUrl = `${originalUrl.protocol}//${originalUrl.host}${currentLocation}`;
+                        } else {
+                            const basePath = originalUrl.pathname.split('/').slice(0, -1).join('/');
+                            redirectUrl = `${originalUrl.protocol}//${originalUrl.host}${basePath}/${currentLocation}`;
+                        }
+                    } else {
+                        // 如果原始请求是HTTPS，但重定向URL是HTTP，则保持HTTPS
+                        const originalUrl = new URL(currentUrl);
+                        const redirectUrlObj = new URL(currentLocation);
+                        if (originalUrl.protocol === 'https:' && redirectUrlObj.protocol === 'http:') {
+                            redirectUrlObj.protocol = 'https:';
+                            redirectUrl = redirectUrlObj.toString();
+                            console.log(`[主进程] 重定向协议从HTTP升级为HTTPS: ${redirectUrl}`);
+                        }
+                    }
+
+                    console.log(`[主进程] 跟随重定向 #${redirectCount} 到: ${redirectUrl}`);
+
+                    try {
+                        // 合并Cookie
+                        const redirectHeaders = { ...requestHeaders };
+                        if (allCookies.length > 0) {
+                            const cookieValues = allCookies.map(c => c.split(';')[0]);
+                            redirectHeaders.Cookie = cookieValues.join('; ');
+                        }
+
+                        const redirectResponse = await fetch(redirectUrl, {
+                            method: 'GET',
+                            headers: redirectHeaders,
+                            redirect: 'manual'
+                        });
+
+                        // 收集新的Cookie
+                        const newCookies = redirectResponse.headers.raw()['set-cookie'] || [];
+                        allCookies = [...allCookies, ...newCookies];
+
+                        const newLocation = redirectResponse.headers.get('location');
+                        const newStatus = redirectResponse.status;
+
+                        console.log(`[主进程] 重定向响应状态: ${newStatus}`);
+
+                        // 如果不再是重定向，返回最终响应
+                        if (newStatus < 300 || newStatus >= 400 || !newLocation) {
+                            const redirectData = await redirectResponse.text();
+
+                            return {
+                                success: newStatus >= 200 && newStatus < 400,
+                                status: newStatus,
+                                data: redirectData,
+                                cookies: allCookies,
+                                headers: Object.fromEntries(redirectResponse.headers.entries()),
+                                location: newLocation,
+                                originalStatus: response.status,
+                                redirectedFrom: url,
+                                redirectedTo: redirectUrl,
+                                redirectCount: redirectCount
+                            };
+                        }
+
+                        // 继续跟随重定向
+                        currentUrl = redirectUrl;
+                        currentLocation = newLocation;
+                        currentResponse = redirectResponse;
+                    } catch (redirectError) {
+                        console.error(`[主进程] 跟随重定向失败:`, redirectError);
+                        break;
+                    }
+                }
+
+                if (redirectCount >= maxRedirects) {
+                    console.warn(`[主进程] 达到最大重定向次数 ${maxRedirects}`);
+                }
+            }
+
             return {
-                success: (response.status >= 200 && response.status < 300) || isLoginSuccess,
+                success: (response.status >= 200 && response.status < 300) || isLoginSuccess || isRedirect,
                 status: response.status,
                 data: responseData,
                 cookies: responseCookies,
                 headers: Object.fromEntries(response.headers.entries()),
-                location: response.headers.get('location')
+                location: location
             };
         } catch (error) {
             console.error('[主进程] eas:request 错误:', error);

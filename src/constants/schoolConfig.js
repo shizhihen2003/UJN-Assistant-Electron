@@ -22,6 +22,7 @@ export const SSOType = {
     CAS: 'cas',                        // CAS认证
     OAUTH: 'oauth',                    // OAuth认证
     TPASS: 'tpass',                    // 天翼认证
+    RUMP: 'rump',                      // rump_frontend认证（如荆楚理工）
     CUSTOM: 'custom'                   // 自定义认证
 };
 
@@ -35,21 +36,21 @@ export function getBlankTemplate() {
         name: '',
         shortName: '',
         logo: '',
-        
+
         vpn: {
             enabled: true,
             host: '',
             loginUrl: '',
             encryptKey: 'wrdvpnisthebest',
         },
-        
+
         sso: {
             type: SSOType.CAS,
             host: '',
             loginUrl: '',
             portalUrl: '',
         },
-        
+
         eas: {
             type: EASystemType.ZHENGFANG_NEW,
             hosts: [''],
@@ -69,16 +70,16 @@ export function getBlankTemplate() {
                 emptyRoom: '',
             }
         },
-        
+
         campuses: [],
-        
+
         features: {
             calendar: false,
             emptyRoom: false,
             librarySearch: false,
             cardBalance: false,
         },
-        
+
         custom: {}
     };
 }
@@ -90,7 +91,7 @@ export function getBlankTemplate() {
  */
 export function validateSchoolConfig(config) {
     const errors = [];
-    
+
     // 基本信息验证
     if (!config.id || config.id.trim() === '') {
         errors.push('学校ID不能为空');
@@ -98,7 +99,7 @@ export function validateSchoolConfig(config) {
     if (!config.name || config.name.trim() === '') {
         errors.push('学校名称不能为空');
     }
-    
+
     // VPN配置验证
     if (config.vpn?.enabled) {
         if (!config.vpn.host) {
@@ -108,7 +109,7 @@ export function validateSchoolConfig(config) {
             errors.push('启用VPN时，VPN登录URL不能为空');
         }
     }
-    
+
     // SSO配置验证
     if (!config.sso?.host) {
         errors.push('统一身份认证主机地址不能为空');
@@ -116,18 +117,18 @@ export function validateSchoolConfig(config) {
     if (!config.sso?.loginUrl) {
         errors.push('统一身份认证登录URL不能为空');
     }
-    
+
     // 教务系统配置验证
     if (!config.eas?.hosts || config.eas.hosts.length === 0) {
         errors.push('教务系统主机列表不能为空');
     } else if (config.eas.hosts.some(h => !h || h.trim() === '')) {
         errors.push('教务系统主机地址不能为空');
     }
-    
+
     if (!config.eas?.apis?.login) {
         errors.push('教务系统登录API路径不能为空');
     }
-    
+
     return {
         valid: errors.length === 0,
         errors
