@@ -144,6 +144,7 @@ import { ElMessage } from 'element-plus'
 import ipc from '@/utils/ipc'
 import store from '@/utils/store'
 import EASAccount from '@/models/EASAccount'
+import UJNAPI from '@/constants/api'
 
 const router = useRouter()
 const needLogin = ref(false)
@@ -470,7 +471,7 @@ const queryPersonalLessonTable = async (xnm, xqm) => {
 
     // 发送请求
     const response = await ipc.easPost(
-        easAccount.getFullUrl('jwglxt/kbcx/xskbcx_cxXsgrkb.html'),
+        easAccount.getFullUrl(UJNAPI.GET_LESSON_TABLE),
         formData,
         {
           cookies: cookies,
@@ -517,7 +518,7 @@ const getSchoolYearData = async () => {
 
     // 获取学年信息
     const response = await ipc.easGet(
-        easAccount.getFullUrl('jwglxt/xtgl/index_cxAreaFive.html?localeKey=zh_CN&gnmkdm=index'),
+        easAccount.getFullUrl(UJNAPI.EA_YEAR_DATA),
         {
           cookies: cookies,
           headers: {

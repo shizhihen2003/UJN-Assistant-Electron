@@ -3,7 +3,7 @@
 /**
  * API常量配置
  * 动态读取当前选中学校的配置，实现多学校支持
- *
+ * 
  * 重要：直接从localStorage读取学校配置，不依赖schoolService初始化
  * 这样可以确保在authService初始化时就能获取正确的学校配置
  */
@@ -62,6 +62,7 @@ const PresetSchools = {
                 academicPage: 'jwglxt/xsxy/xsxyqk_cxXsxyqkIndex.html?gnmkdm=N105515&layout=default',
                 academicInfo: 'jwglxt/xsxy/xsxyqk_cxJxzxjhxfyqFKcxx.html',
                 emptyRoom: 'jwglxt/cdjy/cdjy_cxKxcdlb.html?doType=query',
+                studentInfo: 'jwglxt/xsxxxggl/xsxxwh_cxCkDgxsxx.html?gnmkdm=N100801',
             }
         },
         campuses: [
@@ -109,6 +110,7 @@ const PresetSchools = {
                 academicPage: 'jwglxt/xsxy/xsxyqk_cxXsxyqkIndex.html?gnmkdm=N105515&layout=default',
                 academicInfo: 'jwglxt/xsxy/xsxyqk_cxJxzxjhxfyqFKcxx.html',
                 emptyRoom: 'jwglxt/cdjy/cdjy_cxKxcdlb.html?doType=query',
+                studentInfo: 'jwglxt/xsxxxggl/xsxxwh_cxCkDgxsxx.html?gnmkdm=N100801',
             }
         },
         campuses: [
@@ -128,7 +130,7 @@ const PresetSchools = {
             cardBalance: false,
         },
     },
-
+    
     // 荆楚理工学院 - Jingchu University of Technology
     // 教务系统：正方软件 V-9.0 (HTTPS)
     // 统一认证：rump_frontend 系统
@@ -240,18 +242,18 @@ function getCustomSchools() {
  */
 function getCurrentSchoolConfig() {
     const schoolId = getCurrentSchoolId();
-
+    
     // 先从预置学校查找
     if (PresetSchools[schoolId]) {
         return PresetSchools[schoolId];
     }
-
+    
     // 再从自定义学校查找
     const customSchools = getCustomSchools();
     if (customSchools[schoolId]) {
         return customSchools[schoolId];
     }
-
+    
     // 都没找到，返回默认（济南大学）
     console.warn(`未找到学校配置: ${schoolId}，使用默认配置`);
     return PresetSchools.ujn;
@@ -268,219 +270,226 @@ class DynamicAPIConfig {
     get _config() {
         return getCurrentSchoolConfig();
     }
-
+    
     /**
      * 获取VPN主机地址
      */
     get VPN_HOST() {
         return this._config.vpn?.host || '';
     }
-
+    
     /**
      * 获取VPN登录URL
      */
     get VPN_LOGIN() {
         return this._config.vpn?.loginUrl || '';
     }
-
+    
     /**
      * 获取统一身份认证主机地址
      */
     get IPASS_HOST() {
         return this._config.sso?.host || '';
     }
-
+    
     /**
      * 获取统一身份认证登录URL
      */
     get IPASS_LOGIN() {
         return this._config.sso?.loginUrl || '';
     }
-
+    
     /**
      * 获取教务系统主机列表
      */
     get EA_HOSTS() {
         return this._config.eas?.hosts || [];
     }
-
+    
     /**
      * 获取教务登录API
      */
     get EA_LOGIN() {
         return this._config.eas?.apis?.login || 'jwglxt/xtgl/login_slogin.html';
     }
-
+    
     /**
      * 获取RSA公钥API
      */
     get EA_LOGIN_PUBLIC_KEY() {
         return this._config.eas?.apis?.publicKey || 'jwglxt/xtgl/login_getPublicKey.html';
     }
-
+    
     /**
      * 获取系统通知API
      */
     get EA_SYSTEM_NOTICE() {
         return this._config.eas?.apis?.systemNotice || 'jwglxt/xtgl/index_cxDbsy.html?doType=query';
     }
-
+    
     /**
      * 获取学年数据API
      */
     get EA_YEAR_DATA() {
         return this._config.eas?.apis?.yearData || 'jwglxt/xtgl/index_cxAreaFive.html?localeKey=zh_CN&gnmkdm=index';
     }
-
+    
     /**
      * 获取学生课表API
      */
     get GET_LESSON_TABLE() {
         return this._config.eas?.apis?.lessonTable || 'jwglxt/kbcx/xskbcx_cxXsgrkb.html';
     }
-
+    
     /**
      * 获取班级课表API
      */
     get GET_CLASS_LESSON_TABLE() {
         return this._config.eas?.apis?.classLessonTable || 'jwglxt/kbdy/bjkbdy_cxBjKb.html';
     }
-
+    
     /**
      * 获取课表打印页面API
      */
     get RECOMMENDED_LESSON_TABLE_PRINTING() {
         return this._config.eas?.apis?.lessonTablePrint || 'jwglxt/kbdy/bjkbdy_cxBjkbdyIndex.html?gnmkdm=0&layout=default';
     }
-
+    
     /**
      * 获取成绩查询API
      */
     get GET_MARK() {
         return this._config.eas?.apis?.marks || 'jwglxt/cjcx/cjcx_cxDgXscj.html?doType=query';
     }
-
+    
     /**
      * 获取成绩明细API
      */
     get GET_MARK_DETAIL() {
         return this._config.eas?.apis?.markDetail || 'jwglxt/cjcx/cjcx_cxXsKccjList.html';
     }
-
+    
     /**
      * 获取考试查询API
      */
     get GET_EXAM() {
         return this._config.eas?.apis?.exam || 'jwglxt/kwgl/kscx_cxXsksxxIndex.html?doType=query';
     }
-
+    
     /**
      * 获取学业情况页面API
      */
     get ACADEMIC_PAGE() {
         return this._config.eas?.apis?.academicPage || 'jwglxt/xsxy/xsxyqk_cxXsxyqkIndex.html?gnmkdm=N105515&layout=default';
     }
-
+    
     /**
      * 获取学业情况信息API
      */
     get ACADEMIC_INFO() {
         return this._config.eas?.apis?.academicInfo || 'jwglxt/xsxy/xsxyqk_cxJxzxjhxfyqFKcxx.html';
     }
-
+    
     /**
      * 获取空教室查询API
      */
     get GET_EMPTY_ROOM() {
         return this._config.eas?.apis?.emptyRoom || 'jwglxt/cdjy/cdjy_cxKxcdlb.html?doType=query';
     }
-
+    
+    /**
+     * 获取学生信息API
+     */
+    get STUDENT_INFO() {
+        return this._config.eas?.apis?.studentInfo || 'jwglxt/xsxxxggl/xsxxwh_cxCkDgxsxx.html?gnmkdm=N100801';
+    }
+    
     // ==================== 扩展属性 ====================
-
+    
     /**
      * 获取当前学校ID
      */
     get SCHOOL_ID() {
         return this._config.id || 'ujn';
     }
-
+    
     /**
      * 获取当前学校名称
      */
     get SCHOOL_NAME() {
         return this._config.name || '济南大学';
     }
-
+    
     /**
      * 获取当前学校简称
      */
     get SCHOOL_SHORT_NAME() {
         return this._config.shortName || '济大';
     }
-
+    
     /**
      * 获取校区列表
      */
     get CAMPUSES() {
         return this._config.campuses || [];
     }
-
+    
     /**
      * 获取功能特性开关
      */
     get FEATURES() {
         return this._config.features || {};
     }
-
+    
     /**
      * 获取VPN加密密钥
      */
     get VPN_ENCRYPT_KEY() {
         return this._config.vpn?.encryptKey || 'wrdvpnisthebest!';
     }
-
+    
     /**
      * 检查VPN是否启用
      */
     get VPN_ENABLED() {
         return this._config.vpn?.enabled !== false;
     }
-
+    
     /**
      * 获取门户URL
      */
     get PORTAL_URL() {
         return this._config.sso?.portalUrl || '';
     }
-
+    
     /**
      * 检查教务系统是否使用HTTPS
      */
     get EA_USE_HTTPS() {
         return this._config.eas?.useHttps === true;
     }
-
+    
     /**
      * 获取登出API（某些系统登录前需要先登出）
      */
     get EA_LOGOUT() {
         return this._config.eas?.apis?.logout || null;
     }
-
+    
     /**
      * 获取登录特性配置
      */
     get LOGIN_FEATURES() {
         return this._config.eas?.loginFeatures || {};
     }
-
+    
     /**
      * 检查是否需要登录前先登出
      */
     get LOGOUT_BEFORE_LOGIN() {
         return this._config.eas?.loginFeatures?.logoutBeforeLogin === true;
     }
-
+    
     /**
      * 检查密码是否明文传输
      * 返回值：true=强制明文, false=强制加密, 'auto'=自动检测
@@ -492,30 +501,30 @@ class DynamicAPIConfig {
         }
         return 'auto';  // 默认自动检测
     }
-
+    
     /**
      * 检查是否需要ydType参数
      */
     get REQUIRE_YD_TYPE() {
         return this._config.eas?.loginFeatures?.requireYdType === true;
     }
-
+    
     /**
      * 检查是否保留完整CSRF Token
      */
     get KEEP_FULL_CSRF_TOKEN() {
         return this._config.eas?.loginFeatures?.keepFullCsrfToken === true;
     }
-
+    
     /**
      * 获取SSO类型
      */
     get SSO_TYPE() {
         return this._config.sso?.type || 'cas';
     }
-
+    
     // ==================== 工具方法 ====================
-
+    
     /**
      * 获取完整的教务系统URL
      * @param {number} hostIndex 主机索引
@@ -529,17 +538,17 @@ class DynamicAPIConfig {
             console.error('教务系统主机列表为空');
             return '';
         }
-
+        
         const index = Math.min(hostIndex, hosts.length - 1);
         const host = hosts[index];
-
+        
         // 如果未指定useHttps，则读取学校配置
         const shouldUseHttps = useHttps !== null ? useHttps : (this._config.eas?.useHttps === true);
         const scheme = shouldUseHttps ? 'https' : 'http';
-
+        
         return `${scheme}://${host}/${apiPath}`;
     }
-
+    
     /**
      * 获取完整的VPN URL
      * @param {string} path 路径
@@ -550,7 +559,7 @@ class DynamicAPIConfig {
         if (!host) return '';
         return `https://${host}/${path}`;
     }
-
+    
     /**
      * 获取完整的SSO URL
      * @param {string} path 路径
@@ -563,7 +572,7 @@ class DynamicAPIConfig {
         const scheme = useHttps ? 'https' : 'http';
         return `${scheme}://${host}/${path}`;
     }
-
+    
     /**
      * 刷新配置（切换学校后调用）
      * 由于使用getter动态读取，实际上不需要手动刷新

@@ -300,7 +300,7 @@ class EASAccount extends Account {
             }
 
             // 构建URL - getFullUrl方法会自动处理VPN加密
-            const personalInfoUrl = this.getFullUrl('jwglxt/xsxxxggl/xsxxwh_cxCkDgxsxx.html?gnmkdm=N100801');
+            const personalInfoUrl = this.getFullUrl(UJNAPI.STUDENT_INFO);
             console.log("检查登录状态URL:", personalInfoUrl);
 
             // 准备请求头
@@ -479,7 +479,7 @@ class EASAccount extends Account {
             }
 
             const loginPageHtml = loginPageResult.data;
-
+            
             // 检测是否需要密码加密（从页面隐藏字段mmsfjm获取，0=不加密，非0=加密）
             let passwordNeedsEncryption = true;  // 默认需要加密
             const mmsfjmMatch = loginPageHtml.match(/<input[^>]+name="mmsfjm"[^>]+value=\s*(\d+)/i);
@@ -499,7 +499,7 @@ class EASAccount extends Account {
                     console.log("未检测到mmsfjm参数，默认使用RSA加密");
                 }
             }
-
+            
             // 提取CSRF令牌
             const csrfTokenRegex = /<input[^>]+name="csrftoken"[^>]+value="([^"]+)"/i;
             const csrfTokenMatch = loginPageHtml.match(csrfTokenRegex);
@@ -524,25 +524,25 @@ class EASAccount extends Account {
                 }
             }
             console.log("成功获取CSRF令牌:", csrfToken);
-
+            
             // 步骤1.5: 如果配置要求，登录前先调用登出接口
             if (UJNAPI.LOGOUT_BEFORE_LOGIN && UJNAPI.EA_LOGOUT) {
                 console.log(`\n[步骤1.5] 登录前调用登出接口`);
                 const logoutUrl = this.getFullUrl(UJNAPI.EA_LOGOUT);
                 console.log(`登出URL: ${logoutUrl}`);
-
+                
                 try {
                     // 获取当前Cookie
                     let logoutCookies = await (EASAccount.useVpn ?
                         IPassAccount.getInstance().vpnCookieJar.getCookies() :
                         this.cookieJar.getCookies());
-
+                    
                     const logoutHeaders = {
                         'X-Requested-With': 'XMLHttpRequest',
                         'Referer': loginPageUrl,
                         'Origin': EASAccount.useVpn ? 'https://webvpn.ujn.edu.cn' : this.getFullUrl('')
                     };
-
+                    
                     const logoutResult = await postMethod(
                         logoutUrl,
                         '',  // 空body
@@ -559,7 +559,7 @@ class EASAccount extends Account {
 
             // 步骤2: 获取RSA公钥（如果需要加密）
             let rsaPassword = password;  // 默认使用明文密码
-
+            
             if (passwordNeedsEncryption) {
                 console.log(`\n[步骤2] 获取RSA公钥`);
 
@@ -644,27 +644,27 @@ class EASAccount extends Account {
                 // 自定义URL编码，确保特殊字符被正确编码
                 return encodeURIComponent(str);
             };
-
+            
             // 按照抓包数据的顺序构建表单：csrftoken, language, ydType, yhm, mm, mm
             const loginDataParts = [
                 `csrftoken=${urlEncodeComponent(csrfToken)}`
             ];
-
+            
             // 添加language参数
             loginDataParts.push(`language=zh_CN`);
-
+            
             // 如果配置要求，添加ydType参数
             if (UJNAPI.REQUIRE_YD_TYPE) {
                 loginDataParts.push(`ydType=`);  // 空值
             }
-
+            
             // 添加用户名
             loginDataParts.push(`yhm=${urlEncodeComponent(account)}`);
-
+            
             // 添加密码（发送两次）
             loginDataParts.push(`mm=${urlEncodeComponent(rsaPassword)}`);
             loginDataParts.push(`mm=${urlEncodeComponent(rsaPassword)}`);  // 重复mm参数，与抓包一致
-
+            
             const loginData = loginDataParts.join('&');
 
             console.log("登录表单数据 (字符串格式):");
@@ -817,7 +817,7 @@ class EASAccount extends Account {
 
             // 使用统一方法检查响应是否有效
             let hasStudentInfo = false;
-
+            
             // 首先检查是否是JSON格式的有效响应
             if (personalInfoResult.data) {
                 try {
@@ -916,8 +916,8 @@ class EASAccount extends Account {
                 console.log("使用普通模式获取学生信息，Cookie数量:", cookies ? cookies.length : 0);
             }
 
-            // 构建请求URL - 灵活处理URL构建
-            const personalInfoUrl = this.getFullUrl('jwglxt/xsxxxggl/xsxxwh_cxCkDgxsxx.html?gnmkdm=N100801');
+            // 构建请求URL - 使用动态配置的API路径
+            const personalInfoUrl = this.getFullUrl(UJNAPI.STUDENT_INFO);
             console.log("获取学生信息URL:", personalInfoUrl);
 
             // 准备请求头
