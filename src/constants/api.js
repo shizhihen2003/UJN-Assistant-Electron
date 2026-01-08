@@ -62,6 +62,8 @@ const PresetSchools = {
                 academicPage: 'jwglxt/xsxy/xsxyqk_cxXsxyqkIndex.html?gnmkdm=N105515&layout=default',
                 academicInfo: 'jwglxt/xsxy/xsxyqk_cxJxzxjhxfyqFKcxx.html',
                 emptyRoom: 'jwglxt/cdjy/cdjy_cxKxcdlb.html?doType=query',
+                emptyRoomPage: 'jwglxt/cdjy/cdjy_cxKxcdlb.html?gnmkdm=N2155',
+                buildingList: 'jwglxt/cdjy/cdjy_cxXqjc.html?gnmkdm=N2155',
                 studentInfo: 'jwglxt/xsxxxggl/xsxxwh_cxCkDgxsxx.html?gnmkdm=N100801',
             }
         },
@@ -110,6 +112,8 @@ const PresetSchools = {
                 academicPage: 'jwglxt/xsxy/xsxyqk_cxXsxyqkIndex.html?gnmkdm=N105515&layout=default',
                 academicInfo: 'jwglxt/xsxy/xsxyqk_cxJxzxjhxfyqFKcxx.html',
                 emptyRoom: 'jwglxt/cdjy/cdjy_cxKxcdlb.html?doType=query',
+                emptyRoomPage: 'jwglxt/cdjy/cdjy_cxKxcdlb.html?gnmkdm=N2155',
+                buildingList: 'jwglxt/cdjy/cdjy_cxXqjc.html?gnmkdm=N2155',
                 studentInfo: 'jwglxt/xsxxxggl/xsxxwh_cxCkDgxsxx.html?gnmkdm=N100801',
             }
         },
@@ -395,6 +399,20 @@ class DynamicAPIConfig {
      */
     get GET_EMPTY_ROOM() {
         return this._config.eas?.apis?.emptyRoom || 'jwglxt/cdjy/cdjy_cxKxcdlb.html?doType=query';
+    }
+    
+    /**
+     * 获取空教室页面API（用于获取选项数据）
+     */
+    get GET_EMPTY_ROOM_PAGE() {
+        return this._config.eas?.apis?.emptyRoomPage || 'jwglxt/cdjy/cdjy_cxKxcdlb.html?gnmkdm=N2155';
+    }
+    
+    /**
+     * 获取教学楼列表API
+     */
+    get GET_BUILDING_LIST() {
+        return this._config.eas?.apis?.buildingList || 'jwglxt/cdjy/cdjy_cxXqjc.html?gnmkdm=N2155';
     }
     
     /**

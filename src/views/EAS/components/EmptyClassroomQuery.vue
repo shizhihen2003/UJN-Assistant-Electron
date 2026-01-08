@@ -137,10 +137,10 @@
       </template>
       <el-table :data="searchResults" border stripe style="width: 100%">
         <el-table-column prop="cdmc" label="教室名称" min-width="120"></el-table-column>
-        <el-table-column prop="jxlmc" label="教学楼" min-width="120"></el-table-column>
+        <el-table-column prop="jxlmc" label="教学楼" min-width="150"></el-table-column>
+        <el-table-column prop="cdlbmc" label="场地类别" width="120"></el-table-column>
         <el-table-column prop="zws" label="座位数" width="80"></el-table-column>
-        <el-table-column prop="cdlb" label="类型" width="120"></el-table-column>
-        <el-table-column prop="sydxmc" label="状态" width="120"></el-table-column>
+        <el-table-column prop="kszws1" label="考试座位数" width="100"></el-table-column>
       </el-table>
       <div class="pagination-container">
         <el-pagination
@@ -277,6 +277,27 @@ export default {
       return ['一', '二', '三', '四', '五', '六', '日'][day - 1] || day;
     };
 
+    // 计算当前学期的value值
+    const getCurrentTermValue = () => {
+      const now = new Date();
+      const currentYear = now.getFullYear();
+      const currentMonth = now.getMonth() + 1;
+      
+      // 9月-12月：当前年份的第一学期
+      // 1月：上一年的第一学期（寒假前）
+      // 2月-8月：上一年的第二学期
+      if (currentMonth >= 9) {
+        // 9-12月: 当前学年第一学期
+        return `${currentYear}-3`;
+      } else if (currentMonth === 1) {
+        // 1月: 上一学年第一学期（还没放假）
+        return `${currentYear - 1}-3`;
+      } else {
+        // 2-8月: 上一学年第二学期
+        return `${currentYear - 1}-12`;
+      }
+    };
+
     // 加载学年学期数据
     const loadTermOptions = async () => {
       loading.value = true;
@@ -284,11 +305,21 @@ export default {
         const response = await classroomService.getTermOptions();
         if (response.success) {
           termOptions.value = response.data;
-          // 默认选择第一个选项
-          if (termOptions.value.length > 0) {
+          
+          // 自动选择当前学期
+          const currentTermValue = getCurrentTermValue();
+          const currentTerm = termOptions.value.find(opt => opt.value === currentTermValue);
+          
+          if (currentTerm) {
+            queryForm.dm = currentTerm.value;
+            console.log(`自动选择当前学期: ${currentTerm.label}`);
+          } else if (termOptions.value.length > 0) {
+            // 如果找不到当前学期，选择第一个（最新的）
             queryForm.dm = termOptions.value[0].value;
-            handleTermChange();
+            console.log(`未找到当前学期，选择最新学期: ${termOptions.value[0].label}`);
           }
+          
+          handleTermChange();
         } else {
           ElMessage.warning('加载学年学期数据失败');
         }

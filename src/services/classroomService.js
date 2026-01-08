@@ -1,6 +1,7 @@
 // src/services/classroomService.js
 import ipc from '../utils/ipc';
 import authService from './authService';
+import UJNAPI from '../constants/api';
 
 /**
  * 空教室查询服务
@@ -30,11 +31,11 @@ class ClassroomService {
                     return ''; // 返回空字符串，表示后续需要使用easAccount.getFullUrl
                 }
 
-                // 非VPN模式，使用普通URL
+                // 非VPN模式，使用普通URL（不再硬编码jwglxt前缀）
                 const host = authService.easAccount.host;
                 if (host) {
                     const scheme = authService.easAccount.scheme || 'http';
-                    this.baseUrl = `${scheme}://${host}/jwglxt`;
+                    this.baseUrl = `${scheme}://${host}`;
                     console.log(`使用当前登录的教务地址: ${this.baseUrl}`);
                     return this.baseUrl;
                 }
@@ -42,12 +43,12 @@ class ClassroomService {
 
             // 如果无法获取，使用默认值
             console.warn('无法获取当前教务系统地址，使用默认值');
-            this.baseUrl = 'http://jwgl.ujn.edu.cn/jwglxt';
+            this.baseUrl = `http://${UJNAPI.EA_DEFAULT_HOST}`;
             return this.baseUrl;
         } catch (error) {
             console.error('获取教务系统地址失败:', error);
             // 出错时使用默认值
-            this.baseUrl = 'http://jwgl.ujn.edu.cn/jwglxt';
+            this.baseUrl = `http://${UJNAPI.EA_DEFAULT_HOST}`;
             return this.baseUrl;
         }
     }
@@ -128,14 +129,14 @@ class ClassroomService {
             // 获取当前教务系统URL
             const baseUrl = await this._getBaseUrl();
 
-            // 构造请求URL - 使用正确的URL构建方式
+            // 构造请求URL - 使用动态API路径
             let requestUrl;
             if (useVpn && baseUrl === '') {
                 // VPN模式下使用getFullUrl方法
-                requestUrl = authService.easAccount.getFullUrl('jwglxt/cdjy/cdjy_cxKxcdlb.html?doType=query&gnmkdm=N2155');
+                requestUrl = authService.easAccount.getFullUrl(UJNAPI.GET_EMPTY_ROOM + '&gnmkdm=N2155');
             } else {
                 // 非VPN模式下直接拼接
-                requestUrl = `${baseUrl}/cdjy/cdjy_cxKxcdlb.html?doType=query&gnmkdm=N2155`;
+                requestUrl = `${baseUrl}/${UJNAPI.GET_EMPTY_ROOM}&gnmkdm=N2155`;
             }
 
             console.log('请求URL:', requestUrl);
@@ -307,14 +308,14 @@ class ClassroomService {
             // 获取当前教务系统URL
             const baseUrl = await this._getBaseUrl();
 
-            // 构造请求URL
+            // 构造请求URL - 使用动态API路径
             let requestUrl;
             if (useVpn && baseUrl === '') {
                 // VPN模式下使用getFullUrl方法
-                requestUrl = authService.easAccount.getFullUrl('jwglxt/cdjy/cdjy_cxKxcdlb.html?gnmkdm=N2155');
+                requestUrl = authService.easAccount.getFullUrl(UJNAPI.GET_EMPTY_ROOM_PAGE);
             } else {
                 // 非VPN模式下直接拼接
-                requestUrl = `${baseUrl}/cdjy/cdjy_cxKxcdlb.html?gnmkdm=N2155`;
+                requestUrl = `${baseUrl}/${UJNAPI.GET_EMPTY_ROOM_PAGE}`;
             }
 
             // 生成参考URL供Referer使用
@@ -556,22 +557,22 @@ class ClassroomService {
             // 获取当前教务系统URL
             const baseUrl = await this._getBaseUrl();
 
-            // 构造请求URL
+            // 构造请求URL - 使用动态API路径
             let requestUrl;
             if (useVpn && baseUrl === '') {
                 // VPN模式下使用getFullUrl方法
-                requestUrl = authService.easAccount.getFullUrl('jwglxt/cdjy/cdjy_cxXqjc.html?gnmkdm=N2155');
+                requestUrl = authService.easAccount.getFullUrl(UJNAPI.GET_BUILDING_LIST);
             } else {
                 // 非VPN模式下直接拼接
-                requestUrl = `${baseUrl}/jwglxt/cdjy/cdjy_cxXqjc.html?gnmkdm=N2155`;
+                requestUrl = `${baseUrl}/${UJNAPI.GET_BUILDING_LIST}`;
             }
 
             // 生成参考URL供Referer使用
             let refererUrl;
             if (useVpn && baseUrl === '') {
-                refererUrl = authService.easAccount.getFullUrl('jwglxt/cdjy/cdjy_cxKxcdlb.html?gnmkdm=N2155');
+                refererUrl = authService.easAccount.getFullUrl(UJNAPI.GET_EMPTY_ROOM_PAGE);
             } else {
-                refererUrl = `${baseUrl}/cdjy/cdjy_cxKxcdlb.html?gnmkdm=N2155`;
+                refererUrl = `${baseUrl}/${UJNAPI.GET_EMPTY_ROOM_PAGE}`;
             }
 
             // 构造请求参数
