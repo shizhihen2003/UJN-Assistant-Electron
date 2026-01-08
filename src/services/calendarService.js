@@ -3,6 +3,7 @@ import ipc from '@/utils/ipc';
 import store from '@/utils/store';
 import authService from '@/services/authService';
 import VpnEncodeUtils from '../utils/vpnEncodeUtils';
+import API from '../constants/api';
 
 /**
  * 校历服务类
@@ -261,16 +262,12 @@ class CalendarService {
                                 break;
                             }
                         }
+                    }
 
-                        // 如果没有找到VPN Ticket，初始化会话
-                        if (!this.vpnTicket) {
-                            this.log('Cookie中未找到VPN Ticket，初始化会话');
-                            await this.initSession(storedCookies);
-                        }
-                    } else {
-                        // 没有存储的Cookie，初始化会话
-                        this.log('没有存储的Cookie，初始化会话');
-                        await this.initSession([]);
+                    // 如果没有找到VPN Ticket，初始化会话
+                    if (!this.vpnTicket) {
+                        this.log('Cookie中未找到VPN Ticket，初始化会话');
+                        await this.initSession(storedCookies);
                     }
                 } else {
                     this.log('使用现有的VPN Ticket:', this.vpnTicket);
@@ -412,14 +409,15 @@ class CalendarService {
             const useVpn = authService.useVpn;
             this.log(`VPN模式: ${useVpn ? '启用' : '禁用'}`);
 
-            // 根据VPN模式构建URL
+            // 根据VPN模式构建URL - 动态配置
             let url;
+            const portalUrl = API.PORTAL_URL || 'http://one.ujn.edu.cn/';
+            const portalViewUrl = portalUrl + 'up/view?m=up';
             if (useVpn) {
                 // 使用VPN加密URL
-                const originalUrl = 'http://one.ujn.edu.cn/up/view?m=up';
-                url = VpnEncodeUtils.encryptUrl(originalUrl);
+                url = VpnEncodeUtils.encryptUrl(portalViewUrl);
             } else {
-                url = 'http://one.ujn.edu.cn/up/view?m=up';
+                url = portalViewUrl;
             }
 
             const options = {
@@ -434,10 +432,10 @@ class CalendarService {
             };
 
             if (useVpn) {
-                options.headers['Host'] = 'webvpn.ujn.edu.cn';
-                options.headers['Referer'] = 'https://webvpn.ujn.edu.cn/';
+                options.headers['Host'] = API.VPN_HOST || 'webvpn.ujn.edu.cn';
+                options.headers['Referer'] = API.VPN_LOGIN || 'https://webvpn.ujn.edu.cn/';
             } else {
-                options.headers['Referer'] = 'http://one.ujn.edu.cn/';
+                options.headers['Referer'] = API.PORTAL_URL || 'http://one.ujn.edu.cn/';
             }
 
             this.log('发送请求获取会话，URL:', url);
@@ -458,7 +456,7 @@ class CalendarService {
                 const location = response.headers?.location || '';
                 this.log('重定向地址:', location);
 
-                if (location.includes('tpass/login') || location.includes('sso.ujn.edu.cn')) {
+                if (location.includes('tpass/login') || location.includes(API.IPASS_HOST || 'sso.ujn.edu.cn')) {
                     this.log('检测到重定向到登录页面，用户未登录');
                     const loginError = new Error('NOT_LOGGED_IN:未登录或会话已过期，请先登录智慧济大');
                     loginError.isLoginError = true;
@@ -575,12 +573,14 @@ class CalendarService {
                     }
                 }
 
-                // 最后检查一次响应数据是否包含登录页面特征
+                // 最后检查一次响应数据是否包含登录页面特征（仅HTML）
                 if (response.data && typeof response.data === 'string') {
-                    if (response.data.includes('sso.ujn.edu.cn') ||
-                        response.data.includes('tpass/login') ||
-                        response.data.includes('登录')) {
-                        this.log('响应内容包含登录页面特征，用户未登录');
+                    const ssoHost = API.IPASS_HOST || 'sso.ujn.edu.cn';
+                    const isHtml = response.data.includes('<html') || response.data.includes('<!DOCTYPE');
+                    const hasLoginRedirect = response.data.includes(ssoHost) || response.data.includes('tpass/login');
+
+                    if (isHtml && hasLoginRedirect) {
+                        this.log('响应内容是HTML登录页面，用户未登录');
                         const loginError = new Error('NOT_LOGGED_IN:未登录或会话已过期，请先登录智慧济大');
                         loginError.isLoginError = true;
                         throw loginError;
@@ -606,6 +606,7 @@ class CalendarService {
         }
     }
 
+
     /**
      * 获取智慧济大应用列表
      * @param {Array<string>} cookies Cookie列表
@@ -619,14 +620,15 @@ class CalendarService {
             const useVpn = authService.useVpn;
             this.log(`VPN模式: ${useVpn ? '启用' : '禁用'}`);
 
-            // 构建URL
+            // 构建URL - 动态配置
             let url;
+            const portalUrl = API.PORTAL_URL || 'http://one.ujn.edu.cn/';
+            const appsListUrl = portalUrl + 'up/up/appstore/applist/getBusinessAppsList';
             if (useVpn) {
                 // VPN模式下使用加密URL
-                const originalUrl = 'http://one.ujn.edu.cn/up/up/appstore/applist/getBusinessAppsList';
-                url = VpnEncodeUtils.encryptUrl(originalUrl);
+                url = VpnEncodeUtils.encryptUrl(appsListUrl);
             } else {
-                url = 'http://one.ujn.edu.cn/up/up/appstore/applist/getBusinessAppsList';
+                url = appsListUrl;
             }
 
             const data = {
@@ -647,10 +649,10 @@ class CalendarService {
 
             // 根据VPN模式设置相应的Referer和Host
             if (useVpn) {
-                headers['Referer'] = 'https://webvpn.ujn.edu.cn/http/77726476706e69737468656265737421fff944d2323a661e7b0c9ce29b5b/up/view?m=up';
-                headers['Host'] = 'webvpn.ujn.edu.cn';
+                headers['Referer'] = VpnEncodeUtils.encryptUrl((API.PORTAL_URL || 'http://one.ujn.edu.cn/') + 'up/view?m=up');
+                headers['Host'] = API.VPN_HOST || 'webvpn.ujn.edu.cn';
             } else {
-                headers['Referer'] = 'http://one.ujn.edu.cn/up/view?m=up';
+                headers['Referer'] = (API.PORTAL_URL || 'http://one.ujn.edu.cn/') + 'up/view?m=up';
             }
 
             // 添加认证Cookie（根据VPN模式不同）
@@ -678,17 +680,8 @@ class CalendarService {
                 throw new Error('获取应用列表失败，请求不成功');
             }
 
-            // 检查响应中是否包含登录页面信息
-            if (response.data && typeof response.data === 'string') {
-                if (response.data.includes('sso.ujn.edu.cn') ||
-                    response.data.includes('tpass/login') ||
-                    response.data.includes('登录')) {
-                    this.log('响应内容包含登录页面特征，用户未登录');
-                    const loginError = new Error('NOT_LOGGED_IN:未登录或会话已过期，请先登录智慧济大');
-                    loginError.isLoginError = true;
-                    throw loginError;
-                }
-            }
+            // 先打印响应内容用于调试
+            this.log('响应内容:', response.data?.substring(0, 200));
 
             // 尝试解析响应
             let appsList;
@@ -696,23 +689,52 @@ class CalendarService {
                 appsList = JSON.parse(response.data);
                 this.log(`解析成功，获取到${appsList.length}个应用`);
 
+                // 如果解析成功，检查响应格式
+                if (!Array.isArray(appsList)) {
+                    // 响应不是数组，可能是错误对象
+                    this.log('响应不是数组格式:', appsList);
+
+                    // 检查是否是会话过期/需要登录的响应
+                    if (appsList && (appsList.success === false || appsList.needLogin || appsList.url === '/login')) {
+                        this.log('检测到会话过期或需要登录:', appsList.message || '未知原因');
+                        const loginError = new Error('NOT_LOGGED_IN:' + (appsList.message || '未登录或会话已过期，请先登录智慧济大'));
+                        loginError.isLoginError = true;
+                        throw loginError;
+                    }
+
+                    throw new Error('响应格式错误，期望数组但收到: ' + typeof appsList);
+                }
+
+                this.log(`解析成功，获取到${appsList.length}个应用`);
+
                 // 如果解析成功但应用列表为空，可能是登录问题
-                if (Array.isArray(appsList) && appsList.length === 0) {
+                if (appsList.length === 0) {
                     this.log('成功解析但应用列表为空，可能是未登录状态');
                     const loginError = new Error('NOT_LOGGED_IN:未登录或会话已过期，请先登录智慧济大');
                     loginError.isLoginError = true;
                     throw loginError;
                 }
             } catch (e) {
-                this.error('解析应用列表失败:', e);
+                // JSON解析失败，检查是否是登录页面
+                if (e.isLoginError) {
+                    throw e;
+                }
 
-                // 检查是否因为未登录而无法解析JSON
-                if (response.data && typeof response.data === 'string' &&
-                    (response.data.includes('<html') || response.data.includes('<!DOCTYPE'))) {
-                    this.log('返回的是HTML而不是JSON，可能是未登录状态');
-                    const loginError = new Error('NOT_LOGGED_IN:未登录或会话已过期，请先登录智慧济大');
-                    loginError.isLoginError = true;
-                    throw loginError;
+                this.error('解析应用列表失败:', e);
+                this.log('响应内容全文:', response.data);
+
+                // 检查是否是HTML登录页面
+                if (response.data && typeof response.data === 'string') {
+                    const ssoHost = API.IPASS_HOST || 'sso.ujn.edu.cn';
+                    const isHtml = response.data.includes('<html') || response.data.includes('<!DOCTYPE');
+                    const hasLoginRedirect = response.data.includes(ssoHost) || response.data.includes('tpass/login');
+
+                    if (isHtml || hasLoginRedirect) {
+                        this.log('返回的是HTML登录页面，用户未登录');
+                        const loginError = new Error('NOT_LOGGED_IN:未登录或会话已过期，请先登录智慧济大');
+                        loginError.isLoginError = true;
+                        throw loginError;
+                    }
                 }
 
                 throw new Error('解析应用列表失败: ' + e.message);
@@ -817,14 +839,15 @@ class CalendarService {
             const useVpn = authService.useVpn;
             this.log(`VPN模式: ${useVpn ? '启用' : '禁用'}`);
 
-            // 构建URL
+            // 构建URL - 动态配置
             let url;
+            const portalUrl = API.PORTAL_URL || 'http://one.ujn.edu.cn/';
+            const detailUrl = portalUrl + 'up/up/pim/showpim/getPimDetailInfoById';
             if (useVpn) {
                 // VPN模式下使用加密URL
-                const originalUrl = 'http://one.ujn.edu.cn/up/up/pim/showpim/getPimDetailInfoById';
-                url = VpnEncodeUtils.encryptUrl(originalUrl);
+                url = VpnEncodeUtils.encryptUrl(detailUrl);
             } else {
-                url = 'http://one.ujn.edu.cn/up/up/pim/showpim/getPimDetailInfoById';
+                url = detailUrl;
             }
 
             const data = {
@@ -843,10 +866,10 @@ class CalendarService {
 
             // 根据VPN模式设置相应的Referer和Host
             if (useVpn) {
-                headers['Referer'] = 'https://webvpn.ujn.edu.cn/http/77726476706e69737468656265737421fff944d2323a661e7b0c9ce29b5b/up/view?m=up';
-                headers['Host'] = 'webvpn.ujn.edu.cn';
+                headers['Referer'] = VpnEncodeUtils.encryptUrl((API.PORTAL_URL || 'http://one.ujn.edu.cn/') + 'up/view?m=up');
+                headers['Host'] = API.VPN_HOST || 'webvpn.ujn.edu.cn';
             } else {
-                headers['Referer'] = 'http://one.ujn.edu.cn/up/view?m=up';
+                headers['Referer'] = (API.PORTAL_URL || 'http://one.ujn.edu.cn/') + 'up/view?m=up';
             }
 
             // 添加认证Cookie（根据VPN模式不同）
@@ -911,14 +934,15 @@ class CalendarService {
                 throw new Error('无效的内容URL');
             }
 
-            // 构建完整URL
+            // 构建完整URL - 动态配置
             let fullUrl;
+            const portalUrl = API.PORTAL_URL || 'http://one.ujn.edu.cn/';
+            const contentFullUrl = `${portalUrl}up/${contentUrl}`;
             if (useVpn) {
                 // VPN模式下使用加密URL
-                const originalUrl = `http://one.ujn.edu.cn/up/${contentUrl}`;
-                fullUrl = VpnEncodeUtils.encryptUrl(originalUrl);
+                fullUrl = VpnEncodeUtils.encryptUrl(contentFullUrl);
             } else {
-                fullUrl = `http://one.ujn.edu.cn/up/${contentUrl}`;
+                fullUrl = contentFullUrl;
             }
 
             // 生成一个唯一的回调名称
@@ -935,10 +959,10 @@ class CalendarService {
 
             // 根据VPN模式设置相应的Referer和Host
             if (useVpn) {
-                headers['Referer'] = 'https://webvpn.ujn.edu.cn/http/77726476706e69737468656265737421fff944d2323a661e7b0c9ce29b5b/up/view?m=up';
-                headers['Host'] = 'webvpn.ujn.edu.cn';
+                headers['Referer'] = VpnEncodeUtils.encryptUrl((API.PORTAL_URL || 'http://one.ujn.edu.cn/') + 'up/view?m=up');
+                headers['Host'] = API.VPN_HOST || 'webvpn.ujn.edu.cn';
             } else {
-                headers['Referer'] = 'http://one.ujn.edu.cn/up/view?m=up';
+                headers['Referer'] = (API.PORTAL_URL || 'http://one.ujn.edu.cn/') + 'up/view?m=up';
             }
 
             // 添加认证Cookie（根据VPN模式不同）
