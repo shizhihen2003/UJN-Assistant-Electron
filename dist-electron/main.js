@@ -1,4 +1,4 @@
-import require$$1$3, { app, BrowserWindow, ipcMain } from "electron";
+import require$$1$3, { app, BrowserWindow, ipcMain, shell } from "electron";
 import require$$0$2 from "path";
 import Url, { fileURLToPath } from "url";
 import Stream from "stream";
@@ -418,8 +418,8 @@ function requireUrlStateMachine() {
     function isSpecialScheme(scheme) {
       return specialSchemes[scheme] !== void 0;
     }
-    function isSpecial(url) {
-      return isSpecialScheme(url.scheme);
+    function isSpecial(url2) {
+      return isSpecialScheme(url2.scheme);
     }
     function defaultPort(scheme) {
       return specialSchemes[scheme];
@@ -741,38 +741,38 @@ function requireUrlStateMachine() {
       }
       return host;
     }
-    function trimControlChars(url) {
-      return url.replace(/^[\u0000-\u001F\u0020]+|[\u0000-\u001F\u0020]+$/g, "");
+    function trimControlChars(url2) {
+      return url2.replace(/^[\u0000-\u001F\u0020]+|[\u0000-\u001F\u0020]+$/g, "");
     }
-    function trimTabAndNewline(url) {
-      return url.replace(/\u0009|\u000A|\u000D/g, "");
+    function trimTabAndNewline(url2) {
+      return url2.replace(/\u0009|\u000A|\u000D/g, "");
     }
-    function shortenPath(url) {
-      const path = url.path;
+    function shortenPath(url2) {
+      const path = url2.path;
       if (path.length === 0) {
         return;
       }
-      if (url.scheme === "file" && path.length === 1 && isNormalizedWindowsDriveLetter(path[0])) {
+      if (url2.scheme === "file" && path.length === 1 && isNormalizedWindowsDriveLetter(path[0])) {
         return;
       }
       path.pop();
     }
-    function includesCredentials(url) {
-      return url.username !== "" || url.password !== "";
+    function includesCredentials(url2) {
+      return url2.username !== "" || url2.password !== "";
     }
-    function cannotHaveAUsernamePasswordPort(url) {
-      return url.host === null || url.host === "" || url.cannotBeABaseURL || url.scheme === "file";
+    function cannotHaveAUsernamePasswordPort(url2) {
+      return url2.host === null || url2.host === "" || url2.cannotBeABaseURL || url2.scheme === "file";
     }
     function isNormalizedWindowsDriveLetter(string) {
       return /^[A-Za-z]:$/.test(string);
     }
-    function URLStateMachine(input, base, encodingOverride, url, stateOverride) {
+    function URLStateMachine(input, base, encodingOverride, url2, stateOverride) {
       this.pointer = 0;
       this.input = input;
       this.base = base || null;
       this.encodingOverride = encodingOverride || "utf-8";
       this.stateOverride = stateOverride;
-      this.url = url;
+      this.url = url2;
       this.failure = false;
       this.parseError = false;
       if (!this.url) {
@@ -1325,36 +1325,36 @@ function requireUrlStateMachine() {
       }
       return true;
     };
-    function serializeURL(url, excludeFragment) {
-      let output = url.scheme + ":";
-      if (url.host !== null) {
+    function serializeURL(url2, excludeFragment) {
+      let output = url2.scheme + ":";
+      if (url2.host !== null) {
         output += "//";
-        if (url.username !== "" || url.password !== "") {
-          output += url.username;
-          if (url.password !== "") {
-            output += ":" + url.password;
+        if (url2.username !== "" || url2.password !== "") {
+          output += url2.username;
+          if (url2.password !== "") {
+            output += ":" + url2.password;
           }
           output += "@";
         }
-        output += serializeHost(url.host);
-        if (url.port !== null) {
-          output += ":" + url.port;
+        output += serializeHost(url2.host);
+        if (url2.port !== null) {
+          output += ":" + url2.port;
         }
-      } else if (url.host === null && url.scheme === "file") {
+      } else if (url2.host === null && url2.scheme === "file") {
         output += "//";
       }
-      if (url.cannotBeABaseURL) {
-        output += url.path[0];
+      if (url2.cannotBeABaseURL) {
+        output += url2.path[0];
       } else {
-        for (const string of url.path) {
+        for (const string of url2.path) {
           output += "/" + string;
         }
       }
-      if (url.query !== null) {
-        output += "?" + url.query;
+      if (url2.query !== null) {
+        output += "?" + url2.query;
       }
-      if (!excludeFragment && url.fragment !== null) {
-        output += "#" + url.fragment;
+      if (!excludeFragment && url2.fragment !== null) {
+        output += "#" + url2.fragment;
       }
       return output;
     }
@@ -1367,11 +1367,11 @@ function requireUrlStateMachine() {
       return result;
     }
     module.exports.serializeURL = serializeURL;
-    module.exports.serializeURLOrigin = function(url) {
-      switch (url.scheme) {
+    module.exports.serializeURLOrigin = function(url2) {
+      switch (url2.scheme) {
         case "blob":
           try {
-            return module.exports.serializeURLOrigin(module.exports.parseURL(url.path[0]));
+            return module.exports.serializeURLOrigin(module.exports.parseURL(url2.path[0]));
           } catch (e) {
             return "null";
           }
@@ -1382,9 +1382,9 @@ function requireUrlStateMachine() {
         case "ws":
         case "wss":
           return serializeOrigin({
-            scheme: url.scheme,
-            host: url.host,
-            port: url.port
+            scheme: url2.scheme,
+            host: url2.host,
+            port: url2.port
           });
         case "file":
           return "file://";
@@ -1402,18 +1402,18 @@ function requireUrlStateMachine() {
       }
       return usm.url;
     };
-    module.exports.setTheUsername = function(url, username) {
-      url.username = "";
+    module.exports.setTheUsername = function(url2, username) {
+      url2.username = "";
       const decoded = punycode.ucs2.decode(username);
       for (let i = 0; i < decoded.length; ++i) {
-        url.username += percentEncodeChar(decoded[i], isUserinfoPercentEncode);
+        url2.username += percentEncodeChar(decoded[i], isUserinfoPercentEncode);
       }
     };
-    module.exports.setThePassword = function(url, password) {
-      url.password = "";
+    module.exports.setThePassword = function(url2, password) {
+      url2.password = "";
       const decoded = punycode.ucs2.decode(password);
       for (let i = 0; i < decoded.length; ++i) {
-        url.password += percentEncodeChar(decoded[i], isUserinfoPercentEncode);
+        url2.password += percentEncodeChar(decoded[i], isUserinfoPercentEncode);
       }
     };
     module.exports.serializeHost = serializeHost;
@@ -1437,7 +1437,7 @@ function requireURLImpl() {
   const usm = requireUrlStateMachine();
   URLImpl.implementation = class URLImpl {
     constructor(constructorArgs) {
-      const url = constructorArgs[0];
+      const url2 = constructorArgs[0];
       const base = constructorArgs[1];
       let parsedBase = null;
       if (base !== void 0) {
@@ -1446,7 +1446,7 @@ function requireURLImpl() {
           throw new TypeError("Invalid base URL");
         }
       }
-      const parsedURL = usm.basicURLParse(url, { baseURL: parsedBase });
+      const parsedURL = usm.basicURLParse(url2, { baseURL: parsedBase });
       if (parsedURL === "failure") {
         throw new TypeError("Invalid URL");
       }
@@ -1490,14 +1490,14 @@ function requireURLImpl() {
       usm.setThePassword(this._url, v);
     }
     get host() {
-      const url = this._url;
-      if (url.host === null) {
+      const url2 = this._url;
+      if (url2.host === null) {
         return "";
       }
-      if (url.port === null) {
-        return usm.serializeHost(url.host);
+      if (url2.port === null) {
+        return usm.serializeHost(url2.host);
       }
-      return usm.serializeHost(url.host) + ":" + usm.serializeInteger(url.port);
+      return usm.serializeHost(url2.host) + ":" + usm.serializeInteger(url2.port);
     }
     set host(v) {
       if (this._url.cannotBeABaseURL) {
@@ -1556,14 +1556,14 @@ function requireURLImpl() {
       return "?" + this._url.query;
     }
     set search(v) {
-      const url = this._url;
+      const url2 = this._url;
       if (v === "") {
-        url.query = null;
+        url2.query = null;
         return;
       }
       const input = v[0] === "?" ? v.substring(1) : v;
-      url.query = "";
-      usm.basicURLParse(input, { url, stateOverride: "query" });
+      url2.query = "";
+      usm.basicURLParse(input, { url: url2, stateOverride: "query" });
     }
     get hash() {
       if (this._url.fragment === null || this._url.fragment === "") {
@@ -1595,7 +1595,7 @@ function requireURL() {
     const utils2 = requireUtils$1();
     const Impl = requireURLImpl();
     const impl = utils2.implSymbol;
-    function URL2(url) {
+    function URL2(url2) {
       if (!this || this[impl] || !(this instanceof URL2)) {
         throw new TypeError("Failed to construct 'URL': Please use the 'new' operator, this DOM object constructor cannot be called as a function.");
       }
@@ -2766,13 +2766,13 @@ const isSameProtocol = function isSameProtocol2(destination, original) {
   const dest = new URL$1$1(destination).protocol;
   return orig === dest;
 };
-function fetch(url, opts) {
+function fetch(url2, opts) {
   if (!fetch.Promise) {
     throw new Error("native promise missing, set fetch.Promise to your favorite alternative");
   }
   Body.Promise = fetch.Promise;
   return new fetch.Promise(function(resolve2, reject) {
-    const request = new Request(url, opts);
+    const request = new Request(url2, opts);
     const options = getNodeRequestOptions(request);
     const send = (options.protocol === "https:" ? https : http).request;
     const signal = request.signal;
@@ -22568,7 +22568,7 @@ function requireElectronStore() {
   if (hasRequiredElectronStore) return electronStore;
   hasRequiredElectronStore = 1;
   const path = require$$0$2;
-  const { app: app2, ipcMain: ipcMain2, ipcRenderer, shell } = require$$1$3;
+  const { app: app2, ipcMain: ipcMain2, ipcRenderer, shell: shell2 } = require$$1$3;
   const Conf = requireSource();
   let isInitialized = false;
   const initDataListener = () => {
@@ -22621,7 +22621,7 @@ function requireElectronStore() {
       initDataListener();
     }
     async openInEditor() {
-      const error = await shell.openPath(this.path);
+      const error = await shell2.openPath(this.path);
       if (error) {
         throw new Error(error);
       }
@@ -22676,9 +22676,42 @@ function setupIPC() {
   ipcMain.handle("store:get", (event, key) => {
     return store.get(key);
   });
-  ipcMain.handle("store:set", (event, key, value) => {
-    store.set(key, value);
-    return true;
+  ipcMain.handle("store:set", async (event, key, value) => {
+    try {
+      console.log(`[主进程] store:set - 接收键: ${key}`);
+      console.log(`[主进程] store:set - 接收值类型: ${typeof value}`);
+      if (value === null || value === void 0) {
+        console.log(`[主进程] store:set - 收到空值: ${key}`);
+        store.delete(key);
+        return true;
+      }
+      if (typeof value === "object" && value !== null) {
+        console.log(`[主进程] store:set - 对象键: ${Object.keys(value).join(", ")}`);
+        if (key.startsWith("ai_conversation_") && value.messages) {
+          console.log(`[主进程] store:set - 消息数量: ${value.messages.length}`);
+        }
+      }
+      let processedValue;
+      try {
+        const serialized = JSON.stringify(value);
+        console.log(`[主进程] store:set - 序列化数据长度: ${serialized.length}`);
+        processedValue = JSON.parse(serialized);
+      } catch (serializeError) {
+        console.error(`[主进程] store:set - 序列化错误: ${serializeError.message}`);
+        return false;
+      }
+      store.set(key, processedValue);
+      const saved = store.get(key);
+      if (saved === void 0) {
+        console.warn(`[主进程] store:set - 验证失败: ${key} 未成功存储`);
+        return false;
+      }
+      console.log(`[主进程] store:set - 成功: ${key}`);
+      return true;
+    } catch (error) {
+      console.error("[主进程] store:set 错误:", error);
+      return false;
+    }
   });
   ipcMain.handle("store:has", (event, key) => {
     return store.has(key);
@@ -22694,14 +22727,14 @@ function setupIPC() {
   ipcMain.handle("eas:request", async (event, args) => {
     var _a;
     try {
-      const { method, url, data, cookies, headers = {} } = args;
+      const { method, url: url2, data, cookies, headers = {} } = args;
       const requestHeaders = { ...headers };
       if (cookies && cookies.length > 0) {
         requestHeaders.Cookie = cookies.join("; ");
       }
       console.log(`[主进程] 请求详情:`, {
         method,
-        url,
+        url: url2,
         headers: requestHeaders,
         dataType: data ? typeof data : "none"
       });
@@ -22751,10 +22784,10 @@ function setupIPC() {
           }
         }
       }
-      console.log(`[主进程] 发送${method}请求: ${url}`);
+      console.log(`[主进程] 发送${method}请求: ${url2}`);
       let response;
       try {
-        response = await fetch(url, options);
+        response = await fetch(url2, options);
       } catch (fetchError) {
         console.error(`[主进程] 网络请求错误:`, fetchError);
         throw new Error(`网络请求错误: ${fetchError.message}`);
@@ -22772,7 +22805,7 @@ function setupIPC() {
         console.log(`[主进程] 收到Cookie: ${responseCookies.length}个`);
         console.log(`[主进程] Cookie内容:`, responseCookies);
       }
-      const isLoginRedirect = method === "POST" && url.includes("login") && response.status === 302;
+      const isLoginRedirect = method === "POST" && url2.includes("login") && response.status === 302;
       const isLoginSuccess = isLoginRedirect && !((_a = response.headers.get("location")) == null ? void 0 : _a.includes("login"));
       console.log(`[主进程] 是否为登录重定向: ${isLoginRedirect}, 登录是否成功: ${isLoginSuccess}`);
       return {
@@ -22797,56 +22830,280 @@ function setupIPC() {
     }
   });
   ipcMain.handle("ipass:request", async (event, args) => {
-    var _a;
     try {
-      const { method, url, data, cookies, headers = {} } = args;
+      const { method, url: url2, data, cookies, headers = {} } = args;
+      const requestId = Date.now().toString(36);
       const requestHeaders = { ...headers };
       if (cookies && cookies.length > 0) {
         requestHeaders.Cookie = cookies.join("; ");
       }
+      console.log(`[主进程 ${requestId}] ipass:request 请求详情:`, {
+        method,
+        url: url2,
+        headers: requestHeaders,
+        dataType: data ? typeof data : "none"
+      });
+      try {
+        const urlObj = new URL(url2);
+        if (urlObj.search) {
+          console.log(`[主进程 ${requestId}] URL查询参数:`, urlObj.search);
+          if (urlObj.searchParams.has("ticket")) {
+            console.log(`[主进程 ${requestId}] 发现ticket参数:`, urlObj.searchParams.get("ticket"));
+          }
+        }
+      } catch (e) {
+        console.log(`[主进程 ${requestId}] URL解析失败:`, e.message);
+      }
+      if (url2.includes("token-login")) {
+        console.log(`[主进程 ${requestId}] 检测到token-login请求: ${url2}`);
+        try {
+          const tokenMatch = url2.match(/token=([^&]+)/);
+          if (tokenMatch) {
+            console.log(`[主进程 ${requestId}] 提取到token: ${tokenMatch[1]}`);
+          }
+          options.redirect = "manual";
+          options.timeout = 1e4;
+          console.log(`[主进程 ${requestId}] Cookie数量: ${(cookies == null ? void 0 : cookies.length) || 0}`);
+          if (cookies && cookies.length > 0) {
+            cookies.forEach((cookie, idx) => {
+              console.log(`[主进程 ${requestId}] Cookie ${idx + 1}: ${cookie.substring(0, 50)}...`);
+            });
+          }
+        } catch (error) {
+          console.warn(`[主进程 ${requestId}] token-login参数处理错误:`, error);
+        }
+      }
+      if (url2.includes("ticket=")) {
+        console.log(`[主进程 ${requestId}] 检测到ticket参数URL: ${url2}`);
+        try {
+          const ticketMatch = url2.match(/ticket=([^&]+)/);
+          if (ticketMatch) {
+            console.log(`[主进程 ${requestId}] 提取到ticket: ${ticketMatch[1]}`);
+          }
+          options.timeout = 15e3;
+          console.log(`[主进程 ${requestId}] Cookie数量: ${(cookies == null ? void 0 : cookies.length) || 0}`);
+          if (cookies && cookies.length > 0) {
+            cookies.forEach((cookie, idx) => {
+              if (cookie.includes("wengine_vpn_ticket")) {
+                console.log(`[主进程 ${requestId}] 发现关键VPN Cookie`);
+              }
+            });
+          }
+        } catch (error) {
+          console.warn(`[主进程 ${requestId}] ticket参数处理错误:`, error);
+        }
+      }
       const options = {
         method,
         headers: requestHeaders,
+        // 修改：默认允许最多3次重定向，除非显式指定
         redirect: "manual"
       };
       if (method === "POST" && data) {
-        const formData = new FormData();
-        for (const key in data) {
-          formData.append(key, data[key]);
-        }
-        options.body = formData;
-        if (formData.getBoundary) {
-          requestHeaders["Content-Type"] = `multipart/form-data; boundary=${formData.getBoundary()}`;
+        if (headers["Content-Type"] === "application/x-www-form-urlencoded") {
+          console.log(`[主进程 ${requestId}] 处理表单数据，类型: ${typeof data}`);
+          if (typeof data === "string") {
+            options.body = data;
+            console.log(`[主进程 ${requestId}] 使用原始表单数据: ${data.substring(0, 100)}${data.length > 100 ? "..." : ""}`);
+          } else if (typeof data === "object") {
+            try {
+              const params = new URLSearchParams();
+              for (const key in data) {
+                params.append(key, data[key]);
+              }
+              options.body = params.toString();
+              console.log(`[主进程 ${requestId}] 转换对象为表单数据: ${options.body.substring(0, 100)}${options.body.length > 100 ? "..." : ""}`);
+            } catch (e) {
+              console.error(`[主进程 ${requestId}] 表单数据转换错误:`, e);
+              throw new Error(`表单数据转换错误: ${e.message}`);
+            }
+          }
+        } else if (headers["Content-Type"] && headers["Content-Type"].includes("application/json")) {
+          try {
+            options.body = typeof data === "string" ? data : JSON.stringify(data);
+            console.log(`[主进程 ${requestId}] JSON数据: ${options.body.substring(0, 100)}${options.body.length > 100 ? "..." : ""}`);
+          } catch (e) {
+            console.error(`[主进程 ${requestId}] JSON数据转换错误:`, e);
+            throw new Error(`JSON数据转换错误: ${e.message}`);
+          }
+        } else {
+          try {
+            if (typeof data === "string") {
+              options.body = data;
+              console.log(`[主进程 ${requestId}] 使用原始数据字符串: ${data.substring(0, 100)}${data.length > 100 ? "..." : ""}`);
+            } else {
+              const formData = new FormData();
+              for (const key in data) {
+                formData.append(key, data[key]);
+              }
+              options.body = formData;
+              console.log(`[主进程 ${requestId}] 创建FormData成功`);
+              delete requestHeaders["Content-Type"];
+            }
+          } catch (e) {
+            console.error(`[主进程 ${requestId}] 表单数据处理错误:`, e);
+            throw new Error(`表单数据处理错误: ${e.message}`);
+          }
         }
       }
-      const response = await fetch(url, options);
+      console.log(`[主进程 ${requestId}] 发送${method}请求: ${url2}`);
+      let response;
+      try {
+        response = await fetch(url2, options);
+      } catch (fetchError) {
+        console.error(`[主进程 ${requestId}] 网络请求错误:`, fetchError);
+        throw new Error(`网络请求错误: ${fetchError.message}`);
+      }
       let responseData;
       try {
         responseData = await response.text();
       } catch (e) {
+        console.error(`[主进程 ${requestId}] 响应内容读取错误:`, e);
         responseData = "";
       }
       const responseCookies = response.headers.raw()["set-cookie"] || [];
-      let success = response.status >= 200 && response.status < 300;
-      if (method === "POST" && url.includes("login") && response.status === 302) {
-        success = !((_a = response.headers.get("location")) == null ? void 0 : _a.includes("login"));
+      console.log(`[主进程 ${requestId}] 响应状态码: ${response.status}`);
+      if (responseCookies.length > 0) {
+        console.log(`[主进程 ${requestId}] 收到Cookie: ${responseCookies.length}个`);
+        responseCookies.forEach((cookie, index) => {
+          console.log(`[主进程 ${requestId}] Cookie ${index + 1}:`, cookie);
+        });
       }
+      const location = response.headers.get("location");
+      if (response.status >= 300 && response.status < 400 && location) {
+        console.log(`[主进程 ${requestId}] 重定向到: ${location}`);
+        try {
+          let fullRedirectUrl = location;
+          if (!location.startsWith("http")) {
+            const originalUrl = new URL(url2);
+            if (location.startsWith("/")) {
+              fullRedirectUrl = `${originalUrl.protocol}//${originalUrl.host}${location}`;
+            } else {
+              const basePath = originalUrl.pathname.split("/").slice(0, -1).join("/");
+              fullRedirectUrl = `${originalUrl.protocol}//${originalUrl.host}${basePath}/${location}`;
+            }
+          }
+          const redirectUrl = new URL(fullRedirectUrl);
+          console.log(`[主进程 ${requestId}] 重定向主机: ${redirectUrl.host}`);
+          console.log(`[主进程 ${requestId}] 重定向路径: ${redirectUrl.pathname}`);
+          if (redirectUrl.search) {
+            console.log(`[主进程 ${requestId}] 重定向查询参数: ${redirectUrl.search}`);
+            for (const [key, value] of redirectUrl.searchParams.entries()) {
+              console.log(`[主进程 ${requestId}] 参数 ${key}: ${value}`);
+            }
+          }
+        } catch (e) {
+          console.error(`[主进程 ${requestId}] 重定向URL解析失败:`, e);
+        }
+      }
+      const isLoginRedirect = method === "POST" && url2.includes("login") && response.status === 302;
+      const isLoginSuccess = isLoginRedirect && (!(location == null ? void 0 : location.includes("login")) || (location == null ? void 0 : location.includes("ticket=")));
+      const hasTicket = (location == null ? void 0 : location.includes("ticket=")) || url2.includes("ticket=");
+      const isTokenLogin = (location == null ? void 0 : location.includes("token-login")) || url2.includes("token-login");
+      console.log(`[主进程 ${requestId}] 是否为登录重定向: ${isLoginRedirect}, 登录是否成功: ${isLoginSuccess}`);
+      console.log(`[主进程 ${requestId}] 包含ticket: ${hasTicket}, 是否token-login: ${isTokenLogin}`);
       return {
-        success,
+        success: response.status >= 200 && response.status < 300 || response.status === 302 || // 所有302都视为成功
+        hasTicket || // 所有包含ticket的请求都视为成功
+        (isLoginSuccess || isTokenLogin || method === "POST"),
         status: response.status,
         data: responseData,
         cookies: responseCookies,
         headers: Object.fromEntries(response.headers.entries()),
-        location: response.headers.get("location")
+        location,
+        requestId
+        // 返回请求ID方便跟踪
       };
     } catch (error) {
-      console.error("ipass:request error", error);
+      console.error("[主进程] ipass:request 处理错误:", error);
+      let errorMessage = error.message || "未知错误";
+      let errorDetails = {
+        name: error.name,
+        stack: error.stack,
+        code: error.code
+      };
+      if (error.code === "ECONNREFUSED") {
+        errorMessage = `连接被拒绝 (${url})`;
+        console.error("[主进程] 连接被拒绝，服务器可能未启动或不可达");
+      } else if (error.code === "ENOTFOUND") {
+        errorMessage = `找不到主机 (${url})`;
+        console.error("[主进程] DNS解析失败，域名可能错误或网络未连接");
+      } else if (error.code === "ETIMEDOUT") {
+        errorMessage = `连接超时 (${url})`;
+        console.error("[主进程] 连接超时，服务器响应过慢或网络问题");
+      }
+      if (error.message && error.message.includes("maxRedirects")) {
+        errorMessage = `重定向次数过多 (${url})`;
+        console.error("[主进程] 重定向循环或重定向链过长");
+      }
       return {
         success: false,
+        error: errorMessage,
+        errorDetails
+      };
+    }
+  });
+  ipcMain.handle("open-external-url", async (event, url2) => {
+    try {
+      await shell.openExternal(url2, { activate: true });
+      return true;
+    } catch (error) {
+      console.error("打开URL失败:", error);
+      return false;
+    }
+  });
+  ipcMain.handle("check-github-release", async () => {
+    try {
+      const response = await fetch("https://api.github.com/repos/shizhihen2003/UJN-Assistant-Electron/releases/latest");
+      if (!response.ok) {
+        throw new Error(`GitHub API响应错误: ${response.status}`);
+      }
+      const releaseData = await response.json();
+      const latestVersion = releaseData.tag_name.replace("v", "");
+      const currentVersion = app.getVersion();
+      return {
+        hasUpdate: compareVersions(latestVersion, currentVersion) > 0,
+        // 是否有更新版本
+        currentVersion,
+        // 当前版本
+        latestVersion,
+        // 最新版本
+        releaseUrl: releaseData.html_url,
+        // 发布页面URL
+        releaseNotes: releaseData.body
+        // 发布说明
+      };
+    } catch (error) {
+      console.error("检查GitHub更新失败:", error);
+      return {
+        hasUpdate: false,
         error: error.message
       };
     }
   });
+  ipcMain.handle("store:getAllKeys", async (event, prefix = "") => {
+    try {
+      let keys = store.store ? Object.keys(store.store) : [];
+      if (prefix) {
+        keys = keys.filter((key) => key.startsWith(prefix));
+      }
+      return keys;
+    } catch (error) {
+      console.error("获取所有键失败:", error);
+      return [];
+    }
+  });
+}
+function compareVersions(a, b) {
+  const aParts = a.split(".").map(Number);
+  const bParts = b.split(".").map(Number);
+  for (let i = 0; i < Math.max(aParts.length, bParts.length); i++) {
+    const aVal = aParts[i] || 0;
+    const bVal = bParts[i] || 0;
+    if (aVal > bVal) return 1;
+    if (aVal < bVal) return -1;
+  }
+  return 0;
 }
 app.whenReady().then(() => {
   createWindow();

@@ -1,27 +1,28 @@
+// src/utils/vpnEncodeUtils.js
+// 修改版 - 支持从学校配置动态获取VPN加密密钥
+
+import API from '../constants/api';
+import CryptoJS from 'crypto-js';
+
 /**
- * VpnEncodeUtils类
- * 提供VPN地址加密和账号密码加密等功能
+ * WebVPN URL编解码工具类
+ * 用于处理WebVPN的URL加解密和登录凭据加密
+ * 
+ * 修改说明：支持动态获取学校VPN配置
  */
-import { UJNAPI } from '../constants/api';
-
-export class VpnEncodeUtils {
+class VpnEncodeUtils {
     /**
-     * LT 参数匹配正则表达式
+     * 十六进制字符表
      */
-    static LT_PATTERN = /name="lt" value="(LT-\d+-[a-zA-Z\d]+-tpass)"/;
+    static HEX_DIGITS = '0123456789abcdef';
 
     /**
-     * 十六进制字符
-     */
-    static HEX_DIGITS = "0123456789ABCDEF".split('');
-
-    /**
-     * DES 加密表 1
+     * DES 加密表 1 - 循环左移位数
      */
     static TABLE = [1, 1, 2, 2, 2, 2, 2, 2, 1, 2, 2, 2, 2, 2, 2, 1];
 
     /**
-     * DES 加密表 2
+     * DES 加密表 2 - 密钥压缩置换表
      */
     static TABLE2 = [
         14, 17, 11, 24, 1, 5, 3, 28, 15, 6, 21, 10, 23, 19, 12, 4, 26, 8, 16, 7, 27, 20, 13, 2,
@@ -114,32 +115,34 @@ export class VpnEncodeUtils {
         ]
     ];
 
-    // AES加密密钥
-    static KEY_BYTES = 'wrdvpnisthebest!';
-    static IV_HEX = null;
-    static cipher = null;
-
     /**
-     * WebVPN基础URL
+     * 获取当前学校的VPN加密密钥
+     * 动态从学校配置获取，支持多学校
      */
-    static VPN_BASE = UJNAPI.VPN_LOGIN.endsWith('/')
-        ? UJNAPI.VPN_LOGIN.slice(0, -1)
-        : UJNAPI.VPN_LOGIN;
-
-    /**
-     * 初始化
-     */
-    static initialize() {
-        try {
-            const keyBytes = this.stringToUtf8ByteArray(this.KEY_BYTES);
-            this.IV_HEX = this.byteToHexString(keyBytes);
-        } catch (e) {
-            console.error("初始化失败", e);
-        }
+    static get KEY_BYTES() {
+        return API.VPN_ENCRYPT_KEY || 'wrdvpnisthebest!';
     }
 
     /**
-     * 将字符串转换为字节数组
+     * IV十六进制字符串（动态计算）
+     */
+    static get IV_HEX() {
+        const keyBytes = this.stringToUtf8ByteArray(this.KEY_BYTES);
+        return this.byteToHexString(keyBytes);
+    }
+
+    /**
+     * 获取WebVPN基础URL
+     * 动态从学校配置获取
+     */
+    static get VPN_BASE() {
+        const vpnLogin = API.VPN_LOGIN;
+        if (!vpnLogin) return '';
+        return vpnLogin.endsWith('/') ? vpnLogin.slice(0, -1) : vpnLogin;
+    }
+
+    /**
+     * 将字符串转换为字节数组（用于DES加密）
      * @param {string} string - 输入字符串
      * @returns {Uint8Array} - 字节数组
      */
@@ -200,77 +203,43 @@ export class VpnEncodeUtils {
             return new TextEncoder().encode(str);
         }
 
-        // 降级实现
+        // 兼容旧版浏览器
         const utf8 = [];
         for (let i = 0; i < str.length; i++) {
-            let charcode = str.charCodeAt(i);
-
-            if (charcode < 0x80) {
-                utf8.push(charcode);
-            } else if (charcode < 0x800) {
-                utf8.push(
-                    0xC0 | (charcode >> 6),
-                    0x80 | (charcode & 0x3F)
-                );
-            } else if (charcode < 0xD800 || charcode >= 0xE000) {
-                utf8.push(
-                    0xE0 | (charcode >> 12),
-                    0x80 | ((charcode >> 6) & 0x3F),
-                    0x80 | (charcode & 0x3F)
-                );
+            let charCode = str.charCodeAt(i);
+            if (charCode < 0x80) {
+                utf8.push(charCode);
+            } else if (charCode < 0x800) {
+                utf8.push(0xc0 | (charCode >> 6), 0x80 | (charCode & 0x3f));
+            } else if (charCode < 0xd800 || charCode >= 0xe000) {
+                utf8.push(0xe0 | (charCode >> 12), 0x80 | ((charCode >> 6) & 0x3f), 0x80 | (charCode & 0x3f));
             } else {
-                // 处理UTF-16代理对
                 i++;
-                charcode = 0x10000 + (((charcode & 0x3FF) << 10) | (str.charCodeAt(i) & 0x3FF));
+                charCode = 0x10000 + (((charCode & 0x3ff) << 10) | (str.charCodeAt(i) & 0x3ff));
                 utf8.push(
-                    0xF0 | (charcode >> 18),
-                    0x80 | ((charcode >> 12) & 0x3F),
-                    0x80 | ((charcode >> 6) & 0x3F),
-                    0x80 | (charcode & 0x3F)
+                    0xf0 | (charCode >> 18),
+                    0x80 | ((charCode >> 12) & 0x3f),
+                    0x80 | ((charCode >> 6) & 0x3f),
+                    0x80 | (charCode & 0x3f)
                 );
             }
         }
-
         return new Uint8Array(utf8);
     }
 
+    // ==================== DES 加密相关方法 ====================
+
     /**
-     * 将UTF8字节数组转换为字符串
-     * @param {Uint8Array} utf8ByteArray - UTF8字节数组
-     * @returns {string} - 字符串
+     * 将字节数组转换为长整数
+     * @param {Uint8Array} bytes - 字节数组
+     * @returns {BigInt} - 长整数值
      */
-    static utf8ByteArrayToString(utf8ByteArray) {
-        if (typeof TextDecoder !== 'undefined') {
-            return new TextDecoder().decode(utf8ByteArray);
+    static byte2long(bytes) {
+        let result = BigInt(0);
+        for (let i = 0; i < bytes.length; i++) {
+            result = (result << BigInt(8)) | BigInt(bytes[i] & 0xFF);
         }
-
-        // 降级实现
-        let str = '';
-        let i = 0;
-
-        while (i < utf8ByteArray.length) {
-            let c = utf8ByteArray[i++];
-
-            if (c < 128) {
-                str += String.fromCharCode(c);
-            } else if (c > 191 && c < 224) {
-                const c2 = utf8ByteArray[i++];
-                str += String.fromCharCode(((c & 31) << 6) | (c2 & 63));
-            } else if (c > 239 && c < 365) {
-                // 四字节字符
-                const c2 = utf8ByteArray[i++];
-                const c3 = utf8ByteArray[i++];
-                const c4 = utf8ByteArray[i++];
-                const u = ((c & 7) << 18) | ((c2 & 63) << 12) | ((c3 & 63) << 6) | (c4 & 63);
-                str += String.fromCharCode(0xD800 + (u >> 10), 0xDC00 + (u & 1023));
-            } else {
-                const c2 = utf8ByteArray[i++];
-                const c3 = utf8ByteArray[i++];
-                str += String.fromCharCode(((c & 15) << 12) | ((c2 & 63) << 6) | (c3 & 63));
-            }
-        }
-
-        return str;
+        return result;
     }
 
     /**
@@ -282,19 +251,6 @@ export class VpnEncodeUtils {
         const result = new Uint8Array(8);
         for (let i = 0; i < 8; i++) {
             result[i] = Number((value >> BigInt((7 - i) * 8)) & BigInt(0xFF));
-        }
-        return result;
-    }
-
-    /**
-     * 将字节数组转换为长整数
-     * @param {Uint8Array} bytes - 字节数组
-     * @returns {BigInt} - 长整数值
-     */
-    static byte2long(bytes) {
-        let result = BigInt(0);
-        for (let i = 0; i < bytes.length; i++) {
-            result = (result << BigInt(8)) | BigInt(bytes[i] & 0xFF);
         }
         return result;
     }
@@ -450,7 +406,6 @@ export class VpnEncodeUtils {
 
         while (m < msgByte.length) {
             let tmpMsg = new Uint8Array(8);
-            // 使用自定义arraycopy方法而不是System.arraycopy
             for (let i = 0; i < Math.min(8, msgByte.length - m); i++) {
                 tmpMsg[i] = msgByte[m + i];
             }
@@ -459,7 +414,6 @@ export class VpnEncodeUtils {
             let k = 0;
             while (k < key1Byte.length) {
                 const tmpKey = new Uint8Array(8);
-                // 同样使用自定义方法
                 for (let i = 0; i < Math.min(8, key1Byte.length - k); i++) {
                     tmpKey[i] = key1Byte[k + i];
                 }
@@ -489,14 +443,12 @@ export class VpnEncodeUtils {
                 k += 8;
             }
 
-            // 将结果转换为十六进制字符串
-            const hexChars = new Array(16);
-            for (let i = 0; i <= 7; i++) {
-                const value = tmpMsg[i] & 0xFF;
-                hexChars[i * 2] = this.HEX_DIGITS[value >>> 4];
-                hexChars[i * 2 + 1] = this.HEX_DIGITS[value & 0x0F];
+            // 转换为十六进制字符串
+            for (let i = 0; i < tmpMsg.length; i++) {
+                const hex = tmpMsg[i].toString(16).toUpperCase();
+                sb.push(hex.length === 1 ? '0' + hex : hex);
             }
-            sb.push(hexChars.join(''));
+
             m += 8;
         }
 
@@ -504,377 +456,7 @@ export class VpnEncodeUtils {
     }
 
     /**
-     * AES-CFB加密
-     * @param {Uint8Array} data - 要加密的数据
-     * @param {Uint8Array} key - 密钥
-     * @param {Uint8Array} iv - 初始化向量
-     * @returns {Uint8Array} - 加密结果
-     */
-    static aesCfbEncrypt(data, key, iv) {
-        const blockSize = 16;
-        const encrypted = new Uint8Array(data.length);
-        let feedbackBlock = new Uint8Array(iv);
-
-        for (let i = 0; i < data.length; i += blockSize) {
-            // AES加密反馈块
-            const encryptedBlock = this.aesEncryptBlock(feedbackBlock, key);
-
-            // 计算这个块的大小
-            const currentBlockSize = Math.min(blockSize, data.length - i);
-
-            // 与明文XOR
-            for (let j = 0; j < currentBlockSize; j++) {
-                encrypted[i + j] = data[i + j] ^ encryptedBlock[j];
-            }
-
-            // 更新反馈块
-            if (currentBlockSize === blockSize) {
-                feedbackBlock = encrypted.slice(i, i + blockSize);
-            } else {
-                const newBlock = new Uint8Array(blockSize);
-                newBlock.set(encrypted.slice(i, i + currentBlockSize));
-                feedbackBlock = newBlock;
-            }
-        }
-
-        return encrypted;
-    }
-
-    /**
-     * AES块加密
-     * @param {Uint8Array} block - 16字节数据块
-     * @param {Uint8Array} key - 密钥
-     * @returns {Uint8Array} - 加密结果
-     */
-    static aesEncryptBlock(block, key) {
-        // JavaScript中没有内置的AES块加密实现
-        // 这里实现一个与Python的cryptography库兼容的AES加密
-
-        // 根据AES规范，我们需要实现:
-        // 1. SubBytes: 使用S-box替换
-        // 2. ShiftRows: 行位移
-        // 3. MixColumns: 列混合
-        // 4. AddRoundKey: 轮密钥加
-
-        // 完整实现一个AES算法超出本文件的范围
-        // 下面是一个与Python cryptography库兼容的简化实现
-
-        // 在生产环境中，应使用Web Crypto API或其他标准库
-        if (typeof crypto !== 'undefined' && crypto.subtle) {
-            try {
-                // 注意：这是异步API，实际使用时需要处理Promise
-                // 这里我们提供一个同步兼容的实现
-                return this._aesEncryptBlockCompat(block, key);
-            } catch (e) {
-                return this._aesEncryptBlockCompat(block, key);
-            }
-        } else {
-            return this._aesEncryptBlockCompat(block, key);
-        }
-    }
-
-    /**
-     * 兼容实现的AES块加密
-     * @param {Uint8Array} block - 16字节数据块
-     * @param {Uint8Array} key - 密钥
-     * @returns {Uint8Array} - 加密结果
-     */
-    static _aesEncryptBlockCompat(block, key) {
-        // 兼容Python的cryptography库的AES实现
-        // 这是一个模拟实现，但与原始库生成兼容的结果
-
-        // S-box
-        const SBOX = [
-            0x63, 0x7c, 0x77, 0x7b, 0xf2, 0x6b, 0x6f, 0xc5, 0x30, 0x01, 0x67, 0x2b, 0xfe, 0xd7, 0xab, 0x76,
-            0xca, 0x82, 0xc9, 0x7d, 0xfa, 0x59, 0x47, 0xf0, 0xad, 0xd4, 0xa2, 0xaf, 0x9c, 0xa4, 0x72, 0xc0,
-            0xb7, 0xfd, 0x93, 0x26, 0x36, 0x3f, 0xf7, 0xcc, 0x34, 0xa5, 0xe5, 0xf1, 0x71, 0xd8, 0x31, 0x15,
-            0x04, 0xc7, 0x23, 0xc3, 0x18, 0x96, 0x05, 0x9a, 0x07, 0x12, 0x80, 0xe2, 0xeb, 0x27, 0xb2, 0x75,
-            0x09, 0x83, 0x2c, 0x1a, 0x1b, 0x6e, 0x5a, 0xa0, 0x52, 0x3b, 0xd6, 0xb3, 0x29, 0xe3, 0x2f, 0x84,
-            0x53, 0xd1, 0x00, 0xed, 0x20, 0xfc, 0xb1, 0x5b, 0x6a, 0xcb, 0xbe, 0x39, 0x4a, 0x4c, 0x58, 0xcf,
-            0xd0, 0xef, 0xaa, 0xfb, 0x43, 0x4d, 0x33, 0x85, 0x45, 0xf9, 0x02, 0x7f, 0x50, 0x3c, 0x9f, 0xa8,
-            0x51, 0xa3, 0x40, 0x8f, 0x92, 0x9d, 0x38, 0xf5, 0xbc, 0xb6, 0xda, 0x21, 0x10, 0xff, 0xf3, 0xd2,
-            0xcd, 0x0c, 0x13, 0xec, 0x5f, 0x97, 0x44, 0x17, 0xc4, 0xa7, 0x7e, 0x3d, 0x64, 0x5d, 0x19, 0x73,
-            0x60, 0x81, 0x4f, 0xdc, 0x22, 0x2a, 0x90, 0x88, 0x46, 0xee, 0xb8, 0x14, 0xde, 0x5e, 0x0b, 0xdb,
-            0xe0, 0x32, 0x3a, 0x0a, 0x49, 0x06, 0x24, 0x5c, 0xc2, 0xd3, 0xac, 0x62, 0x91, 0x95, 0xe4, 0x79,
-            0xe7, 0xc8, 0x37, 0x6d, 0x8d, 0xd5, 0x4e, 0xa9, 0x6c, 0x56, 0xf4, 0xea, 0x65, 0x7a, 0xae, 0x08,
-            0xba, 0x78, 0x25, 0x2e, 0x1c, 0xa6, 0xb4, 0xc6, 0xe8, 0xdd, 0x74, 0x1f, 0x4b, 0xbd, 0x8b, 0x8a,
-            0x70, 0x3e, 0xb5, 0x66, 0x48, 0x03, 0xf6, 0x0e, 0x61, 0x35, 0x57, 0xb9, 0x86, 0xc1, 0x1d, 0x9e,
-            0xe1, 0xf8, 0x98, 0x11, 0x69, 0xd9, 0x8e, 0x94, 0x9b, 0x1e, 0x87, 0xe9, 0xce, 0x55, 0x28, 0xdf,
-            0x8c, 0xa1, 0x89, 0x0d, 0xbf, 0xe6, 0x42, 0x68, 0x41, 0x99, 0x2d, 0x0f, 0xb0, 0x54, 0xbb, 0x16
-        ];
-
-        // 由于JavaScript没有像Python的cryptography库那样的标准AES实现
-        // 我们这里实现一个与Python的cryptography库兼容的简化版本
-        // 这个简化版本足以生成与Python代码兼容的结果
-
-        const result = new Uint8Array(16);
-
-        // 初始状态
-        for (let i = 0; i < 16; i++) {
-            result[i] = block[i];
-        }
-
-        // 密钥扩展
-        const expandedKey = new Uint8Array(176); // 11 * 16
-        if (key.length === 16) { // 128位密钥
-            for (let i = 0; i < 16; i++) {
-                expandedKey[i] = key[i];
-            }
-
-            // 生成扩展密钥
-            for (let i = 1; i < 11; i++) {
-                let temp = expandedKey.slice((i - 1) * 16 + 12, (i - 1) * 16 + 16);
-
-                // 字循环
-                const t = temp[0];
-                temp[0] = temp[1];
-                temp[1] = temp[2];
-                temp[2] = temp[3];
-                temp[3] = t;
-
-                // S盒替换
-                for (let j = 0; j < 4; j++) {
-                    temp[j] = SBOX[temp[j]];
-                }
-
-                // 与轮常量XOR
-                const rcon = [0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80, 0x1B, 0x36];
-                temp[0] ^= rcon[i - 1];
-
-                // 生成密钥
-                for (let j = 0; j < 4; j++) {
-                    for (let k = 0; k < 4; k++) {
-                        expandedKey[i * 16 + j * 4 + k] = expandedKey[(i - 1) * 16 + j * 4 + k] ^
-                            (j === 0 ? temp[k] : expandedKey[i * 16 + (j - 1) * 4 + k]);
-                    }
-                }
-            }
-        } else {
-            // 对于不是16字节的密钥，使用简化的方法
-            // 在实际场景中，应该使用标准密钥扩展算法
-            for (let i = 0; i < 176; i++) {
-                expandedKey[i] = key[i % key.length];
-            }
-        }
-
-        // 轮密钥加
-        for (let i = 0; i < 16; i++) {
-            result[i] ^= expandedKey[i];
-        }
-
-        // 主循环
-        for (let round = 1; round < 10; round++) {
-            // 字节替换
-            for (let i = 0; i < 16; i++) {
-                result[i] = SBOX[result[i]];
-            }
-
-            // 行位移
-            const temp = result.slice();
-            result[1] = temp[5];
-            result[5] = temp[9];
-            result[9] = temp[13];
-            result[13] = temp[1];
-
-            result[2] = temp[10];
-            result[6] = temp[14];
-            result[10] = temp[2];
-            result[14] = temp[6];
-
-            result[3] = temp[15];
-            result[7] = temp[3];
-            result[11] = temp[7];
-            result[15] = temp[11];
-
-            // 列混合
-            for (let i = 0; i < 4; i++) {
-                const a = result[i * 4];
-                const b = result[i * 4 + 1];
-                const c = result[i * 4 + 2];
-                const d = result[i * 4 + 3];
-
-                // GF(2^8)乘法
-                function gmul(a, b) {
-                    let p = 0;
-                    for (let i = 0; i < 8; i++) {
-                        if ((b & 1) !== 0) {
-                            p ^= a;
-                        }
-                        const hiBit = a & 0x80;
-                        a <<= 1;
-                        if (hiBit !== 0) {
-                            a ^= 0x1B; // 用于GF(2^8)的多项式
-                        }
-                        b >>= 1;
-                    }
-                    return p & 0xFF;
-                }
-
-                result[i * 4] = gmul(a, 2) ^ gmul(b, 3) ^ c ^ d;
-                result[i * 4 + 1] = a ^ gmul(b, 2) ^ gmul(c, 3) ^ d;
-                result[i * 4 + 2] = a ^ b ^ gmul(c, 2) ^ gmul(d, 3);
-                result[i * 4 + 3] = gmul(a, 3) ^ b ^ c ^ gmul(d, 2);
-            }
-
-            // 轮密钥加
-            for (let i = 0; i < 16; i++) {
-                result[i] ^= expandedKey[round * 16 + i];
-            }
-        }
-
-        // 最后一轮
-        // 字节替换
-        for (let i = 0; i < 16; i++) {
-            result[i] = SBOX[result[i]];
-        }
-
-        // 行位移
-        const temp = result.slice();
-        result[1] = temp[5];
-        result[5] = temp[9];
-        result[9] = temp[13];
-        result[13] = temp[1];
-
-        result[2] = temp[10];
-        result[6] = temp[14];
-        result[10] = temp[2];
-        result[14] = temp[6];
-
-        result[3] = temp[15];
-        result[7] = temp[3];
-        result[11] = temp[7];
-        result[15] = temp[11];
-
-        // 轮密钥加
-        for (let i = 0; i < 16; i++) {
-            result[i] ^= expandedKey[10 * 16 + i];
-        }
-
-        return result;
-    }
-
-    /**
-     * 兼容Python的System.arraycopy
-     * 这个实现更简单，直接使用循环复制
-     * @param {Uint8Array} src - 源数组
-     * @param {number} srcPos - 源数组起始位置
-     * @param {Uint8Array} dest - 目标数组
-     * @param {number} destPos - 目标数组起始位置
-     * @param {number} length - 复制长度
-     */
-    static arraycopy(src, srcPos, dest, destPos, length) {
-        for (let i = 0; i < length; i++) {
-            if (srcPos + i < src.length) {
-                dest[destPos + i] = src[srcPos + i];
-            }
-        }
-    }
-
-    /**
-     * 使用AES-CFB加密主机名并添加IV
-     * @param {string} text - 待加密的主机名
-     * @returns {string} - 加密结果（IV + 加密后的数据）
-     */
-    static encrypt(text) {
-        if (!this.IV_HEX) this.initialize();
-
-        try {
-            const textBytes = this.stringToUtf8ByteArray(text);
-            const keyBytes = this.stringToUtf8ByteArray(this.KEY_BYTES);
-
-            // 使用AES-CFB模式加密
-            const encrypted = this.aesCfbEncrypt(textBytes, keyBytes, keyBytes);
-
-            // 返回 IV + 加密后的数据
-            return this.IV_HEX + this.byteToHexString(encrypted);
-        } catch (e) {
-            console.error("加密失败", e);
-            return this.IV_HEX;
-        }
-    }
-
-    /**
-     * 将普通URL转换为WebVPN URL
-     * @param {string} originUrl - 原始URL
-     * @returns {string} - WebVPN URL
-     */
-    static encryptUrl(originUrl) {
-        let url = originUrl;
-        let protocol;
-
-        // 解析协议
-        if (url.startsWith("http://")) {
-            url = url.substring(7);
-            protocol = "http";
-        } else if (url.startsWith("https://")) {
-            url = url.substring(8);
-            protocol = "https";
-        } else {
-            throw new Error("Not a valid URL");
-        }
-
-        // 处理IPv6地址
-        let host = null;
-        const ipv6Pattern = /\[[0-9a-fA-F:]+?\]/;
-        const ipv6Match = url.match(ipv6Pattern);
-
-        if (ipv6Match) {
-            host = ipv6Match[0];
-            url = url.substring(ipv6Match.index + ipv6Match[0].length);
-        }
-
-        // 提取端口号
-        let port = null;
-        const parts = url.split("?")[0].split(":");
-
-        if (parts.length > 1) {
-            const portAndPath = parts[1].split("/");
-            port = portAndPath[0];
-            url = parts[0] + url.substring(parts[0].length + port.length + 1);
-        }
-
-        // 分离主机名和路径
-        const pathIndex = url.indexOf("/");
-        let path = "/";
-
-        if (pathIndex === -1) {
-            if (host === null) host = url;
-        } else {
-            if (host === null) host = url.substring(0, pathIndex);
-            path = url.substring(pathIndex);
-        }
-
-        // 根据是否有端口号调用不同的方法
-        return port === null
-            ? this.encryptUrlParts(protocol, host, path)
-            : this.encryptUrlWithPort(protocol, host, path, port);
-    }
-
-    /**
-     * 加密URL各部分并组合
-     * @param {string} protocol - 协议
-     * @param {string} host - 主机名
-     * @param {string} url - URL路径
-     * @returns {string} - 加密后的URL
-     */
-    static encryptUrlParts(protocol, host, url) {
-        return this.VPN_BASE + "/" + protocol + "/" + this.encrypt(host) + (url.startsWith("/") ? url : "/" + url);
-    }
-
-    /**
-     * 加密带端口的URL各部分并组合
-     * @param {string} protocol - 协议
-     * @param {string} host - 主机名
-     * @param {string} url - URL路径
-     * @param {string} port - 端口号
-     * @returns {string} - 加密后的URL
-     */
-    static encryptUrlWithPort(protocol, host, url, port) {
-        return this.VPN_BASE + "/" + protocol + "-" + port + "/" + this.encrypt(host) + (url.startsWith("/") ? url : "/" + url);
-    }
-
-    /**
-     * 加密登录凭据
+     * 加密登录凭据（用户名+密码+lt）
      * @param {string} userName - 用户名
      * @param {string} password - 密码
      * @param {string} lt - LT参数
@@ -883,9 +465,154 @@ export class VpnEncodeUtils {
     static encode(userName, password, lt) {
         return this.Encrypt(userName + password + lt, "1", "2", "3");
     }
-}
 
-// 初始化
-VpnEncodeUtils.initialize();
+    // ==================== AES 加密相关方法（URL加密） ====================
+
+    /**
+     * AES加密（用于URL主机名加密）
+     * @param {string} text - 待加密文本
+     * @returns {string} - 加密后的十六进制字符串
+     */
+    static encrypt(text) {
+        try {
+            const key = CryptoJS.enc.Utf8.parse(this.KEY_BYTES);
+            const iv = CryptoJS.enc.Utf8.parse(this.KEY_BYTES);
+            
+            const encrypted = CryptoJS.AES.encrypt(text, key, {
+                iv: iv,
+                mode: CryptoJS.mode.CFB,
+                padding: CryptoJS.pad.NoPadding
+            });
+            
+            // 返回IV + 密文的十六进制字符串
+            return this.IV_HEX + encrypted.ciphertext.toString();
+        } catch (error) {
+            console.error('VPN URL加密失败:', error);
+            return '';
+        }
+    }
+
+    /**
+     * 加密URL
+     * @param {string} url - 原始URL
+     * @returns {string} - VPN加密后的完整URL
+     */
+    static encryptUrl(url) {
+        try {
+            // 解析URL
+            const urlObj = new URL(url);
+            const protocol = urlObj.protocol.replace(':', '');
+            const host = urlObj.host;
+            const port = urlObj.port || (protocol === 'https' ? '443' : '80');
+            const path = urlObj.pathname + urlObj.search + urlObj.hash;
+
+            // 加密主机部分
+            const encryptedHost = this.encrypt(host);
+            
+            // 构建VPN URL
+            let vpnPath = `/${protocol}`;
+            
+            // 非标准端口需要添加端口信息
+            if ((protocol === 'http' && port !== '80') || 
+                (protocol === 'https' && port !== '443')) {
+                vpnPath += `-${port}`;
+            }
+            
+            vpnPath += `/${encryptedHost}${path}`;
+            
+            return `${this.VPN_BASE}${vpnPath}`;
+        } catch (error) {
+            console.error('加密URL失败:', error);
+            return url;
+        }
+    }
+
+    /**
+     * 解密URL（从VPN URL还原原始URL）
+     * @param {string} vpnUrl - VPN加密的URL
+     * @returns {string} - 原始URL
+     */
+    static decryptUrl(vpnUrl) {
+        try {
+            // 解析VPN URL结构
+            const urlObj = new URL(vpnUrl);
+            const pathParts = urlObj.pathname.split('/').filter(p => p);
+            
+            if (pathParts.length < 2) {
+                return vpnUrl;
+            }
+
+            // 解析协议和端口
+            const protocolPart = pathParts[0];
+            const [protocol, port] = protocolPart.includes('-') 
+                ? protocolPart.split('-') 
+                : [protocolPart, protocolPart === 'https' ? '443' : '80'];
+
+            // 获取加密的主机部分
+            const encryptedHost = pathParts[1];
+            
+            // 解密主机
+            const host = this.decrypt(encryptedHost);
+            if (!host) {
+                return vpnUrl;
+            }
+
+            // 重建原始URL
+            const remainingPath = '/' + pathParts.slice(2).join('/');
+            const originalUrl = `${protocol}://${host}${port !== '80' && port !== '443' ? ':' + port : ''}${remainingPath}${urlObj.search}${urlObj.hash}`;
+            
+            return originalUrl;
+        } catch (error) {
+            console.error('解密URL失败:', error);
+            return vpnUrl;
+        }
+    }
+
+    /**
+     * AES解密
+     * @param {string} encryptedHex - 加密的十六进制字符串（包含IV）
+     * @returns {string} - 解密后的文本
+     */
+    static decrypt(encryptedHex) {
+        try {
+            // 分离IV和密文
+            const ivHex = encryptedHex.substring(0, 32);
+            const ciphertextHex = encryptedHex.substring(32);
+            
+            const key = CryptoJS.enc.Utf8.parse(this.KEY_BYTES);
+            const iv = CryptoJS.enc.Hex.parse(ivHex);
+            const ciphertext = CryptoJS.enc.Hex.parse(ciphertextHex);
+            
+            const decrypted = CryptoJS.AES.decrypt(
+                { ciphertext: ciphertext },
+                key,
+                {
+                    iv: iv,
+                    mode: CryptoJS.mode.CFB,
+                    padding: CryptoJS.pad.NoPadding
+                }
+            );
+            
+            return decrypted.toString(CryptoJS.enc.Utf8);
+        } catch (error) {
+            console.error('VPN URL解密失败:', error);
+            return '';
+        }
+    }
+
+    /**
+     * 检查URL是否为VPN加密URL
+     * @param {string} url - URL字符串
+     * @returns {boolean}
+     */
+    static isVpnUrl(url) {
+        try {
+            const vpnHost = API.VPN_HOST;
+            return url.startsWith(this.VPN_BASE) || (vpnHost && url.includes(vpnHost));
+        } catch {
+            return false;
+        }
+    }
+}
 
 export default VpnEncodeUtils;

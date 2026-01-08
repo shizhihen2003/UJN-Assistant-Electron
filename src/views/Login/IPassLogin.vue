@@ -1,6 +1,7 @@
+<!-- src/views/Login/IPassLogin.vue 支持多学校版本 -->
 <template>
   <div class="login-container">
-    <h1 class="page-title">智慧济大登录</h1>
+    <h1 class="page-title">{{ schoolName }}统一认证登录</h1>
 
     <el-card class="login-card" v-loading="loading">
       <el-form
@@ -50,11 +51,11 @@
         <div class="login-options">
           <el-checkbox v-model="loginForm.savePassword">记住密码</el-checkbox>
           <el-checkbox v-model="loginForm.autoLogin">自动登录</el-checkbox>
-          <el-checkbox v-model="loginForm.useVpn">使用VPN登录智慧济大</el-checkbox>
+          <el-checkbox v-model="loginForm.useVpn" v-if="vpnEnabled">使用VPN登录</el-checkbox>
         </div>
 
-        <!-- 新增：教务系统VPN登录选项 -->
-        <div class="login-options" v-if="loginForm.useVpn">
+        <!-- 教务系统VPN登录选项 -->
+        <div class="login-options" v-if="loginForm.useVpn && vpnEnabled">
           <el-checkbox v-model="loginForm.useEasVpn" :disabled="!loginForm.useVpn">
             <el-tooltip content="登录后自动使用VPN登录教务系统" placement="top">
               同步使用VPN登录教务系统
@@ -69,7 +70,7 @@
         </div>
 
         <div class="login-tips">
-          <p><el-icon><InfoFilled /></el-icon> 智慧济大账号通常与教务系统账号相同</p>
+          <p><el-icon><InfoFilled /></el-icon> {{ schoolName }}账号通常与教务系统账号相同</p>
           <p><el-icon><InfoFilled /></el-icon> 此登录用于VPN访问校内资源</p>
           <p v-if="loginForm.useVpn"><el-icon><Warning /></el-icon> 当前使用VPN模式登录，适用于校外网络</p>
           <p v-if="loginForm.useVpn && loginForm.useEasVpn"><el-icon><InfoFilled /></el-icon> 登录成功后将自动使用VPN登录教务系统</p>
@@ -80,11 +81,12 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted, watch } from 'vue'
+import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { User, Lock, Connection, RefreshLeft, InfoFilled, Warning } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import authService from '@/services/authService'
+import { UJNAPI } from '@/constants/api'
 import ipc from '@/utils/ipc'
 import store from '@/utils/store'
 
@@ -94,7 +96,17 @@ const router = useRouter()
 const loginFormRef = ref(null)
 const loading = ref(false)
 const loginStatus = ref(null)
-const networkStatus = ref('checking') // 'checking', 'online', 'offline', 'vpn'
+const networkStatus = ref('checking')
+
+// 动态获取当前学校名称
+const schoolName = computed(() => {
+  return UJNAPI.SCHOOL_NAME || ''
+})
+
+// VPN是否启用
+const vpnEnabled = computed(() => {
+  return UJNAPI.VPN_ENABLED
+})
 
 // 登录表单
 const loginForm = reactive({
@@ -103,7 +115,7 @@ const loginForm = reactive({
   savePassword: true,
   autoLogin: false,
   useVpn: false,
-  useEasVpn: false // 新增：是否使用VPN登录教务系统
+  useEasVpn: false
 })
 
 // 表单校验规则
@@ -122,28 +134,17 @@ const checkNetworkStatus = async () => {
   try {
     networkStatus.value = 'checking'
 
-    // 尝试直接访问智慧济大
-    try {
-      const response = await fetch('http://sso.ujn.edu.cn/tpass/login', {
-        method: 'HEAD',
-        mode: 'no-cors',
-        cache: 'no-cache',
-        timeout: 3000
-      })
+    const ssoHost = UJNAPI.IPASS_HOST
+    const ssoLogin = UJNAPI.IPASS_LOGIN
 
-      if (response.ok || response.status === 0) { // status 0 可能在no-cors模式下表示成功
-        networkStatus.value = 'online'
-        console.log('直接访问可用')
-        loginForm.useVpn = false
-        return
-      }
-    } catch (error) {
-      console.log('直接访问失败:', error)
+    if (!ssoHost) {
+      networkStatus.value = 'offline'
+      return
     }
 
-    // 尝试通过VPN访问
+    // 尝试直接访问SSO
     try {
-      const response = await fetch('https://webvpn.ujn.edu.cn/', {
+      const response = await fetch(ssoLogin, {
         method: 'HEAD',
         mode: 'no-cors',
         cache: 'no-cache',
@@ -151,24 +152,17 @@ const checkNetworkStatus = async () => {
       })
 
       if (response.ok || response.status === 0) {
+        networkStatus.value = 'online'
+      } else {
         networkStatus.value = 'vpn'
-        console.log('VPN访问可用')
-        loginForm.useVpn = true
-        ElMessage.info('检测到校外网络环境，已自动切换为VPN模式')
-        return
       }
     } catch (error) {
-      console.log('VPN访问失败:', error)
+      console.log('直接连接SSO失败，可能需要VPN')
+      networkStatus.value = 'vpn'
     }
-
-    // 如果两种访问方式都失败
-    networkStatus.value = 'offline'
-    console.log('网络不可用')
-    ElMessage.warning('检测到网络连接可能存在问题，建议检查网络')
-
   } catch (error) {
-    console.error('网络检查失败', error)
-    networkStatus.value = 'unknown'
+    console.error('网络状态检查失败', error)
+    networkStatus.value = 'offline'
   }
 }
 
@@ -177,46 +171,40 @@ const handleLogin = async () => {
   if (!loginFormRef.value) return
 
   try {
-    // 表单验证
     await loginFormRef.value.validate()
 
-    // 显示加载状态
     loading.value = true
     loginStatus.value = { success: false, message: '正在登录...' }
 
-    // 同步VPN设置到authService - 立即设置为当前值，不要等待Promise
+    // 设置VPN模式
     authService.useVpn = loginForm.useVpn
-    // 新增：同步教务系统VPN设置
-    authService.useEasVpn = loginForm.useEasVpn && loginForm.useVpn
+    await store.putBoolean('EA_USE_VPN', loginForm.useVpn)
 
-    // 保存VPN设置到存储
-    try {
-      await store.putBoolean('EA_USE_VPN', loginForm.useVpn)
-      // 新增：保存教务系统VPN设置
-      await store.putBoolean('EA_USE_EAS_VPN', loginForm.useEasVpn && loginForm.useVpn)
-    } catch (error) {
-      console.error('保存VPN设置失败', error)
+    // 设置教务系统VPN模式
+    if (loginForm.useVpn) {
+      authService.useEasVpn = loginForm.useEasVpn
+      await store.putBoolean('EA_USE_EAS_VPN', loginForm.useEasVpn)
     }
 
-    console.log(`开始登录: 用户名=${loginForm.username}, 使用VPN=${loginForm.useVpn}, 教务系统VPN=${loginForm.useEasVpn && loginForm.useVpn}`)
-
     // 执行登录
+    console.log(`开始登录${schoolName.value}...`)
+    console.log(`VPN模式: ${loginForm.useVpn}`)
+
     const result = await authService.loginIpass(
         loginForm.username,
-        loginForm.password
+        loginForm.password,
+        loginForm.useVpn
     )
 
     if (result) {
-      // 登录成功
-      loginStatus.value = { success: true, message: '登录成功，正在跳转...' }
-      ElMessage.success('登录成功')
+      loginStatus.value = { success: true, message: '登录成功！' }
+      ElMessage.success(`${schoolName.value}登录成功`)
 
-      // 保存账户信息
+      // 保存账号信息
       if (loginForm.savePassword) {
         await ipc.setStoreValue('IPASS_ACCOUNT', loginForm.username)
         await ipc.setStoreValue('IPASS_PASSWORD', loginForm.password)
       } else {
-        // 如果不记住密码，只保存账号
         await ipc.setStoreValue('IPASS_ACCOUNT', loginForm.username)
         await ipc.setStoreValue('IPASS_PASSWORD', '')
       }
@@ -224,11 +212,10 @@ const handleLogin = async () => {
       // 保存自动登录设置
       await store.putBoolean('IPASS_AUTO_LOGIN', loginForm.autoLogin)
 
-      // 新增：如果选择了使用VPN登录教务系统，自动登录教务系统
+      // 如果选择了使用VPN登录教务系统，自动登录教务系统
       if (loginForm.useVpn && loginForm.useEasVpn) {
         loginStatus.value = { success: true, message: '正在登录教务系统...' }
         try {
-          // 尝试自动登录教务系统
           const easResult = await authService.loginEasViaVpn(loginForm.username, loginForm.password)
           if (easResult) {
             ElMessage.success('教务系统登录成功')
@@ -247,7 +234,6 @@ const handleLogin = async () => {
         router.push('/')
       }, 1000)
     } else {
-      // 登录失败
       loginStatus.value = { success: false, message: '用户名或密码错误' }
       ElMessage.error('登录失败：用户名或密码错误')
     }
@@ -268,12 +254,43 @@ const resetForm = () => {
   }
 }
 
+// 监听VPN设置变化
+watch(() => loginForm.useVpn, async (newValue) => {
+  console.log(`VPN设置已更改: ${newValue}`)
+  authService.useVpn = !!newValue
+
+  if (!newValue) {
+    loginForm.useEasVpn = false
+    authService.useEasVpn = false
+    await store.putBoolean('EA_USE_EAS_VPN', false)
+  }
+
+  try {
+    await store.putBoolean('EA_USE_VPN', !!newValue)
+  } catch (error) {
+    console.error('保存VPN设置失败', error)
+  }
+})
+
+// 监听教务系统VPN设置变化
+watch(() => loginForm.useEasVpn, async (newValue) => {
+  console.log(`教务系统VPN设置已更改: ${newValue}`)
+  if (loginForm.useVpn) {
+    authService.useEasVpn = !!newValue
+    try {
+      await store.putBoolean('EA_USE_EAS_VPN', !!newValue)
+    } catch (error) {
+      console.error('保存教务系统VPN设置失败', error)
+    }
+  }
+})
+
 // 加载已保存的数据
 onMounted(async () => {
   try {
     // 检查是否已登录
     if (authService.ipassLoginStatus.value) {
-      ElMessage.info('您已登录智慧济大')
+      ElMessage.info(`您已登录${schoolName.value}`)
       router.push('/')
       return
     }
@@ -282,90 +299,43 @@ onMounted(async () => {
     try {
       const savedUseVpn = await store.getBoolean('EA_USE_VPN', false)
       loginForm.useVpn = savedUseVpn
-      // 新增：加载教务系统VPN设置
+
       const savedUseEasVpn = await store.getBoolean('EA_USE_EAS_VPN', false)
       loginForm.useEasVpn = savedUseEasVpn
 
-      // 直接设置为布尔值，不要等待Promise
-      authService.useVpn = !!savedUseVpn // 使用双感叹号确保是布尔值
-      authService.useEasVpn = !!savedUseEasVpn // 新增：设置教务系统VPN状态
+      authService.useVpn = !!savedUseVpn
+      authService.useEasVpn = !!savedUseEasVpn
 
       console.log(`从存储加载VPN设置: ${!!savedUseVpn}, 教务系统VPN: ${!!savedUseEasVpn}`)
     } catch (error) {
       console.error('加载VPN设置失败', error)
-      // 默认为false
-      loginForm.useVpn = false
-      loginForm.useEasVpn = false
-      authService.useVpn = false
-      authService.useEasVpn = false
     }
-
-    // 检查网络状态，可能会更新VPN设置
-    await checkNetworkStatus()
 
     // 加载已保存的账号信息
     try {
-      const savedUsername = await ipc.getStoreValue('IPASS_ACCOUNT', '')
-      const savedPassword = await ipc.getStoreValue('IPASS_PASSWORD', '')
+      const savedAccount = await ipc.getStoreValue('IPASS_ACCOUNT')
+      const savedPassword = await ipc.getStoreValue('IPASS_PASSWORD')
       const savedAutoLogin = await store.getBoolean('IPASS_AUTO_LOGIN', false)
 
-      if (savedUsername) {
-        loginForm.username = savedUsername
+      if (savedAccount) {
+        loginForm.username = savedAccount
+        loginForm.password = savedPassword || ''
+        loginForm.savePassword = !!savedPassword
+        loginForm.autoLogin = savedAutoLogin
 
-        if (savedPassword) {
-          loginForm.password = savedPassword
-          loginForm.savePassword = true
-
-          // 如果设置了自动登录
-          if (savedAutoLogin) {
-            loginForm.autoLogin = true
-            // 设置一个短暂的延迟，让界面有时间渲染
-            setTimeout(() => {
-              handleLogin()
-            }, 500)
-          }
+        // 如果设置了自动登录
+        if (savedAutoLogin && savedAccount && savedPassword) {
+          handleLogin()
         }
       }
     } catch (error) {
       console.error('加载账号信息失败', error)
     }
+
+    // 检查网络状态
+    checkNetworkStatus()
   } catch (error) {
     console.error('加载数据失败', error)
-  }
-})
-
-// 监听VPN设置变化
-watch(() => loginForm.useVpn, async (newValue) => {
-  console.log(`VPN设置已更改: ${newValue}`)
-  // 直接设置布尔值到authService
-  authService.useVpn = !!newValue
-
-  // 如果关闭VPN设置，同时关闭教务系统VPN
-  if (!newValue) {
-    loginForm.useEasVpn = false
-    authService.useEasVpn = false
-    await store.putBoolean('EA_USE_EAS_VPN', false)
-  }
-
-  // 同时保存到存储
-  try {
-    await store.putBoolean('EA_USE_VPN', !!newValue)
-  } catch (error) {
-    console.error('保存VPN设置失败', error)
-  }
-})
-
-// 新增：监听教务系统VPN设置变化
-watch(() => loginForm.useEasVpn, async (newValue) => {
-  console.log(`教务系统VPN设置已更改: ${newValue}`)
-  // 只有在VPN开启时才保存教务系统VPN设置
-  if (loginForm.useVpn) {
-    authService.useEasVpn = !!newValue
-    try {
-      await store.putBoolean('EA_USE_EAS_VPN', !!newValue)
-    } catch (error) {
-      console.error('保存教务系统VPN设置失败', error)
-    }
   }
 })
 </script>

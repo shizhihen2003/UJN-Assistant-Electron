@@ -2,6 +2,9 @@
   <div class="page-container">
     <h1 class="page-title">系统设置</h1>
 
+    <!-- 学校配置 -->
+    <SchoolConfig />
+
     <el-card class="settings-card">
       <template #header>
         <div class="card-header">
@@ -117,7 +120,7 @@
 
         <div class="account-item">
           <div class="account-info">
-            <h4>智慧济大账号</h4>
+            <h4>智慧校园账号</h4>
             <div v-if="accountInfo.ipass.username" class="account-details">
               <div>登录账号：{{ accountInfo.ipass.username }}</div>
               <div>
@@ -127,7 +130,7 @@
                 </el-tag>
               </div>
             </div>
-            <el-empty v-else description="未设置智慧济大账号" :image-size="60"></el-empty>
+            <el-empty v-else description="未设置智慧校园账号" :image-size="60"></el-empty>
           </div>
           <div class="account-actions">
             <el-button type="primary" size="small" @click="goToLogin('ipass')">{{ accountInfo.ipass.username ? '重新登录' : '去登录' }}</el-button>
@@ -257,10 +260,10 @@
           <el-icon :size="80" color="#409EFF"><School /></el-icon>
         </div>
         <div class="app-details">
-          <h2>UJN Assistant</h2>
+          <h2>{{ appName }}</h2>
           <p>版本：v{{ appVersion }}</p>
-          <p>济南大学助手 - 提供课表查询、成绩查询等服务</p>
-          <p>开发者：济南大学信息科学与工程学院</p>
+          <p>{{ schoolName }}助手 - 提供课表查询、成绩查询等服务</p>
+          <p>开发者：{{ schoolName }}信息科学与工程学院</p>
         </div>
       </div>
 
@@ -274,15 +277,22 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue';
+import { ref, reactive, onMounted, computed } from 'vue';
 import { useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { School, Plus, Delete } from '@element-plus/icons-vue';
 import store from '@/utils/store';
 import authService from '@/services/authService';
+import schoolService from '@/services/schoolService';
+import SchoolConfig from '@/components/SchoolConfig.vue';
+import API from '@/constants/api';
 
 const router = useRouter();
 const appVersion = ref('2.0.1');
+
+// 学校名称（动态）
+const schoolName = computed(() => API.SCHOOL_NAME || '济南大学');
+const appName = computed(() => `${API.SCHOOL_SHORT_NAME || '济大'} Assistant`);
 
 // 设置表单
 const settingsForm = reactive({
@@ -293,16 +303,16 @@ const settingsForm = reactive({
 const lessonSettings = reactive({
   openingDate: '',
   timeSlots: [
-    { start: null, end: null }, // 第1节
-    { start: null, end: null }, // 第2节
-    { start: null, end: null }, // 第3节
-    { start: null, end: null }, // 第4节
-    { start: null, end: null }, // 第5节
-    { start: null, end: null }, // 第6节
-    { start: null, end: null }, // 第7节
-    { start: null, end: null }, // 第8节
-    { start: null, end: null }, // 第9节
-    { start: null, end: null }  // 第10节
+    { start: null, end: null },
+    { start: null, end: null },
+    { start: null, end: null },
+    { start: null, end: null },
+    { start: null, end: null },
+    { start: null, end: null },
+    { start: null, end: null },
+    { start: null, end: null },
+    { start: null, end: null },
+    { start: null, end: null }
   ]
 });
 
@@ -329,13 +339,30 @@ const dataStatus = reactive({
 
 // 禁用不必要的小时选项
 const disabledHours = () => {
-  return Array.from({ length: 7 }).map((_, i) => i); // 禁用0-6小时
+  return Array.from({ length: 7 }).map((_, i) => i);
+};
+
+// 创建时间日期对象
+const createTimeDate = (timeStr) => {
+  if (!timeStr) return null;
+  const [hours, minutes] = timeStr.split(':').map(Number);
+  const date = new Date();
+  date.setHours(hours, minutes, 0, 0);
+  return date;
+};
+
+// 格式化时间对象为字符串
+const formatTimeToString = (date) => {
+  if (!date) return '';
+  const hours = String(date.getHours()).padStart(2, '0');
+  const minutes = String(date.getMinutes()).padStart(2, '0');
+  return `${hours}:${minutes}`;
 };
 
 // 加载设置
 const loadSettings = async () => {
   try {
-    // 加载基本设置 - 直接加载"显示教师信息"设置
+    // 加载基本设置
     settingsForm.showTeacher = await store.getBoolean('SHOW_TEACHER', false);
 
     // 加载开学日期
@@ -343,7 +370,6 @@ const loadSettings = async () => {
     if (openingDate) {
       lessonSettings.openingDate = openingDate;
     } else {
-      // 尝试从课表信息中获取开学日期
       const lessonTableInfo = await store.getObject('lesson_table_info', null);
       if (lessonTableInfo && lessonTableInfo.startDay) {
         try {
@@ -358,195 +384,56 @@ const loadSettings = async () => {
     // 加载时间段设置
     const timeSettings = await store.getObject('LESSON_TIME_SETTINGS', null);
     if (timeSettings) {
-      // 转换字符串时间段为时间对象数组
-      lessonSettings.timeSlots = timeSettings.map(timeStr => {
-        const [startStr, endStr] = timeStr.split('-');
-        // 创建日期对象用于时间选择器
-        const startDate = createTimeDate(startStr);
-        const endDate = createTimeDate(endStr);
-
-        return {
-          start: startDate,
-          end: endDate
-        };
-      });
+      lessonSettings.timeSlots = timeSettings.map(slot => ({
+        start: createTimeDate(slot.start),
+        end: createTimeDate(slot.end)
+      }));
     } else {
-      // 设置默认时间段
-      const defaultTimeSlots = [
-        { start: '08:00', end: '08:50' }, // 第1节
-        { start: '09:00', end: '09:50' }, // 第2节
-        { start: '10:10', end: '11:00' }, // 第3节
-        { start: '11:10', end: '12:00' }, // 第4节
-        { start: '14:00', end: '14:50' }, // 第5节
-        { start: '15:00', end: '15:50' }, // 第6节
-        { start: '16:10', end: '17:00' }, // 第7节
-        { start: '17:10', end: '18:00' }, // 第8节
-        { start: '19:00', end: '19:50' }, // 第9节
-        { start: '20:00', end: '20:50' }  // 第10节
+      // 默认时间设置
+      const defaultSlots = [
+        { start: '08:00', end: '08:50' },
+        { start: '09:00', end: '09:50' },
+        { start: '10:10', end: '11:00' },
+        { start: '11:10', end: '12:00' },
+        { start: '14:00', end: '14:50' },
+        { start: '15:00', end: '15:50' },
+        { start: '16:10', end: '17:00' },
+        { start: '17:10', end: '18:00' },
+        { start: '19:00', end: '19:50' },
+        { start: '20:00', end: '20:50' }
       ];
-
-      lessonSettings.timeSlots = defaultTimeSlots.map(slot => {
-        return {
-          start: createTimeDate(slot.start),
-          end: createTimeDate(slot.end)
-        };
-      });
+      lessonSettings.timeSlots = defaultSlots.map(slot => ({
+        start: createTimeDate(slot.start),
+        end: createTimeDate(slot.end)
+      }));
     }
 
     // 加载账号信息
-    const easAccount = await store.getString('EAS_ACCOUNT', '');
-    const ipassAccount = await store.getString('IPASS_ACCOUNT', '');
-    const entranceYear = await store.getInt('ENTRANCE_TIME', 0);
+    await loadAccountInfo();
 
-    // 更新账号信息
-    accountInfo.eas.username = easAccount;
-    accountInfo.eas.entranceYear = entranceYear;
-    accountInfo.ipass.username = ipassAccount;
-
-    // 获取登录状态
-    const loginStatus = authService.getLoginStatus();
-    accountInfo.eas.isLoggedIn = loginStatus.eas;
-    accountInfo.ipass.isLoggedIn = loginStatus.ipass;
-
-    // 获取数据状态
+    // 加载数据状态
     await loadDataStatus();
-
-    // 获取应用版本
-    if (window.electron) {
-      appVersion.value = await window.electron.getVersion();
-    }
   } catch (error) {
     console.error('加载设置失败:', error);
-    ElMessage.error('加载设置失败');
   }
 };
 
-// 保存开学日期
-const saveOpeningDate = async () => {
+// 加载账号信息
+const loadAccountInfo = async () => {
   try {
-    if (!lessonSettings.openingDate) {
-      ElMessage.warning('请选择有效的开学日期');
-      return;
-    }
+    // 教务系统账号
+    const easUsername = await store.getString('EAS_ACCOUNT', '');
+    const entranceYear = await store.getInt('ENTRANCE_TIME', 0);
+    accountInfo.eas.username = easUsername;
+    accountInfo.eas.entranceYear = entranceYear > 0 ? entranceYear : '';
+    accountInfo.eas.isLoggedIn = authService.easLoginStatus?.value || false;
 
-    await store.putString('CUSTOM_OPENING_DATE', lessonSettings.openingDate);
-    ElMessage.success('开学日期保存成功');
+    // 智慧校园账号
+    const ipassUsername = await store.getString('IPASS_ACCOUNT', '');
+    accountInfo.ipass.username = ipassUsername;
+    accountInfo.ipass.isLoggedIn = authService.ipassLoginStatus?.value || false;
   } catch (error) {
-    console.error('保存开学日期失败:', error);
-    ElMessage.error('保存开学日期失败');
-  }
-};
-
-// 保存时间设置
-const saveTimeSettings = async () => {
-  try {
-    // 验证时间设置是否完整
-    for (const slot of lessonSettings.timeSlots) {
-      if (!slot.start || !slot.end) {
-        ElMessage.warning('请为所有课程时间段设置完整的开始和结束时间');
-        return;
-      }
-    }
-
-    // 转换为字符串数组格式保存
-    const timeStrings = lessonSettings.timeSlots.map(slot => {
-      // 格式化时间为字符串
-      const formatTime = (date) => {
-        if (!date) return '';
-        const hours = date.getHours().toString().padStart(2, '0');
-        const minutes = date.getMinutes().toString().padStart(2, '0');
-        return `${hours}:${minutes}`;
-      };
-
-      return `${formatTime(slot.start)}-${formatTime(slot.end)}`;
-    });
-
-    await store.putObject('LESSON_TIME_SETTINGS', timeStrings);
-    ElMessage.success('课程时间设置保存成功');
-  } catch (error) {
-    console.error('保存课程时间设置失败:', error);
-    ElMessage.error('保存课程时间设置失败');
-  }
-};
-
-// 创建时间日期对象辅助函数
-const createTimeDate = (timeString) => {
-  if (!timeString) return null;
-
-  const [hours, minutes] = timeString.split(':').map(part => parseInt(part, 10));
-  const date = new Date();
-  date.setHours(hours, minutes, 0, 0);
-  return date;
-};
-
-// 添加时间段
-const addTimeSlot = () => {
-  const startDate = new Date();
-  startDate.setHours(8, 0, 0);
-
-  const endDate = new Date();
-  endDate.setHours(8, 50, 0);
-
-  lessonSettings.timeSlots.push({
-    start: startDate,
-    end: endDate
-  });
-};
-
-// 移除时间段
-const removeTimeSlot = (index) => {
-  // 只允许移除额外添加的时间段（默认有10个）
-  if (index >= 10) {
-    lessonSettings.timeSlots.splice(index, 1);
-    saveTimeSettings();
-  }
-};
-
-// 重置时间设置
-const resetTimeSettings = async () => {
-  try {
-    // 确认对话框
-    await ElMessageBox.confirm(
-        '确定要恢复默认课程时间设置吗？您的自定义设置将被覆盖。',
-        '重置确认',
-        {
-          confirmButtonText: '确定',
-          cancelButtonText: '取消',
-          type: 'warning'
-        }
-    );
-
-    // 默认时间设置
-    const defaultTimeSlots = [
-      { start: '08:00', end: '08:50' }, // 第1节
-      { start: '09:00', end: '09:50' }, // 第2节
-      { start: '10:10', end: '11:00' }, // 第3节
-      { start: '11:10', end: '12:00' }, // 第4节
-      { start: '14:00', end: '14:50' }, // 第5节
-      { start: '15:00', end: '15:50' }, // 第6节
-      { start: '16:10', end: '17:00' }, // 第7节
-      { start: '17:10', end: '18:00' }, // 第8节
-      { start: '19:00', end: '19:50' }, // 第9节
-      { start: '20:00', end: '20:50' }  // 第10节
-    ];
-
-    // 重置为默认时间段 - 使用日期对象
-    lessonSettings.timeSlots = defaultTimeSlots.map(slot => {
-      return {
-        start: createTimeDate(slot.start),
-        end: createTimeDate(slot.end)
-      };
-    });
-
-    // 保存设置
-    await saveTimeSettings();
-    ElMessage.success('已恢复默认课程时间设置');
-  } catch (error) {
-    if (error === 'cancel') {
-      return;
-    }
-    console.error('重置时间设置失败:', error);
-    ElMessage.error('重置时间设置失败');
+    console.error('加载账号信息失败:', error);
   }
 };
 
@@ -607,17 +494,12 @@ const loadDataStatus = async () => {
 // 保存设置
 const saveSettings = async () => {
   try {
-    // 保存基本设置 - 直接保存"显示教师信息"设置
     await store.putBoolean('SHOW_TEACHER', settingsForm.showTeacher);
 
-    // 触发自定义事件来通知所有组件设置已更改
     window.dispatchEvent(new CustomEvent('ujn_settings_changed', {
-      detail: {
-        showTeacher: settingsForm.showTeacher
-      }
+      detail: { showTeacher: settingsForm.showTeacher }
     }));
 
-    console.log('保存教师信息显示设置:', settingsForm.showTeacher);
     ElMessage.success('设置已保存');
   } catch (error) {
     console.error('保存设置失败:', error);
@@ -625,204 +507,216 @@ const saveSettings = async () => {
   }
 };
 
-// 格式化时间
-const formatTime = (time) => {
-  if (!time) return '未知';
-
+// 保存开学日期
+const saveOpeningDate = async () => {
   try {
-    const date = new Date(time);
-    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')} ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+    if (lessonSettings.openingDate) {
+      await store.putString('CUSTOM_OPENING_DATE', lessonSettings.openingDate);
+      ElMessage.success('开学日期已保存');
+    }
   } catch (error) {
-    return '未知';
+    console.error('保存开学日期失败:', error);
+    ElMessage.error('保存开学日期失败');
   }
+};
+
+// 保存时间段设置
+const saveTimeSettings = async () => {
+  try {
+    const timeData = lessonSettings.timeSlots.map(slot => ({
+      start: formatTimeToString(slot.start),
+      end: formatTimeToString(slot.end)
+    }));
+
+    await store.putObject('LESSON_TIME_SETTINGS', timeData);
+    ElMessage.success('时间设置已保存');
+  } catch (error) {
+    console.error('保存时间设置失败:', error);
+    ElMessage.error('保存时间设置失败');
+  }
+};
+
+// 添加时间段
+const addTimeSlot = () => {
+  lessonSettings.timeSlots.push({ start: null, end: null });
+};
+
+// 移除时间段
+const removeTimeSlot = (index) => {
+  if (lessonSettings.timeSlots.length > 10) {
+    lessonSettings.timeSlots.splice(index, 1);
+    saveTimeSettings();
+  }
+};
+
+// 重置时间设置
+const resetTimeSettings = async () => {
+  try {
+    await ElMessageBox.confirm('确定要恢复默认时间设置吗？', '提示', {
+      confirmButtonText: '确定',
+      cancelButtonText: '取消',
+      type: 'warning'
+    });
+
+    const defaultSlots = [
+      { start: '08:00', end: '08:50' },
+      { start: '09:00', end: '09:50' },
+      { start: '10:10', end: '11:00' },
+      { start: '11:10', end: '12:00' },
+      { start: '14:00', end: '14:50' },
+      { start: '15:00', end: '15:50' },
+      { start: '16:10', end: '17:00' },
+      { start: '17:10', end: '18:00' },
+      { start: '19:00', end: '19:50' },
+      { start: '20:00', end: '20:50' }
+    ];
+
+    lessonSettings.timeSlots = defaultSlots.map(slot => ({
+      start: createTimeDate(slot.start),
+      end: createTimeDate(slot.end)
+    }));
+
+    await saveTimeSettings();
+    ElMessage.success('已恢复默认课程时间设置');
+  } catch (error) {
+    if (error === 'cancel') return;
+    console.error('重置时间设置失败:', error);
+  }
+};
+
+// 跳转登录
+const goToLogin = (type) => {
+  router.push(`/login/${type}`);
 };
 
 // 清除账号
 const clearAccount = async (type) => {
   try {
     if (type === 'eas') {
+      await authService.logoutEas();
       await store.remove('EAS_ACCOUNT');
       await store.remove('EAS_PASSWORD');
-      await store.remove('EA_HOST');
-      await store.remove('EAS_AUTO_LOGIN');
-      authService.logoutEas();
-
       accountInfo.eas.username = '';
-      accountInfo.eas.entranceYear = '';
       accountInfo.eas.isLoggedIn = false;
-
-      ElMessage.success('已清除教务系统账号');
-    } else if (type === 'ipass') {
+    } else {
+      await authService.logoutIpass();
       await store.remove('IPASS_ACCOUNT');
       await store.remove('IPASS_PASSWORD');
-      await store.remove('IPASS_AUTO_LOGIN');
-      authService.logoutIpass();
-
       accountInfo.ipass.username = '';
       accountInfo.ipass.isLoggedIn = false;
-
-      ElMessage.success('已清除智慧济大账号');
     }
+    ElMessage.success('已清除登录信息');
   } catch (error) {
-    console.error(`清除${type}账号失败:`, error);
-    ElMessage.error(`清除${type}账号失败`);
-  }
-};
-
-// 跳转到登录页面
-const goToLogin = (type) => {
-  if (type === 'eas') {
-    router.push('/login/eas');
-  } else if (type === 'ipass') {
-    router.push('/login/ipass');
+    console.error('清除账号失败:', error);
+    ElMessage.error('清除失败');
   }
 };
 
 // 刷新数据
-const refreshData = (dataType) => {
-  if (dataType === 'lessonTable') {
-    router.push('/eas/lesson-table');
-  } else if (dataType === 'marks') {
-    router.push('/eas/marks');
-  } else if (dataType === 'notices') {
-    router.push('/eas/notice');
-  } else if (dataType === 'exams') {
-    router.push('/eas/exams');
-  }
+const refreshData = (type) => {
+  const routes = {
+    lessonTable: '/eas/lesson-table',
+    marks: '/eas/marks',
+    notices: '/home',
+    exams: '/eas/exam'
+  };
+  router.push(routes[type] || '/home');
 };
 
 // 清除数据
-const clearData = async (dataType) => {
+const clearData = async (type) => {
   try {
-    if (dataType === 'lessonTable') {
-      await store.remove('lesson_table');
-      await store.remove('lesson_table_info');
-      dataStatus.lessonTable = null;
-      ElMessage.success('已清除课表数据');
-    } else if (dataType === 'marks') {
-      for (let i = 0; i < 8; i++) {
-        await store.remove(`marks_${i}`);
-      }
-      await store.remove('MARKS_LAST_UPDATE');
-      dataStatus.marks = null;
-      ElMessage.success('已清除成绩数据');
-    } else if (dataType === 'notices') {
-      await store.remove('eas_notices');
-      await store.remove('NOTICES_LAST_UPDATE');
-      dataStatus.notices = null;
-      ElMessage.success('已清除通知数据');
-    } else if (dataType === 'exams') {
-      for (let i = 0; i < 8; i++) {
-        await store.remove(`exams_${i}`);
-      }
-      await store.remove('EXAMS_LAST_UPDATE');
-      dataStatus.exams = null;
-      ElMessage.success('已清除考试数据');
+    switch (type) {
+      case 'lessonTable':
+        await store.remove('lesson_table');
+        await store.remove('lesson_table_info');
+        dataStatus.lessonTable = null;
+        break;
+      case 'marks':
+        for (let i = 0; i < 8; i++) {
+          await store.remove(`marks_${i}`);
+        }
+        dataStatus.marks = null;
+        break;
+      case 'notices':
+        await store.remove('eas_notices');
+        dataStatus.notices = null;
+        break;
+      case 'exams':
+        for (let i = 0; i < 8; i++) {
+          await store.remove(`exams_${i}`);
+        }
+        dataStatus.exams = null;
+        break;
     }
+    ElMessage.success('数据已清除');
   } catch (error) {
-    console.error(`清除${dataType}数据失败:`, error);
-    ElMessage.error(`清除${dataType}数据失败`);
+    console.error('清除数据失败:', error);
+    ElMessage.error('清除失败');
   }
 };
 
 // 清除所有数据
 const clearAllData = async () => {
   try {
-    // 显示确认对话框
-    await ElMessageBox.confirm(
-        '此操作将清除所有本地数据，包括账号信息、课表、成绩等，确定要继续吗？',
-        '警告',
-        {
-          confirmButtonText: '确定',
-          cancelButtonText: '取消',
-          type: 'warning'
-        }
-    );
-
-    // 清除所有数据
-    await store.clear();
-
-    // 重置状态
-    accountInfo.eas.username = '';
-    accountInfo.eas.entranceYear = '';
-    accountInfo.eas.isLoggedIn = false;
-    accountInfo.ipass.username = '';
-    accountInfo.ipass.isLoggedIn = false;
-
-    dataStatus.lessonTable = null;
-    dataStatus.marks = null;
-    dataStatus.notices = null;
-    dataStatus.exams = null;
-
-    // 登出账号
-    authService.logoutAll();
-
-    ElMessage.success('已清除所有数据');
-
-    // 回到首页
-    router.push('/');
+    await clearData('lessonTable');
+    await clearData('marks');
+    await clearData('notices');
+    await clearData('exams');
+    ElMessage.success('所有数据已清除');
   } catch (error) {
-    if (error === 'cancel') {
-      return;
-    }
     console.error('清除所有数据失败:', error);
-    ElMessage.error('清除所有数据失败');
+    ElMessage.error('清除失败');
   }
 };
 
-// 检查应用更新
+// 格式化时间
+const formatTime = (time) => {
+  if (!time) return '未知';
+  try {
+    const date = new Date(time);
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')} ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+  } catch (e) {
+    return '未知';
+  }
+};
+
+// 检查更新
 const checkUpdate = async () => {
   try {
-    // 检查是否在Electron环境中运行
-    if (!window.ipcRenderer) {
-      ElMessage.info('当前环境不支持自动检查更新');
-      return;
-    }
-
-    // 显示正在检查的提示信息
     ElMessage.info('正在检查更新...');
-
-    // 调用主进程检查GitHub上的最新版本
-    const result = await window.ipcRenderer.invoke('check-github-release');
-
-    // 如果检查过程中出现错误
-    if (result.error) {
-      ElMessage.error(`检查更新失败: ${result.error}`);
+    
+    const result = await window.ipcRenderer?.invoke('check-update');
+    
+    if (!result) {
+      ElMessage.warning('无法检查更新，请稍后再试');
       return;
     }
 
-    // 如果有新版本可用
     if (result.hasUpdate) {
-      // 显示确认对话框，询问用户是否要更新
-      ElMessageBox.confirm(
-          `发现新版本 v${result.latestVersion}，当前版本 v${result.currentVersion}，是否前往下载页面？`,
-          '检查更新',
+      await ElMessageBox.confirm(
+          `发现新版本 ${result.latestVersion}，当前版本 ${appVersion.value}，是否前往下载？`,
+          '发现新版本',
           {
-            confirmButtonText: '前往下载',      // 确认按钮文本
-            cancelButtonText: '暂不更新',       // 取消按钮文本
-            type: 'info',                      // 对话框类型
-            dangerouslyUseHTMLString: true,    // 允许HTML内容
-            // 构建包含版本信息和更新说明的HTML消息
+            confirmButtonText: '前往下载',
+            cancelButtonText: '暂不更新',
+            type: 'info',
+            dangerouslyUseHTMLString: true,
             message: `<div>
-            <p>发现新版本 v${result.latestVersion}，当前版本 v${result.currentVersion}</p>
-            <p>更新内容:</p>
-            <div style="max-height: 200px; overflow-y: auto; background: #f5f7fa; padding: 10px; border-radius: 4px;">
-              ${result.releaseNotes ? result.releaseNotes.replace(/\n/g, '<br>') : '无详细说明'}
-            </div>
-          </div>`
+              <p>发现新版本 <strong>${result.latestVersion}</strong></p>
+              <p>当前版本: ${appVersion.value}</p>
+              <div style="margin-top: 10px; padding: 10px; background: #f5f5f5; border-radius: 4px; max-height: 200px; overflow-y: auto;">
+                ${result.releaseNotes ? result.releaseNotes.replace(/\n/g, '<br>') : '无详细说明'}
+              </div>
+            </div>`
           }
       ).then(() => {
-        // 用户点击"前往下载"，在系统默认浏览器中打开release页面
         window.ipcRenderer.invoke('open-external-url', result.releaseUrl);
-      }).catch(() => {
-        // 用户点击"暂不更新"，不执行任何操作
-      });
+      }).catch(() => {});
     } else {
-      // 已经是最新版本
       ElMessage.success('当前已是最新版本');
     }
   } catch (error) {
-    // 处理其他可能的错误
     console.error('检查更新失败:', error);
     ElMessage.error('检查更新失败: ' + error.message);
   }
@@ -831,7 +725,6 @@ const checkUpdate = async () => {
 // 打开项目主页
 const openProject = () => {
   const projectUrl = 'https://github.com/shizhihen2003/UJN-Assistant-Electron';
-
   if (window.ipcRenderer) {
     window.ipcRenderer.invoke('open-external-url', projectUrl);
   } else {
@@ -839,11 +732,9 @@ const openProject = () => {
   }
 };
 
-
 // 打开帮助文档
 const openHelp = () => {
   const helpUrl = 'https://github.com/shizhihen2003/UJN-Assistant-Electron/blob/main/README.md';
-
   if (window.ipcRenderer) {
     window.ipcRenderer.invoke('open-external-url', helpUrl);
   } else {
@@ -963,14 +854,9 @@ onMounted(async () => {
   margin-bottom: 20px;
 }
 
-.app-logo img {
-  width: 80px;
-  height: 80px;
-}
-
 .app-details {
   flex: 1;
-  min-width: 0; /* 确保文字容器不会溢出 */
+  min-width: 0;
 }
 
 .app-details h2 {

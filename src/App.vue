@@ -69,10 +69,10 @@
               <el-icon><DataLine /></el-icon>
               <span>成绩查询</span>
             </el-menu-item>
-<!--            <el-menu-item index="/eas/academic">-->
-<!--              <el-icon><Collection /></el-icon>-->
-<!--              <span>学业查询</span>-->
-<!--            </el-menu-item>-->
+            <!--            <el-menu-item index="/eas/academic">-->
+            <!--              <el-icon><Collection /></el-icon>-->
+            <!--              <span>学业查询</span>-->
+            <!--            </el-menu-item>-->
             <el-menu-item index="/eas/exams">
               <el-icon><AlarmClock /></el-icon>
               <span>考试查询</span>
@@ -148,7 +148,7 @@
               </div>
               <template #dropdown>
                 <el-dropdown-menu>
-<!--                  <el-dropdown-item>个人信息</el-dropdown-item>-->
+                  <!--                  <el-dropdown-item>个人信息</el-dropdown-item>-->
                   <el-dropdown-item divided @click="handleLogout">退出登录</el-dropdown-item>
                 </el-dropdown-menu>
               </template>
@@ -175,10 +175,13 @@
 
         <div class="status-bar">
           <div class="status-message">{{ statusMessage }}</div>
-          <div class="version">v2.0.1</div>
+          <div class="version">v3.0.0</div>
         </div>
       </div>
     </div>
+
+    <!-- 首次启动学校选择对话框 -->
+    <SchoolSetupDialog ref="schoolSetupDialog" @completed="onSchoolSetupCompleted" />
   </div>
 </template>
 
@@ -189,11 +192,17 @@ import { useRoute } from 'vue-router'
 import {
   HomeFilled, Calendar, School, User, Setting, Monitor, Notebook,
   Bell, Document, DataLine, Collection, AlarmClock, Key, Connection,
-  Timer, CaretBottom, ArrowLeft, ArrowRight, Minus, FullScreen, Close, OfficeBuilding
+  Timer, CaretBottom, ArrowLeft, ArrowRight, Minus, FullScreen, Close, OfficeBuilding,
+  ChatDotRound
 } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import zhCn from 'element-plus/es/locale/lang/zh-cn'
 import authService from '@/services/authService'
+import store from '@/utils/store'
+import SchoolSetupDialog from '@/components/SchoolSetupDialog.vue'
+
+// 学校选择对话框引用
+const schoolSetupDialog = ref(null)
 
 // 侧边栏状态
 const isSidebarCollapsed = ref(false)
@@ -314,6 +323,29 @@ const updateUserInfo = async () => {
   }
 }
 
+// 检查是否首次启动
+const checkFirstRun = async () => {
+  try {
+    const setupCompleted = await store.getBoolean('SCHOOL_SETUP_COMPLETED', false);
+
+    if (!setupCompleted) {
+      // 首次启动，显示学校选择对话框
+      setTimeout(() => {
+        schoolSetupDialog.value?.show();
+      }, 500);
+    }
+  } catch (error) {
+    console.error('检查首次启动失败:', error);
+  }
+}
+
+// 学校设置完成回调
+const onSchoolSetupCompleted = (schoolId) => {
+  console.log('学校设置完成:', schoolId);
+  // 刷新页面以应用新的学校配置
+  window.location.reload();
+}
+
 // 生命周期钩子
 onMounted(async () => {
   // 初始化侧边栏状态
@@ -323,6 +355,9 @@ onMounted(async () => {
   // 初始化时间并设置定时器
   updateTime()
   setInterval(updateTime, 60000) // 每分钟更新
+
+  // 检查是否首次启动
+  await checkFirstRun();
 
   // 检查登录状态 - 在应用启动时立即检查
   try {
@@ -365,34 +400,6 @@ onMounted(async () => {
     statusMessage.value = '网络连接已断开'
   })
 })
-
-// 监听路由变化，更新用户信息
-watch(
-    () => route.path,
-    () => {
-      updateUserInfo();
-    }
-)
-
-// 查看用户个人信息
-const viewUserInfo = () => {
-  // 此处可以添加查看个人信息的逻辑
-  // 比如打开个人信息页面或显示个人信息弹窗
-  ElMessage.info('个人信息功能暂未实现');
-}
-
-// 监听路由变化更新页面标题
-watch(
-    () => route.meta.title,
-    (newTitle) => {
-      if (newTitle) {
-        document.title = `${newTitle} - UJN Assistant`
-      } else {
-        document.title = 'UJN Assistant'
-      }
-    },
-    { immediate: true }
-)
 </script>
 
 <style>
@@ -447,7 +454,9 @@ body {
   width: 100vw;
   overflow: hidden;
 }
+</style>
 
+<style scoped>
 /* 标题栏样式 */
 .title-bar {
   height: 38px;
@@ -456,7 +465,7 @@ body {
   justify-content: space-between;
   background-color: var(--primary-color);
   color: white;
-  -webkit-app-region: drag; /* 使标题栏可拖动 */
+  -webkit-app-region: drag;
   padding: 0 15px;
 }
 
@@ -478,7 +487,7 @@ body {
 
 .window-controls {
   display: flex;
-  -webkit-app-region: no-drag; /* 控制按钮不可拖动 */
+  -webkit-app-region: no-drag;
 }
 
 .control-button {
@@ -493,7 +502,7 @@ body {
 }
 
 .control-button:hover {
-  background-color: rgba(255, 255, 255, 0.1);
+  background-color: rgba(255, 255, 255, 0.2);
 }
 
 .control-button.close:hover {

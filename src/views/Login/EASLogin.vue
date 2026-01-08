@@ -1,7 +1,7 @@
-<!-- src/views/Login/EASLogin.vue 增强版 -->
+<!-- src/views/Login/EASLogin.vue 支持多学校版本 -->
 <template>
   <div class="login-container">
-    <h1 class="page-title">教务系统登录</h1>
+    <h1 class="page-title">{{ schoolName }}教务系统登录</h1>
 
     <el-card class="login-card" v-loading="loading">
       <el-form
@@ -43,7 +43,7 @@
           <div class="form-tip">通常是学号的前四位</div>
         </el-form-item>
 
-        <el-form-item label="教务节点">
+        <el-form-item label="教务节点" v-if="eaNodes.length > 1">
           <el-select v-model="loginForm.nodeIndex" placeholder="请选择教务节点">
             <el-option
                 v-for="(node, index) in eaNodes"
@@ -95,7 +95,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted, watch } from 'vue'
+import { ref, reactive, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { User, Lock, Key, RefreshLeft, Connection } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
@@ -113,8 +113,16 @@ const loginStatus = ref(null)
 const serverStatus = ref(null)
 const currentYear = new Date().getFullYear()
 
-// 教务节点列表
-const eaNodes = UJNAPI.EA_HOSTS
+// 学校信息 - 使用ref，在mounted时获取
+const schoolName = ref('教务')
+const eaNodes = ref([])
+
+// 刷新学校配置
+const refreshSchoolConfig = () => {
+  schoolName.value = UJNAPI.SCHOOL_NAME || '教务'
+  eaNodes.value = UJNAPI.EA_HOSTS || []
+  console.log(`[EASLogin] 当前学校: ${schoolName.value}, 节点数: ${eaNodes.value.length}`)
+}
 
 // 登录表单
 const loginForm = reactive({
@@ -153,8 +161,15 @@ const rules = {
 // 检查教务服务器连接状态
 const checkServerStatus = async () => {
   try {
-    const host = eaNodes[loginForm.nodeIndex]
-    const url = `http://${host}/jwglxt/xtgl/login_slogin.html`
+    const hosts = eaNodes.value
+    if (!hosts || hosts.length === 0) {
+      serverStatus.value = { message: '未配置教务节点', type: 'error' }
+      return
+    }
+
+    const host = hosts[loginForm.nodeIndex] || hosts[0]
+    const loginApi = UJNAPI.EA_LOGIN || 'jwglxt/xtgl/login_slogin.html'
+    const url = `http://${host}/${loginApi}`
 
     loading.value = true
     serverStatus.value = { message: '正在检查教务服务器状态...', type: 'info' }
@@ -191,7 +206,8 @@ const handleLogin = async () => {
     loginStatus.value = { success: false, message: '正在登录...' };
 
     // 检查教务节点
-    if (loginForm.nodeIndex >= 0 && loginForm.nodeIndex < eaNodes.length) {
+    const hosts = eaNodes.value
+    if (loginForm.nodeIndex >= 0 && loginForm.nodeIndex < hosts.length) {
       // 设置主机
       authService.easAccount.changeHost(loginForm.nodeIndex);
     }
@@ -202,10 +218,10 @@ const handleLogin = async () => {
     // 执行登录
     console.log("开始登录...");
     console.log(`使用账号: ${loginForm.username}, 节点索引: ${loginForm.nodeIndex}, 入学年份: ${loginForm.entranceYear}`);
+    console.log(`当前学校: ${UJNAPI.SCHOOL_NAME}, 节点: ${hosts[loginForm.nodeIndex]}`);
 
     // 确保保存入学年份到持久化存储
     try {
-      // 在登录前先保存入学年份到本地存储
       await store.putInt('ENTRANCE_TIME', loginForm.entranceYear);
       console.log(`入学年份 ${loginForm.entranceYear} 已保存到本地存储`);
     } catch (e) {
@@ -306,6 +322,9 @@ watch(() => loginForm.nodeIndex, () => {
 
 // 加载已保存的数据
 onMounted(async () => {
+  // 刷新学校配置
+  refreshSchoolConfig()
+  
   try {
     // 检查是否已登录
     const status = authService.getLoginStatus()
