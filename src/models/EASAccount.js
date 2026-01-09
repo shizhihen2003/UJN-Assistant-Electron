@@ -53,9 +53,11 @@ class EASAccount extends Account {
             throw new Error("初始化失败：无法获取有效的教务主机地址");
         }
 
-        // 根据学校配置决定使用HTTP还是HTTPS
-        const scheme = UJNAPI.EA_USE_HTTPS ? 'https' : 'http';
-        console.log(`初始化 EASAccount: 使用主机 ${host}, 协议: ${scheme}`);
+        // 根据节点配置决定使用HTTP还是HTTPS
+        // 使用 getHostHttps 获取特定节点的协议配置
+        const useHttps = UJNAPI.getHostHttps(hostIndex);
+        const scheme = useHttps ? 'https' : 'http';
+        console.log(`初始化 EASAccount: 使用主机 ${host}, 节点索引: ${hostIndex}, 协议: ${scheme}`);
 
         super(
             host,
@@ -83,6 +85,25 @@ class EASAccount extends Account {
         } catch (e) {
             console.error("加载VPN设置失败，使用默认值false", e);
             EASAccount.useVpn = false;
+        }
+
+        // 路径前缀（如 jwglxt/），通过探测自动获取
+        this._pathPrefix = null;
+        this._pathPrefixInitialized = false;  // 标记是否已完成初始化
+        this._pathPrefixPending = null;  // 正在进行的初始化Promise（用于处理并发调用）
+        
+        // 尝试从localStorage加载已保存的路径前缀
+        try {
+            const savedPrefix = localStorage.getItem('ujn_assistant_EA_PATH_PREFIX');
+            if (savedPrefix !== null) {
+                this._pathPrefix = savedPrefix;
+                this._pathPrefixInitialized = true;
+                console.log(`从localStorage加载路径前缀: "${this._pathPrefix}"`);
+            } else {
+                console.log("localStorage中没有保存的路径前缀，需要探测");
+            }
+        } catch (e) {
+            console.error("加载路径前缀失败", e);
         }
 
         // 验证ipc模块是否可用
@@ -135,6 +156,13 @@ class EASAccount extends Account {
             console.log('重置 EASAccount 单例实例');
             EASAccount.instance.clearCookies();
             EASAccount.instance = null;
+        }
+        // 清除路径前缀缓存，以便新学校重新探测
+        try {
+            localStorage.removeItem('ujn_assistant_EA_PATH_PREFIX');
+            console.log('已清除路径前缀缓存');
+        } catch (e) {
+            console.error('清除路径前缀缓存失败', e);
         }
     }
 
@@ -201,23 +229,30 @@ class EASAccount extends Account {
             throw new Error("主机未定义，无法构建URL");
         }
 
+        // 如果有路径前缀且路径不为空，自动添加前缀
+        let fullPath = path || '';
+        if (this._pathPrefix && fullPath && !fullPath.startsWith(this._pathPrefix)) {
+            // 检查路径是否已经是完整路径（包含前缀）
+            // 如果路径以 xtgl/、kbcx/、cjcx/ 等模块名开头，说明需要添加前缀
+            const needsPrefix = /^(xtgl|kbcx|kbdy|cjcx|kwgl|xsxy|cdjy|xsxxxggl)\//.test(fullPath);
+            if (needsPrefix) {
+                fullPath = this._pathPrefix + fullPath;
+                console.log(`自动添加路径前缀: ${path} -> ${fullPath}`);
+            }
+        }
+
         // 构建原始URL
-        const originalUrl = `${this.scheme}://${this.host}/${path || ''}`;
+        // VPN模式下强制使用HTTP，因为VPN代理的内网地址通常是HTTP
+        const urlScheme = EASAccount.useVpn ? 'http' : this.scheme;
+        const originalUrl = `${urlScheme}://${this.host}/${fullPath}`;
 
         // 如果使用VPN，通过VPN加密URL
         if (EASAccount.useVpn) {
             try {
                 console.log(`构建VPN URL，原始URL: ${originalUrl}`);
+                console.log(`VPN模式使用HTTP协议（内网地址）`);
 
-                // 检查是否是教务系统URL
-                if (this.host.includes('jwgl') && this.host.includes('ujn.edu.cn')) {
-                    // 对于教务系统，使用固定的VPN前缀
-                    const vpnUrl = `https://webvpn.ujn.edu.cn/http/77726476706e69737468656265737421fae046906925625e300d8db9d6562d/${path || ''}`;
-                    console.log(`使用固定前缀构建教务系统VPN URL: ${vpnUrl}`);
-                    return vpnUrl;
-                }
-
-                // 使用VpnEncodeUtils加密URL
+                // 使用VpnEncodeUtils加密URL（适用于所有学校）
                 const vpnUrl = VpnEncodeUtils.encryptUrl(originalUrl);
                 console.log(`加密后的VPN URL: ${vpnUrl}`);
                 return vpnUrl;
@@ -229,6 +264,320 @@ class EASAccount extends Account {
 
         // 不使用VPN，直接返回普通URL
         return originalUrl;
+    }
+
+    /**
+     * 从URL中提取路径前缀
+     * 例如: https://jwgl.ujn.edu.cn/jwglxt/xtgl/login_slogin.html -> jwglxt/
+     * 例如: https://jwglxt.jcut.edu.cn/xtgl/login_slogin.html -> (空字符串)
+     * 例如: https://jwgl.ujn.edu.cn/jwglxt -> jwglxt/（meta refresh重定向）
+     * @param {string} url 完整URL或路径
+     * @returns {string} 路径前缀
+     */
+    extractPathPrefix(url) {
+        try {
+            let pathname;
+            
+            // 处理完整URL或路径
+            if (url.startsWith('http')) {
+                const urlObj = new URL(url);
+                pathname = urlObj.pathname;
+            } else if (url.startsWith('/')) {
+                pathname = url;
+            } else {
+                pathname = '/' + url;
+            }
+            
+            console.log(`解析路径: ${pathname}`);
+            
+            // 方法1: 查找 /xtgl/ 的位置
+            const xtglIndex = pathname.indexOf('/xtgl/');
+            if (xtglIndex > 0) {
+                // 提取 /xtgl/ 之前的部分作为前缀
+                const prefix = pathname.substring(1, xtglIndex + 1); // 去掉开头的 /
+                console.log(`从URL提取路径前缀(xtgl): "${prefix}" (URL: ${url})`);
+                return prefix;
+            } else if (xtglIndex === 0) {
+                // xtgl 就在根路径，没有前缀
+                console.log(`URL没有路径前缀(xtgl在根路径): ${url}`);
+                return '';
+            }
+            
+            // 方法2: 尝试其他模块路径
+            const modulePatterns = ['/kbcx/', '/cjcx/', '/kwgl/', '/cdjy/', '/xsxy/', '/xsxxxggl/'];
+            for (const pattern of modulePatterns) {
+                const index = pathname.indexOf(pattern);
+                if (index > 0) {
+                    const prefix = pathname.substring(1, index + 1);
+                    console.log(`从URL提取路径前缀(模块${pattern}): "${prefix}"`);
+                    return prefix;
+                } else if (index === 0) {
+                    return '';
+                }
+            }
+            
+            // 方法3: 处理 /jwglxt 这种简单重定向路径
+            // 如果路径是 /xxx 格式（单一路径段），说明 xxx 可能就是前缀
+            const simplePathMatch = pathname.match(/^\/([a-zA-Z0-9_-]+)\/?$/);
+            if (simplePathMatch) {
+                const prefix = simplePathMatch[1] + '/';
+                console.log(`从简单路径提取前缀: "${prefix}" (路径: ${pathname})`);
+                return prefix;
+            }
+            
+            console.log(`无法从URL提取路径前缀: ${url}`);
+            return null;
+        } catch (error) {
+            console.error(`解析URL失败: ${error.message}`);
+            return null;
+        }
+    }
+
+    /**
+     * 探测并设置路径前缀
+     * 通过访问教务系统首页，获取重定向后的URL来确定路径前缀
+     * @returns {Promise<string|null>} 路径前缀，失败返回null
+     */
+    async detectPathPrefix() {
+        try {
+            console.log('开始探测教务系统路径前缀...');
+            
+            // 构建基础URL（不带路径前缀）
+            // VPN模式下强制使用HTTP，因为VPN代理的内网地址通常是HTTP
+            const urlScheme = EASAccount.useVpn ? 'http' : this.scheme;
+            const baseUrl = `${urlScheme}://${this.host}/`;
+            console.log(`探测URL: ${baseUrl}`);
+            console.log(`当前协议: ${this.scheme}, 主机: ${this.host}, VPN协议: ${urlScheme}`);
+            console.log(`UJNAPI.EA_USE_HTTPS: ${UJNAPI.EA_USE_HTTPS}`);
+            console.log(`UJNAPI.DEFAULT_PATH_PREFIX: ${UJNAPI.DEFAULT_PATH_PREFIX}`);
+            
+            const getMethod = EASAccount.useVpn ? ipc.ipassGet : ipc.easGet;
+            
+            // 发送请求，允许重定向
+            const response = await getMethod(baseUrl, {
+                followRedirect: true,
+                maxRedirects: 5
+            });
+            
+            console.log(`探测响应: success=${response.success}, hasData=${!!response.data}, hasHeaders=${!!response.headers}`);
+            
+            // 放宽检查条件：只要有响应数据或头信息就尝试解析
+            if (response.success || response.data || response.headers) {
+                // 尝试从响应的最终URL或响应内容中提取前缀
+                let detectedPrefix = null;
+                
+                // 方法1: 从响应的最终URL提取
+                if (response.finalUrl) {
+                    console.log(`尝试方法1: finalUrl = ${response.finalUrl}`);
+                    detectedPrefix = this.extractPathPrefix(response.finalUrl);
+                    if (detectedPrefix !== null) {
+                        console.log(`方法1成功: 从finalUrl提取前缀 "${detectedPrefix}"`);
+                    }
+                }
+                
+                // 方法2: 从响应内容中的重定向脚本提取
+                if (detectedPrefix === null && response.data) {
+                    // 处理不同类型的响应数据
+                    let content = '';
+                    if (typeof response.data === 'string') {
+                        content = response.data;
+                    } else if (typeof response.data === 'object') {
+                        // 可能是序列化的Buffer对象 {type: 'Buffer', data: [...]}
+                        if (response.data.type === 'Buffer' && Array.isArray(response.data.data)) {
+                            try {
+                                content = String.fromCharCode.apply(null, response.data.data);
+                            } catch (e) {
+                                content = JSON.stringify(response.data);
+                            }
+                        } else {
+                            content = JSON.stringify(response.data);
+                        }
+                    }
+                    
+                    console.log(`响应内容长度: ${content.length}, 内容: ${content.substring(0, 300)}`);
+                    console.log(`响应数据类型: ${typeof response.data}`);
+                    
+                    // 多种匹配模式（按优先级排序）
+                    const patterns = [
+                        // 最简单直接的 url= 匹配（meta refresh）
+                        /url=([^\s"'>]+)/i,
+                        // window.location 变体
+                        /window\.location\s*=\s*["']([^"']+)["']/,
+                        /window\.location\.href\s*=\s*["']([^"']+)["']/,
+                        /location\.href\s*=\s*["']([^"']+)["']/,
+                        /location\s*=\s*["']([^"']+)["']/,
+                        // href/action 属性
+                        /href\s*=\s*["'](\/[^"']*\/xtgl\/[^"']+)["']/,
+                        /action\s*=\s*["'](\/[^"']*\/xtgl\/[^"']+)["']/
+                    ];
+                    
+                    for (const pattern of patterns) {
+                        const match = content.match(pattern);
+                        if (match) {
+                            let redirectPath = match[1];
+                            console.log(`从页面内容中发现重定向路径: ${redirectPath}`);
+                            
+                            // 确保路径以/开头
+                            if (!redirectPath.startsWith('/') && !redirectPath.startsWith('http')) {
+                                redirectPath = '/' + redirectPath;
+                            }
+                            
+                            // 构建完整URL来提取前缀
+                            const fullRedirectUrl = redirectPath.startsWith('http') 
+                                ? redirectPath 
+                                : `${this.scheme}://${this.host}${redirectPath}`;
+                            detectedPrefix = this.extractPathPrefix(fullRedirectUrl);
+                            
+                            if (detectedPrefix !== null) {
+                                console.log(`方法2成功: 从页面脚本提取前缀 "${detectedPrefix}"`);
+                                break;
+                            }
+                        }
+                    }
+                }
+                
+                // 方法3: 从Location响应头提取
+                if (detectedPrefix === null && response.headers) {
+                    const location = response.headers['location'] || response.headers['Location'];
+                    if (location) {
+                        const fullLocation = location.startsWith('http') ? location : `${this.scheme}://${this.host}${location}`;
+                        detectedPrefix = this.extractPathPrefix(fullLocation);
+                        if (detectedPrefix !== null) {
+                            console.log(`方法3成功: 从Location头提取前缀 "${detectedPrefix}"`);
+                        }
+                    }
+                }
+                
+                if (detectedPrefix !== null) {
+                    this._pathPrefix = detectedPrefix;
+                    // 保存到localStorage
+                    localStorage.setItem('ujn_assistant_EA_PATH_PREFIX', detectedPrefix);
+                    console.log(`路径前缀探测成功: "${detectedPrefix}"`);
+                    return detectedPrefix;
+                }
+            }
+            
+            // 探测失败，尝试使用配置文件中的默认前缀
+            console.warn('自动探测失败，尝试使用配置文件中的默认前缀');
+            const defaultPrefix = UJNAPI.DEFAULT_PATH_PREFIX;
+            console.log(`默认前缀值: "${defaultPrefix}", 类型: ${typeof defaultPrefix}`);
+            if (defaultPrefix !== undefined && defaultPrefix !== null) {
+                this._pathPrefix = defaultPrefix;
+                localStorage.setItem('ujn_assistant_EA_PATH_PREFIX', defaultPrefix);
+                console.log(`成功设置默认路径前缀: "${defaultPrefix}"`);
+                return defaultPrefix;
+            }
+            
+            console.warn('无法探测路径前缀，且配置文件中没有默认值');
+            // 最后兜底：设置为空字符串而不是null
+            this._pathPrefix = '';
+            return '';
+        } catch (error) {
+            console.error(`探测路径前缀失败: ${error.message}`);
+            
+            // 出错时也尝试使用默认前缀
+            const defaultPrefix = UJNAPI.DEFAULT_PATH_PREFIX;
+            if (defaultPrefix !== undefined && defaultPrefix !== null) {
+                this._pathPrefix = defaultPrefix;
+                localStorage.setItem('ujn_assistant_EA_PATH_PREFIX', defaultPrefix);
+                console.log(`探测出错，使用配置的默认路径前缀: "${defaultPrefix}"`);
+                return defaultPrefix;
+            }
+            
+            return null;
+        }
+    }
+
+    /**
+     * 确保路径前缀已初始化（异步方法）
+     * 优先级：localStorage缓存 > 自动探测 > 配置默认值 > 空字符串
+     * @returns {Promise<string>} 路径前缀
+     */
+    async ensurePathPrefix() {
+        // 如果已经初始化过，直接返回
+        if (this._pathPrefixInitialized && this._pathPrefix !== null) {
+            return this._pathPrefix;
+        }
+        
+        // 如果有正在进行的初始化，等待它完成
+        if (this._pathPrefixPending) {
+            console.log("ensurePathPrefix: 等待正在进行的初始化...");
+            return await this._pathPrefixPending;
+        }
+        
+        // 创建初始化Promise并保存引用（防止并发调用）
+        this._pathPrefixPending = this._doEnsurePathPrefix();
+        
+        try {
+            const result = await this._pathPrefixPending;
+            return result;
+        } finally {
+            // 初始化完成后清除pending状态
+            this._pathPrefixPending = null;
+        }
+    }
+    
+    /**
+     * 实际执行路径前缀初始化的内部方法
+     * @private
+     */
+    async _doEnsurePathPrefix() {
+        console.log("开始初始化路径前缀...");
+        
+        // 再次检查 localStorage（可能在其他地方被设置）
+        try {
+            const savedPrefix = localStorage.getItem('ujn_assistant_EA_PATH_PREFIX');
+            if (savedPrefix !== null) {
+                this._pathPrefix = savedPrefix;
+                this._pathPrefixInitialized = true;
+                console.log(`ensurePathPrefix: 从localStorage加载 "${this._pathPrefix}"`);
+                return this._pathPrefix;
+            }
+        } catch (e) {
+            console.error("读取localStorage失败", e);
+        }
+        
+        // 尝试探测
+        console.log("ensurePathPrefix: 开始探测路径前缀...");
+        const detected = await this.detectPathPrefix();
+        if (detected !== null) {
+            this._pathPrefixInitialized = true;
+            console.log(`ensurePathPrefix: 探测成功 "${detected}"`);
+            return detected;
+        }
+        
+        // 探测失败，使用配置的默认前缀（如果有）
+        const defaultPrefix = UJNAPI.DEFAULT_PATH_PREFIX;
+        if (defaultPrefix !== null && defaultPrefix !== undefined) {
+            this._pathPrefix = defaultPrefix;
+            localStorage.setItem('ujn_assistant_EA_PATH_PREFIX', defaultPrefix);
+            console.log(`ensurePathPrefix: 使用默认前缀 "${defaultPrefix}"`);
+        } else {
+            // 没有默认前缀（如自定义学校），使用空字符串
+            this._pathPrefix = '';
+            console.log("ensurePathPrefix: 无默认前缀，使用空字符串");
+        }
+        
+        this._pathPrefixInitialized = true;
+        return this._pathPrefix;
+    }
+
+    /**
+     * 设置路径前缀（手动设置或从配置加载）
+     * @param {string} prefix 路径前缀
+     */
+    setPathPrefix(prefix) {
+        this._pathPrefix = prefix || '';
+        localStorage.setItem('ujn_assistant_EA_PATH_PREFIX', this._pathPrefix);
+        console.log(`手动设置路径前缀: "${this._pathPrefix}"`);
+    }
+
+    /**
+     * 获取当前路径前缀
+     * @returns {string|null} 路径前缀
+     */
+    getPathPrefix() {
+        return this._pathPrefix;
     }
 
     /**
@@ -273,6 +622,10 @@ class EASAccount extends Account {
         try {
             console.log("检查教务系统登录状态, VPN模式:", EASAccount.useVpn);
             console.log("当前主机:", this.host);
+            
+            // 确保路径前缀已初始化（会自动探测或使用默认值）
+            await this.ensurePathPrefix();
+            console.log(`当前路径前缀: "${this._pathPrefix}"`);
 
             // 获取Cookie - 根据VPN模式选择不同的Cookie
             let cookies;
@@ -305,7 +658,7 @@ class EASAccount extends Account {
 
             // 准备请求头
             const headers = {
-                'Host': EASAccount.useVpn ? 'webvpn.ujn.edu.cn' : this.host,
+                'Host': EASAccount.useVpn ? UJNAPI.VPN_HOST : this.host,
                 'Proxy-Connection': 'keep-alive',
                 'Cache-Control': 'max-age=0',
                 'Upgrade-Insecure-Requests': '1',
@@ -442,6 +795,11 @@ class EASAccount extends Account {
                 // 目前先使用普通模式登录流程，后续可以扩展
             }
 
+            // 步骤0: 确保路径前缀已初始化
+            console.log('\n[步骤0] 初始化路径前缀');
+            await this.ensurePathPrefix();
+            console.log(`当前路径前缀: "${this._pathPrefix}"`);
+
             // 步骤1: 获取登录页面获取CSRF令牌
             const timestamp = new Date().getTime();
             console.log(`\n[步骤1] 获取登录页面和CSRF令牌 (${timestamp})`);
@@ -540,7 +898,7 @@ class EASAccount extends Account {
                     const logoutHeaders = {
                         'X-Requested-With': 'XMLHttpRequest',
                         'Referer': loginPageUrl,
-                        'Origin': EASAccount.useVpn ? 'https://webvpn.ujn.edu.cn' : this.getFullUrl('')
+                        'Origin': EASAccount.useVpn ? 'https://' + UJNAPI.VPN_HOST : this.getFullUrl('')
                     };
                     
                     const logoutResult = await postMethod(
@@ -683,7 +1041,7 @@ class EASAccount extends Account {
             const loginHeaders = {
                 'Content-Type': 'application/x-www-form-urlencoded',
                 'Referer': loginPageUrl,
-                'Origin': EASAccount.useVpn ? 'https://webvpn.ujn.edu.cn' : this.getFullUrl(''),
+                'Origin': EASAccount.useVpn ? 'https://' + UJNAPI.VPN_HOST : this.getFullUrl(''),
                 'Upgrade-Insecure-Requests': '1',
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
             };
@@ -797,7 +1155,7 @@ class EASAccount extends Account {
             console.log("使用已保存的Cookie进行验证:", savedCookies);
 
             const personalInfoHeaders = {
-                'Referer': EASAccount.useVpn ? 'https://webvpn.ujn.edu.cn' : this.getFullUrl(''),
+                'Referer': EASAccount.useVpn ? 'https://' + UJNAPI.VPN_HOST : this.getFullUrl(''),
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
             };
 
@@ -922,8 +1280,8 @@ class EASAccount extends Account {
 
             // 准备请求头
             const headers = {
-                'Host': EASAccount.useVpn ? 'webvpn.ujn.edu.cn' : this.host,
-                'Referer': EASAccount.useVpn ? 'https://webvpn.ujn.edu.cn' : this.getFullUrl(''),
+                'Host': EASAccount.useVpn ? UJNAPI.VPN_HOST : this.host,
+                'Referer': EASAccount.useVpn ? 'https://' + UJNAPI.VPN_HOST : this.getFullUrl(''),
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
                 'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8'
@@ -1091,7 +1449,7 @@ class EASAccount extends Account {
             // 准备请求头
             const headers = {
                 'Content-Type': 'application/x-www-form-urlencoded',
-                'Referer': EASAccount.useVpn ? 'https://webvpn.ujn.edu.cn' : this.getFullUrl(''),
+                'Referer': EASAccount.useVpn ? 'https://' + UJNAPI.VPN_HOST : this.getFullUrl(''),
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
             };
 
@@ -1302,7 +1660,7 @@ class EASAccount extends Account {
             // 准备请求头
             const headers = {
                 'Content-Type': 'application/x-www-form-urlencoded',
-                'Referer': EASAccount.useVpn ? 'https://webvpn.ujn.edu.cn' : this.getFullUrl(''),
+                'Referer': EASAccount.useVpn ? 'https://' + UJNAPI.VPN_HOST : this.getFullUrl(''),
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
             };
 
@@ -1396,7 +1754,7 @@ class EASAccount extends Account {
             // 准备请求头
             const headers = {
                 'Content-Type': 'application/x-www-form-urlencoded',
-                'Referer': EASAccount.useVpn ? 'https://webvpn.ujn.edu.cn' : this.getFullUrl(''),
+                'Referer': EASAccount.useVpn ? 'https://' + UJNAPI.VPN_HOST : this.getFullUrl(''),
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
             };
 

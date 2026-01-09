@@ -167,14 +167,15 @@ const checkServerStatus = async () => {
       return
     }
 
-    const host = hosts[loginForm.nodeIndex] || hosts[0]
-    const loginApi = UJNAPI.EA_LOGIN || 'jwglxt/xtgl/login_slogin.html'
-    // 根据学校配置决定协议
-    const scheme = UJNAPI.EA_USE_HTTPS ? 'https' : 'http'
-    const url = `${scheme}://${host}/${loginApi}`
-
     loading.value = true
     serverStatus.value = { message: '正在检查教务服务器状态...', type: 'info' }
+
+    // 确保路径前缀已初始化
+    await authService.easAccount.ensurePathPrefix()
+    
+    // 使用EASAccount的getFullUrl方法构建正确的URL（会自动添加路径前缀）
+    const url = authService.easAccount.getFullUrl(UJNAPI.EA_LOGIN)
+    console.log('[EASLogin] 检查服务器状态URL:', url)
 
     // 使用ipc直接发送请求检查状态
     const result = await ipc.easGet(url, { timeout: 5000 })

@@ -37,34 +37,36 @@ const PresetSchools = {
         },
         eas: {
             type: 'zhengfang_new',
+            defaultPathPrefix: 'jwglxt/',  // 默认路径前缀，自动探测失败时使用
+            // 节点列表：只有 jwgl.ujn.edu.cn 使用 HTTPS，其他节点使用 HTTP
             hosts: [
-                'jwgl.ujn.edu.cn',
-                'jwgl2.ujn.edu.cn',
-                'jwgl3.ujn.edu.cn',
-                'jwgl4.ujn.edu.cn',
-                'jwgl5.ujn.edu.cn',
-                'jwgl6.ujn.edu.cn',
-                'jwgl7.ujn.edu.cn',
-                'jwgl8.ujn.edu.cn',
-                'jwgl9.ujn.edu.cn'
+                { host: 'jwgl.ujn.edu.cn', https: true },
+                { host: 'jwgl2.ujn.edu.cn', https: false },
+                { host: 'jwgl3.ujn.edu.cn', https: false },
+                { host: 'jwgl4.ujn.edu.cn', https: false },
+                { host: 'jwgl5.ujn.edu.cn', https: false },
+                { host: 'jwgl6.ujn.edu.cn', https: false },
+                { host: 'jwgl7.ujn.edu.cn', https: false },
+                { host: 'jwgl8.ujn.edu.cn', https: false },
+                { host: 'jwgl9.ujn.edu.cn', https: false }
             ],
             apis: {
-                login: 'jwglxt/xtgl/login_slogin.html',
-                publicKey: 'jwglxt/xtgl/login_getPublicKey.html',
-                systemNotice: 'jwglxt/xtgl/index_cxDbsy.html?doType=query',
-                yearData: 'jwglxt/xtgl/index_cxAreaFive.html?localeKey=zh_CN&gnmkdm=index',
-                lessonTable: 'jwglxt/kbcx/xskbcx_cxXsgrkb.html',
-                classLessonTable: 'jwglxt/kbdy/bjkbdy_cxBjKb.html',
-                lessonTablePrint: 'jwglxt/kbdy/bjkbdy_cxBjkbdyIndex.html?gnmkdm=0&layout=default',
-                marks: 'jwglxt/cjcx/cjcx_cxDgXscj.html?doType=query',
-                markDetail: 'jwglxt/cjcx/cjcx_cxXsKccjList.html',
-                exam: 'jwglxt/kwgl/kscx_cxXsksxxIndex.html?doType=query',
-                academicPage: 'jwglxt/xsxy/xsxyqk_cxXsxyqkIndex.html?gnmkdm=N105515&layout=default',
-                academicInfo: 'jwglxt/xsxy/xsxyqk_cxJxzxjhxfyqFKcxx.html',
-                emptyRoom: 'jwglxt/cdjy/cdjy_cxKxcdlb.html?doType=query',
-                emptyRoomPage: 'jwglxt/cdjy/cdjy_cxKxcdlb.html?gnmkdm=N2155',
-                buildingList: 'jwglxt/cdjy/cdjy_cxXqjc.html?gnmkdm=N2155',
-                studentInfo: 'jwglxt/xsxxxggl/xsxxwh_cxCkDgxsxx.html?gnmkdm=N100801',
+                login: 'xtgl/login_slogin.html',
+                publicKey: 'xtgl/login_getPublicKey.html',
+                systemNotice: 'xtgl/index_cxDbsy.html?doType=query',
+                yearData: 'xtgl/index_cxAreaFive.html?localeKey=zh_CN&gnmkdm=index',
+                lessonTable: 'kbcx/xskbcx_cxXsgrkb.html',
+                classLessonTable: 'kbdy/bjkbdy_cxBjKb.html',
+                lessonTablePrint: 'kbdy/bjkbdy_cxBjkbdyIndex.html?gnmkdm=0&layout=default',
+                marks: 'cjcx/cjcx_cxDgXscj.html?doType=query',
+                markDetail: 'cjcx/cjcx_cxXsKccjList.html',
+                exam: 'kwgl/kscx_cxXsksxxIndex.html?doType=query',
+                academicPage: 'xsxy/xsxyqk_cxXsxyqkIndex.html?gnmkdm=N105515&layout=default',
+                academicInfo: 'xsxy/xsxyqk_cxJxzxjhxfyqFKcxx.html',
+                emptyRoom: 'cdjy/cdjy_cxKxcdlb.html?doType=query',
+                emptyRoomPage: 'cdjy/cdjy_cxKxcdlb.html?gnmkdm=N2155',
+                buildingList: 'cdjy/cdjy_cxXqjc.html?gnmkdm=N2155',
+                studentInfo: 'xsxxxggl/xsxxwh_cxCkDgxsxx.html?gnmkdm=N100801',
             }
         },
         campuses: [
@@ -97,24 +99,26 @@ const PresetSchools = {
         },
         eas: {
             type: 'zhengfang_new',
+            useHttps: true,
+            defaultPathPrefix: 'jwglxt/',  // 默认路径前缀
             hosts: ['jwxt.sdu.edu.cn'],
             apis: {
-                login: 'jwglxt/xtgl/login_slogin.html',
-                publicKey: 'jwglxt/xtgl/login_getPublicKey.html',
-                systemNotice: 'jwglxt/xtgl/index_cxDbsy.html?doType=query',
-                yearData: 'jwglxt/xtgl/index_cxAreaFive.html?localeKey=zh_CN&gnmkdm=index',
-                lessonTable: 'jwglxt/kbcx/xskbcx_cxXsgrkb.html',
-                classLessonTable: 'jwglxt/kbdy/bjkbdy_cxBjKb.html',
-                lessonTablePrint: 'jwglxt/kbdy/bjkbdy_cxBjkbdyIndex.html?gnmkdm=0&layout=default',
-                marks: 'jwglxt/cjcx/cjcx_cxDgXscj.html?doType=query',
-                markDetail: 'jwglxt/cjcx/cjcx_cxXsKccjList.html',
-                exam: 'jwglxt/kwgl/kscx_cxXsksxxIndex.html?doType=query',
-                academicPage: 'jwglxt/xsxy/xsxyqk_cxXsxyqkIndex.html?gnmkdm=N105515&layout=default',
-                academicInfo: 'jwglxt/xsxy/xsxyqk_cxJxzxjhxfyqFKcxx.html',
-                emptyRoom: 'jwglxt/cdjy/cdjy_cxKxcdlb.html?doType=query',
-                emptyRoomPage: 'jwglxt/cdjy/cdjy_cxKxcdlb.html?gnmkdm=N2155',
-                buildingList: 'jwglxt/cdjy/cdjy_cxXqjc.html?gnmkdm=N2155',
-                studentInfo: 'jwglxt/xsxxxggl/xsxxwh_cxCkDgxsxx.html?gnmkdm=N100801',
+                login: 'xtgl/login_slogin.html',
+                publicKey: 'xtgl/login_getPublicKey.html',
+                systemNotice: 'xtgl/index_cxDbsy.html?doType=query',
+                yearData: 'xtgl/index_cxAreaFive.html?localeKey=zh_CN&gnmkdm=index',
+                lessonTable: 'kbcx/xskbcx_cxXsgrkb.html',
+                classLessonTable: 'kbdy/bjkbdy_cxBjKb.html',
+                lessonTablePrint: 'kbdy/bjkbdy_cxBjkbdyIndex.html?gnmkdm=0&layout=default',
+                marks: 'cjcx/cjcx_cxDgXscj.html?doType=query',
+                markDetail: 'cjcx/cjcx_cxXsKccjList.html',
+                exam: 'kwgl/kscx_cxXsksxxIndex.html?doType=query',
+                academicPage: 'xsxy/xsxyqk_cxXsxyqkIndex.html?gnmkdm=N105515&layout=default',
+                academicInfo: 'xsxy/xsxyqk_cxJxzxjhxfyqFKcxx.html',
+                emptyRoom: 'cdjy/cdjy_cxKxcdlb.html?doType=query',
+                emptyRoomPage: 'cdjy/cdjy_cxKxcdlb.html?gnmkdm=N2155',
+                buildingList: 'cdjy/cdjy_cxXqjc.html?gnmkdm=N2155',
+                studentInfo: 'xsxxxggl/xsxxwh_cxCkDgxsxx.html?gnmkdm=N100801',
             }
         },
         campuses: [
@@ -162,7 +166,8 @@ const PresetSchools = {
             // 荆楚理工使用HTTPS，单节点
             hosts: ['jwglxt.jcut.edu.cn'],
             useHttps: true,  // 标记使用HTTPS
-            // 注意：荆楚理工学院的API路径不包含jwglxt前缀！
+            defaultPathPrefix: '',  // 荆楚理工没有路径前缀
+            // API路径配置（相对路径，前缀由系统自动探测）
             apis: {
                 login: 'xtgl/login_slogin.html',
                 logout: 'xtgl/login_logoutAccount.html',  // 新增：登录前需要先调用登出接口
@@ -307,119 +312,146 @@ class DynamicAPIConfig {
      * 获取教务系统主机列表
      */
     get EA_HOSTS() {
+        const hosts = this._config.eas?.hosts || [];
+        // 兼容两种格式：字符串数组或对象数组
+        return hosts.map(h => typeof h === 'string' ? h : h.host);
+    }
+    
+    /**
+     * 获取原始的hosts配置（包含协议信息）
+     */
+    get EA_HOSTS_CONFIG() {
         return this._config.eas?.hosts || [];
+    }
+    
+    /**
+     * 获取指定节点是否使用HTTPS
+     * @param {number} hostIndex 节点索引
+     * @returns {boolean}
+     */
+    getHostHttps(hostIndex = 0) {
+        const hosts = this._config.eas?.hosts || [];
+        if (hosts.length === 0) return false;
+        
+        const hostConfig = hosts[hostIndex] || hosts[0];
+        // 如果是对象格式，读取 https 属性
+        if (typeof hostConfig === 'object' && hostConfig !== null) {
+            return hostConfig.https === true;
+        }
+        // 如果是字符串格式，使用全局 useHttps 配置
+        return this._config.eas?.useHttps === true;
     }
     
     /**
      * 获取教务登录API
      */
     get EA_LOGIN() {
-        return this._config.eas?.apis?.login || 'jwglxt/xtgl/login_slogin.html';
+        return this._config.eas?.apis?.login || 'xtgl/login_slogin.html';
     }
     
     /**
      * 获取RSA公钥API
      */
     get EA_LOGIN_PUBLIC_KEY() {
-        return this._config.eas?.apis?.publicKey || 'jwglxt/xtgl/login_getPublicKey.html';
+        return this._config.eas?.apis?.publicKey || 'xtgl/login_getPublicKey.html';
     }
     
     /**
      * 获取系统通知API
      */
     get EA_SYSTEM_NOTICE() {
-        return this._config.eas?.apis?.systemNotice || 'jwglxt/xtgl/index_cxDbsy.html?doType=query';
+        return this._config.eas?.apis?.systemNotice || 'xtgl/index_cxDbsy.html?doType=query';
     }
     
     /**
      * 获取学年数据API
      */
     get EA_YEAR_DATA() {
-        return this._config.eas?.apis?.yearData || 'jwglxt/xtgl/index_cxAreaFive.html?localeKey=zh_CN&gnmkdm=index';
+        return this._config.eas?.apis?.yearData || 'xtgl/index_cxAreaFive.html?localeKey=zh_CN&gnmkdm=index';
     }
     
     /**
      * 获取学生课表API
      */
     get GET_LESSON_TABLE() {
-        return this._config.eas?.apis?.lessonTable || 'jwglxt/kbcx/xskbcx_cxXsgrkb.html';
+        return this._config.eas?.apis?.lessonTable || 'kbcx/xskbcx_cxXsgrkb.html';
     }
     
     /**
      * 获取班级课表API
      */
     get GET_CLASS_LESSON_TABLE() {
-        return this._config.eas?.apis?.classLessonTable || 'jwglxt/kbdy/bjkbdy_cxBjKb.html';
+        return this._config.eas?.apis?.classLessonTable || 'kbdy/bjkbdy_cxBjKb.html';
     }
     
     /**
      * 获取课表打印页面API
      */
     get RECOMMENDED_LESSON_TABLE_PRINTING() {
-        return this._config.eas?.apis?.lessonTablePrint || 'jwglxt/kbdy/bjkbdy_cxBjkbdyIndex.html?gnmkdm=0&layout=default';
+        return this._config.eas?.apis?.lessonTablePrint || 'kbdy/bjkbdy_cxBjkbdyIndex.html?gnmkdm=0&layout=default';
     }
     
     /**
      * 获取成绩查询API
      */
     get GET_MARK() {
-        return this._config.eas?.apis?.marks || 'jwglxt/cjcx/cjcx_cxDgXscj.html?doType=query';
+        return this._config.eas?.apis?.marks || 'cjcx/cjcx_cxDgXscj.html?doType=query';
     }
     
     /**
      * 获取成绩明细API
      */
     get GET_MARK_DETAIL() {
-        return this._config.eas?.apis?.markDetail || 'jwglxt/cjcx/cjcx_cxXsKccjList.html';
+        return this._config.eas?.apis?.markDetail || 'cjcx/cjcx_cxXsKccjList.html';
     }
     
     /**
      * 获取考试查询API
      */
     get GET_EXAM() {
-        return this._config.eas?.apis?.exam || 'jwglxt/kwgl/kscx_cxXsksxxIndex.html?doType=query';
+        return this._config.eas?.apis?.exam || 'kwgl/kscx_cxXsksxxIndex.html?doType=query';
     }
     
     /**
      * 获取学业情况页面API
      */
     get ACADEMIC_PAGE() {
-        return this._config.eas?.apis?.academicPage || 'jwglxt/xsxy/xsxyqk_cxXsxyqkIndex.html?gnmkdm=N105515&layout=default';
+        return this._config.eas?.apis?.academicPage || 'xsxy/xsxyqk_cxXsxyqkIndex.html?gnmkdm=N105515&layout=default';
     }
     
     /**
      * 获取学业情况信息API
      */
     get ACADEMIC_INFO() {
-        return this._config.eas?.apis?.academicInfo || 'jwglxt/xsxy/xsxyqk_cxJxzxjhxfyqFKcxx.html';
+        return this._config.eas?.apis?.academicInfo || 'xsxy/xsxyqk_cxJxzxjhxfyqFKcxx.html';
     }
     
     /**
      * 获取空教室查询API
      */
     get GET_EMPTY_ROOM() {
-        return this._config.eas?.apis?.emptyRoom || 'jwglxt/cdjy/cdjy_cxKxcdlb.html?doType=query';
+        return this._config.eas?.apis?.emptyRoom || 'cdjy/cdjy_cxKxcdlb.html?doType=query';
     }
     
     /**
      * 获取空教室页面API（用于获取选项数据）
      */
     get GET_EMPTY_ROOM_PAGE() {
-        return this._config.eas?.apis?.emptyRoomPage || 'jwglxt/cdjy/cdjy_cxKxcdlb.html?gnmkdm=N2155';
+        return this._config.eas?.apis?.emptyRoomPage || 'cdjy/cdjy_cxKxcdlb.html?gnmkdm=N2155';
     }
     
     /**
      * 获取教学楼列表API
      */
     get GET_BUILDING_LIST() {
-        return this._config.eas?.apis?.buildingList || 'jwglxt/cdjy/cdjy_cxXqjc.html?gnmkdm=N2155';
+        return this._config.eas?.apis?.buildingList || 'cdjy/cdjy_cxXqjc.html?gnmkdm=N2155';
     }
     
     /**
      * 获取学生信息API
      */
     get STUDENT_INFO() {
-        return this._config.eas?.apis?.studentInfo || 'jwglxt/xsxxxggl/xsxxwh_cxCkDgxsxx.html?gnmkdm=N100801';
+        return this._config.eas?.apis?.studentInfo || 'xsxxxggl/xsxxwh_cxCkDgxsxx.html?gnmkdm=N100801';
     }
     
     // ==================== 扩展属性 ====================
@@ -481,10 +513,28 @@ class DynamicAPIConfig {
     }
     
     /**
-     * 检查教务系统是否使用HTTPS
+     * 检查教务系统是否使用HTTPS（默认节点）
+     * 注意：这只是默认值，实际应使用 getHostHttps(hostIndex) 获取特定节点的协议
      */
     get EA_USE_HTTPS() {
+        // 优先使用第一个节点的配置
+        const hosts = this._config.eas?.hosts || [];
+        if (hosts.length > 0 && typeof hosts[0] === 'object') {
+            return hosts[0].https === true;
+        }
+        // 兼容旧格式的全局配置
         return this._config.eas?.useHttps === true;
+    }
+    
+    /**
+     * 获取默认路径前缀（自动探测失败时使用）
+     * 例如济南大学是 'jwglxt/'，荆楚理工是 ''
+     */
+    get DEFAULT_PATH_PREFIX() {
+        const prefix = this._config.eas?.defaultPathPrefix;
+        // 如果配置了，返回配置值（包括空字符串）
+        // 如果没有配置（undefined），返回 null 表示未配置
+        return prefix !== undefined ? prefix : null;
     }
     
     /**

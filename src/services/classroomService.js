@@ -455,26 +455,37 @@ class ClassroomService {
                     }))
                 };
             } else {
-                // 如果未找到选项，返回默认值
-                console.warn('未从HTML中找到校区选项，使用默认值');
+                // 如果未找到选项，使用配置文件中的校区列表
+                console.warn('未从HTML中找到校区选项，使用配置文件中的校区列表');
+                const configCampuses = UJNAPI.CAMPUSES;
+                if (configCampuses && configCampuses.length > 0) {
+                    return {
+                        success: true,
+                        data: configCampuses
+                    };
+                }
+                // 最后的兜底默认值
                 return {
                     success: true,
                     data: [
-                        { value: '1', label: '主校区' },
-                        { value: '3', label: '明水校区' },
-                        { value: '2', label: '舜耕校区' }
+                        { value: '1', label: '主校区' }
                     ]
                 };
             }
         } catch (error) {
             console.error('获取校区列表失败:', error);
-            // 出错时返回默认值
+            // 出错时使用配置文件中的校区列表
+            const configCampuses = UJNAPI.CAMPUSES;
+            if (configCampuses && configCampuses.length > 0) {
+                return {
+                    success: true,
+                    data: configCampuses
+                };
+            }
             return {
                 success: true,
                 data: [
-                    { value: '1', label: '主校区' },
-                    { value: '3', label: '明水校区' },
-                    { value: '2', label: '舜耕校区' }
+                    { value: '1', label: '主校区' }
                 ]
             };
         }
