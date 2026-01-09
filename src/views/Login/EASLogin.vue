@@ -103,6 +103,7 @@ import authService from '@/services/authService'
 import { UJNAPI } from '@/constants/api'
 import ipc from '@/utils/ipc'
 import store from '@/utils/store'
+import EASAccount from '@/models/EASAccount'
 
 const router = useRouter()
 
@@ -170,12 +171,16 @@ const checkServerStatus = async () => {
     loading.value = true
     serverStatus.value = { message: '正在检查教务服务器状态...', type: 'info' }
 
+    // 获取最新的EASAccount实例（会自动检测学校切换并更新配置）
+    const easAccount = EASAccount.getInstance()
+    
     // 确保路径前缀已初始化
-    await authService.easAccount.ensurePathPrefix()
+    await easAccount.ensurePathPrefix()
     
     // 使用EASAccount的getFullUrl方法构建正确的URL（会自动添加路径前缀）
-    const url = authService.easAccount.getFullUrl(UJNAPI.EA_LOGIN)
+    const url = easAccount.getFullUrl(UJNAPI.EA_LOGIN)
     console.log('[EASLogin] 检查服务器状态URL:', url)
+    console.log('[EASLogin] 当前主机:', easAccount.host)
 
     // 使用ipc直接发送请求检查状态
     const result = await ipc.easGet(url, { timeout: 5000 })
@@ -211,8 +216,9 @@ const handleLogin = async () => {
     // 检查教务节点
     const hosts = eaNodes.value
     if (loginForm.nodeIndex >= 0 && loginForm.nodeIndex < hosts.length) {
-      // 设置主机
-      authService.easAccount.changeHost(loginForm.nodeIndex);
+      // 获取最新的EASAccount实例并设置主机
+      const easAccount = EASAccount.getInstance();
+      easAccount.changeHost(loginForm.nodeIndex);
     }
 
     // 清空之前可能的登录状态，确保重新登录

@@ -14,6 +14,33 @@ import IPassAccount from './IPassAccount';
  */
 class EASAccount extends Account {
     /**
+     * 获取当前学校ID（用于区分不同学校的存储）
+     * 优先使用 UJNAPI.SCHOOL_ID（最可靠），其次使用 localStorage
+     * @returns {string} 学校ID，默认为 'ujn'
+     */
+    static getCurrentSchoolId() {
+        try {
+            // 优先从 UJNAPI 获取（最新的配置）
+            if (UJNAPI.SCHOOL_ID) {
+                return UJNAPI.SCHOOL_ID;
+            }
+            // 备用：从 localStorage 获取
+            return localStorage.getItem('ujn_assistant_current_school_id') || 'ujn';
+        } catch (e) {
+            return 'ujn';
+        }
+    }
+
+    /**
+     * 获取路径前缀的存储键（按学校区分）
+     * @returns {string} 存储键
+     */
+    static getPathPrefixKey() {
+        const schoolId = EASAccount.getCurrentSchoolId();
+        return `ujn_assistant_EA_PATH_PREFIX_${schoolId}`;
+    }
+
+    /**
      * 私有构造函数，使用 getInstance 获取实例
      */
     constructor() {
@@ -91,16 +118,27 @@ class EASAccount extends Account {
         this._pathPrefix = null;
         this._pathPrefixInitialized = false;  // 标记是否已完成初始化
         this._pathPrefixPending = null;  // 正在进行的初始化Promise（用于处理并发调用）
+        this._lastSchoolId = EASAccount.getCurrentSchoolId();  // 记录当前学校ID，用于检测切换
         
-        // 尝试从localStorage加载已保存的路径前缀
+        // 自动清理旧的全局存储key（迁移到按学校区分的key）
         try {
-            const savedPrefix = localStorage.getItem('ujn_assistant_EA_PATH_PREFIX');
+            const oldKey = 'ujn_assistant_EA_PATH_PREFIX';
+            if (localStorage.getItem(oldKey) !== null) {
+                console.log('清除旧的全局路径前缀存储键');
+                localStorage.removeItem(oldKey);
+            }
+        } catch (e) {}
+        
+        // 尝试从localStorage加载已保存的路径前缀（按学校区分）
+        try {
+            const pathPrefixKey = EASAccount.getPathPrefixKey();
+            const savedPrefix = localStorage.getItem(pathPrefixKey);
             if (savedPrefix !== null) {
                 this._pathPrefix = savedPrefix;
                 this._pathPrefixInitialized = true;
-                console.log(`从localStorage加载路径前缀: "${this._pathPrefix}"`);
+                console.log(`从localStorage加载路径前缀: "${this._pathPrefix}" (key: ${pathPrefixKey})`);
             } else {
-                console.log("localStorage中没有保存的路径前缀，需要探测");
+                console.log(`localStorage中没有保存的路径前缀，需要探测 (key: ${pathPrefixKey})`);
             }
         } catch (e) {
             console.error("加载路径前缀失败", e);
@@ -123,18 +161,39 @@ class EASAccount extends Account {
      * 单例实例
      */
     static instance = null;
+    static lastSchoolId = null;  // 记录上次创建实例时的学校ID
 
     /**
      * 获取单例实例
      * @returns {EASAccount} 实例
      */
     static getInstance() {
+        const currentSchoolId = EASAccount.getCurrentSchoolId();
+        const currentHost = UJNAPI.EA_HOSTS && UJNAPI.EA_HOSTS[0];
+        
+        // 检查学校ID变化或主机变化
+        if (EASAccount.instance) {
+            const schoolChanged = EASAccount.lastSchoolId && EASAccount.lastSchoolId !== currentSchoolId;
+            const hostChanged = currentHost && EASAccount.instance.host !== currentHost;
+            
+            if (schoolChanged || hostChanged) {
+                console.log(`getInstance: 检测到学校/主机变化:`);
+                console.log(`  学校ID: ${EASAccount.lastSchoolId} -> ${currentSchoolId}`);
+                console.log(`  主机: ${EASAccount.instance.host} -> ${currentHost}`);
+                // 学校变化，重新加载主机配置和路径前缀
+                EASAccount.instance._reloadHostConfig();
+                EASAccount.instance.resetPathPrefix();
+                EASAccount.lastSchoolId = currentSchoolId;
+            }
+        }
+
         if (EASAccount.useVpn) {
             // 在实际应用中实现 VpnEASAccount
             console.log('VPN模式启用');
 
             if (!EASAccount.instance) {
                 EASAccount.instance = new EASAccount();
+                EASAccount.lastSchoolId = currentSchoolId;
             }
 
             return EASAccount.instance;
@@ -142,6 +201,7 @@ class EASAccount extends Account {
 
         if (!EASAccount.instance) {
             EASAccount.instance = new EASAccount();
+            EASAccount.lastSchoolId = currentSchoolId;
         }
 
         return EASAccount.instance;
@@ -157,10 +217,11 @@ class EASAccount extends Account {
             EASAccount.instance.clearCookies();
             EASAccount.instance = null;
         }
-        // 清除路径前缀缓存，以便新学校重新探测
+        // 清除路径前缀缓存，以便新学校重新探测（按学校区分）
         try {
-            localStorage.removeItem('ujn_assistant_EA_PATH_PREFIX');
-            console.log('已清除路径前缀缓存');
+            const pathPrefixKey = EASAccount.getPathPrefixKey();
+            localStorage.removeItem(pathPrefixKey);
+            console.log(`已清除路径前缀缓存 (key: ${pathPrefixKey})`);
         } catch (e) {
             console.error('清除路径前缀缓存失败', e);
         }
@@ -224,6 +285,9 @@ class EASAccount extends Account {
      * @returns {string} 完整URL
      */
     getFullUrl(path) {
+        // 检测学校是否变化，如果变化则重置路径前缀
+        this._checkSchoolChange();
+
         if (!this.host) {
             console.error("错误: 主机为undefined");
             throw new Error("主机未定义，无法构建URL");
@@ -339,8 +403,12 @@ class EASAccount extends Account {
      * @returns {Promise<string|null>} 路径前缀，失败返回null
      */
     async detectPathPrefix() {
+        // 检测学校是否变化
+        this._checkSchoolChange();
+
         try {
             console.log('开始探测教务系统路径前缀...');
+            console.log(`当前学校ID: ${EASAccount.getCurrentSchoolId()}`);
             
             // 构建基础URL（不带路径前缀）
             // VPN模式下强制使用HTTP，因为VPN代理的内网地址通常是HTTP
@@ -450,9 +518,10 @@ class EASAccount extends Account {
                 
                 if (detectedPrefix !== null) {
                     this._pathPrefix = detectedPrefix;
-                    // 保存到localStorage
-                    localStorage.setItem('ujn_assistant_EA_PATH_PREFIX', detectedPrefix);
-                    console.log(`路径前缀探测成功: "${detectedPrefix}"`);
+                    // 保存到localStorage（按学校区分）
+                    const pathPrefixKey = EASAccount.getPathPrefixKey();
+                    localStorage.setItem(pathPrefixKey, detectedPrefix);
+                    console.log(`路径前缀探测成功: "${detectedPrefix}" (key: ${pathPrefixKey})`);
                     return detectedPrefix;
                 }
             }
@@ -463,8 +532,9 @@ class EASAccount extends Account {
             console.log(`默认前缀值: "${defaultPrefix}", 类型: ${typeof defaultPrefix}`);
             if (defaultPrefix !== undefined && defaultPrefix !== null) {
                 this._pathPrefix = defaultPrefix;
-                localStorage.setItem('ujn_assistant_EA_PATH_PREFIX', defaultPrefix);
-                console.log(`成功设置默认路径前缀: "${defaultPrefix}"`);
+                const pathPrefixKey = EASAccount.getPathPrefixKey();
+                localStorage.setItem(pathPrefixKey, defaultPrefix);
+                console.log(`成功设置默认路径前缀: "${defaultPrefix}" (key: ${pathPrefixKey})`);
                 return defaultPrefix;
             }
             
@@ -479,8 +549,9 @@ class EASAccount extends Account {
             const defaultPrefix = UJNAPI.DEFAULT_PATH_PREFIX;
             if (defaultPrefix !== undefined && defaultPrefix !== null) {
                 this._pathPrefix = defaultPrefix;
-                localStorage.setItem('ujn_assistant_EA_PATH_PREFIX', defaultPrefix);
-                console.log(`探测出错，使用配置的默认路径前缀: "${defaultPrefix}"`);
+                const pathPrefixKey = EASAccount.getPathPrefixKey();
+                localStorage.setItem(pathPrefixKey, defaultPrefix);
+                console.log(`探测出错，使用配置的默认路径前缀: "${defaultPrefix}" (key: ${pathPrefixKey})`);
                 return defaultPrefix;
             }
             
@@ -494,6 +565,9 @@ class EASAccount extends Account {
      * @returns {Promise<string>} 路径前缀
      */
     async ensurePathPrefix() {
+        // 检测学校是否变化，如果变化则重置路径前缀
+        this._checkSchoolChange();
+
         // 如果已经初始化过，直接返回
         if (this._pathPrefixInitialized && this._pathPrefix !== null) {
             return this._pathPrefix;
@@ -524,13 +598,14 @@ class EASAccount extends Account {
     async _doEnsurePathPrefix() {
         console.log("开始初始化路径前缀...");
         
-        // 再次检查 localStorage（可能在其他地方被设置）
+        // 再次检查 localStorage（可能在其他地方被设置）（按学校区分）
         try {
-            const savedPrefix = localStorage.getItem('ujn_assistant_EA_PATH_PREFIX');
+            const pathPrefixKey = EASAccount.getPathPrefixKey();
+            const savedPrefix = localStorage.getItem(pathPrefixKey);
             if (savedPrefix !== null) {
                 this._pathPrefix = savedPrefix;
                 this._pathPrefixInitialized = true;
-                console.log(`ensurePathPrefix: 从localStorage加载 "${this._pathPrefix}"`);
+                console.log(`ensurePathPrefix: 从localStorage加载 "${this._pathPrefix}" (key: ${pathPrefixKey})`);
                 return this._pathPrefix;
             }
         } catch (e) {
@@ -550,8 +625,9 @@ class EASAccount extends Account {
         const defaultPrefix = UJNAPI.DEFAULT_PATH_PREFIX;
         if (defaultPrefix !== null && defaultPrefix !== undefined) {
             this._pathPrefix = defaultPrefix;
-            localStorage.setItem('ujn_assistant_EA_PATH_PREFIX', defaultPrefix);
-            console.log(`ensurePathPrefix: 使用默认前缀 "${defaultPrefix}"`);
+            const pathPrefixKey = EASAccount.getPathPrefixKey();
+            localStorage.setItem(pathPrefixKey, defaultPrefix);
+            console.log(`ensurePathPrefix: 使用默认前缀 "${defaultPrefix}" (key: ${pathPrefixKey})`);
         } else {
             // 没有默认前缀（如自定义学校），使用空字符串
             this._pathPrefix = '';
@@ -568,8 +644,9 @@ class EASAccount extends Account {
      */
     setPathPrefix(prefix) {
         this._pathPrefix = prefix || '';
-        localStorage.setItem('ujn_assistant_EA_PATH_PREFIX', this._pathPrefix);
-        console.log(`手动设置路径前缀: "${this._pathPrefix}"`);
+        const pathPrefixKey = EASAccount.getPathPrefixKey();
+        localStorage.setItem(pathPrefixKey, this._pathPrefix);
+        console.log(`手动设置路径前缀: "${this._pathPrefix}" (key: ${pathPrefixKey})`);
     }
 
     /**
@@ -578,6 +655,98 @@ class EASAccount extends Account {
      */
     getPathPrefix() {
         return this._pathPrefix;
+    }
+
+    /**
+     * 重置路径前缀状态（切换学校时调用）
+     * 这会清除内存中的前缀并删除存储的前缀，强制重新探测
+     */
+    resetPathPrefix() {
+        console.log('重置路径前缀状态...');
+        this._pathPrefix = null;
+        this._pathPrefixInitialized = false;
+        this._pathPrefixPending = null;
+        
+        // 更新记录的学校ID
+        this._lastSchoolId = EASAccount.getCurrentSchoolId();
+        
+        // 删除存储的路径前缀，强制重新探测（因为切换学校后旧前缀不适用）
+        try {
+            const pathPrefixKey = EASAccount.getPathPrefixKey();
+            console.log(`清除存储的路径前缀 (key: ${pathPrefixKey})`);
+            localStorage.removeItem(pathPrefixKey);
+        } catch (e) {
+            console.error('清除路径前缀存储失败', e);
+        }
+        
+        console.log('路径前缀已重置，需要重新探测');
+    }
+
+    /**
+     * 检测学校是否变化，如果变化则自动重置路径前缀和主机配置
+     * @private
+     */
+    _checkSchoolChange() {
+        const currentSchoolId = EASAccount.getCurrentSchoolId();
+        const currentHost = UJNAPI.EA_HOSTS && UJNAPI.EA_HOSTS[0];
+        
+        // 检测学校ID变化或主机变化（双重保险）
+        const schoolChanged = this._lastSchoolId && this._lastSchoolId !== currentSchoolId;
+        const hostChanged = currentHost && this.host !== currentHost;
+        
+        if (schoolChanged || hostChanged) {
+            console.log(`检测到学校/主机变化:`);
+            console.log(`  学校ID: ${this._lastSchoolId} -> ${currentSchoolId} (变化: ${schoolChanged})`);
+            console.log(`  主机: ${this.host} -> ${currentHost} (变化: ${hostChanged})`);
+            
+            // 重新加载主机配置
+            this._reloadHostConfig();
+            
+            // 重置路径前缀
+            this.resetPathPrefix();
+        }
+    }
+
+    /**
+     * 重新加载主机配置（切换学校时调用）
+     * @private
+     */
+    _reloadHostConfig() {
+        console.log('重新加载主机配置...');
+        console.log('当前 UJNAPI.EA_HOSTS:', UJNAPI.EA_HOSTS);
+        console.log('当前 UJNAPI.SCHOOL_ID:', UJNAPI.SCHOOL_ID);
+        
+        // 更新学校ID记录
+        this._lastSchoolId = EASAccount.getCurrentSchoolId();
+        
+        // 获取新学校的主机索引（优先使用默认索引0）
+        let hostIndex = 0;
+        try {
+            // 清除旧学校的主机索引缓存
+            localStorage.removeItem('ujn_assistant_LAST_SUCCESSFUL_HOST');
+            localStorage.removeItem('ujn_assistant_EA_HOST');
+        } catch (e) {
+            console.error('清除主机索引缓存失败', e);
+        }
+        
+        // 获取新学校的主机地址
+        const newHost = UJNAPI.EA_HOSTS[hostIndex];
+        if (newHost) {
+            this.host = newHost;
+            
+            // 更新协议
+            const useHttps = UJNAPI.getHostHttps(hostIndex);
+            this.scheme = useHttps ? 'https' : 'http';
+            
+            console.log(`主机配置已更新: host=${this.host}, scheme=${this.scheme}, schoolId=${this._lastSchoolId}`);
+            
+            // 重新创建CookieJar（使用新的域名）
+            // 这会清空旧Cookie，因为切换学校后旧Cookie无效
+            console.log(`重新创建CookieJar，新域名: ${this.host}`);
+            this.cookieJar = new CookieJar(this.scheme, this.host, this.cookieName);
+        } else {
+            console.error('无法获取新学校的主机地址！UJNAPI.EA_HOSTS:', UJNAPI.EA_HOSTS);
+        }
     }
 
     /**
