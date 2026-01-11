@@ -348,18 +348,58 @@ onMounted(async () => {
 <style>
 /* 全局样式 */
 :root {
-  --primary-color: #007AFF;
-  --primary-dark: #0056b3;
+  /* 主色调 - 与其他页面一致 */
+  --primary-color: #5c6cff;
+  --primary-color-rgb: 92, 108, 255;
+  --primary-light: #8a96ff;
+  --primary-dark: #4155e2;
+
+  /* 功能色 */
+  --success-color: #34C759;
+  --warning-color: #FF9500;
+  --danger-color: #FF3B30;
+  --info-color: #5AC8FA;
+
+  /* 背景色 */
   --bg-primary: #ffffff;
   --bg-secondary: #f8f9fa;
   --bg-tertiary: #f0f2f5;
-  --text-primary: #333333;
-  --text-secondary: #666666;
-  --text-hint: #999999;
-  --border-color: #e5e5e5;
-  --success-color: #52c41a;
-  --danger-color: #ff4d4f;
-  --warning-color: #faad14;
+  --bg-color: #f5f7fa;
+  --card-bg: #ffffff;
+
+  /* 文字色 */
+  --text-primary: #303133;
+  --text-secondary: #606266;
+  --text-hint: #909399;
+
+  /* 边框和阴影 */
+  --border-color: #EBEEF5;
+  --shadow-light: 0 2px 12px 0 rgba(0, 0, 0, 0.05);
+  --shadow-medium: 0 4px 16px 0 rgba(0, 0, 0, 0.08);
+
+  /* 过渡 */
+  --transition-normal: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+}
+
+/* 深色模式 */
+:root.dark-theme {
+  --primary-color: #7c8aff;
+  --primary-light: #a5afff;
+  --primary-dark: #5c6cff;
+
+  --bg-primary: #1a1a1a;
+  --bg-secondary: #242424;
+  --bg-tertiary: #2a2a2a;
+  --bg-color: #121212;
+  --card-bg: #242424;
+
+  --text-primary: rgba(255, 255, 255, 0.9);
+  --text-secondary: rgba(255, 255, 255, 0.7);
+  --text-hint: rgba(255, 255, 255, 0.5);
+
+  --border-color: #3e3e3e;
+  --shadow-light: 0 2px 12px 0 rgba(0, 0, 0, 0.2);
+  --shadow-medium: 0 4px 16px 0 rgba(0, 0, 0, 0.3);
 }
 
 * {

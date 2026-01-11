@@ -685,9 +685,9 @@ const formatTime = (time) => {
 const checkUpdate = async () => {
   try {
     ElMessage.info('正在检查更新...');
-    
+
     const result = await window.ipcRenderer?.invoke('check-update');
-    
+
     if (!result) {
       ElMessage.warning('无法检查更新，请稍后再试');
       return;
