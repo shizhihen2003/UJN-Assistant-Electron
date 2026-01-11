@@ -628,6 +628,8 @@ const clearAccount = async (type) => {
       // 清除VPN登录cookies（修复登录状态检查问题）
       await store.remove('JCUT_VPN_COOKIES');
       await store.putString('JCUT_VPN_COOKIES', '');
+      // 清除用户名
+      await store.remove('IPASS_USER_NAME');
       // 清除authService中的cookies
       if (authService.jcutVpnCookies) {
         authService.jcutVpnCookies = [];

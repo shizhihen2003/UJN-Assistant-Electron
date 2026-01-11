@@ -982,6 +982,13 @@ const handleJcutLogin = async () => {
     authService.useVpn = true
     await saveLoginCookies()
 
+    // 获取并保存用户名
+    const verifyResult = await verifyLoginStatus()
+    if (verifyResult.valid && verifyResult.username) {
+      await store.putString('IPASS_USER_NAME', verifyResult.username)
+      console.log('[IPassLogin] 保存用户名:', verifyResult.username)
+    }
+
     loginStatus.value = { success: true, message: '登录成功！' }
     ElMessage.success('登录成功')
     setTimeout(() => { router.push('/') }, 500)
@@ -1131,6 +1138,10 @@ const checkAndRestoreLoginStatus = async () => {
         if (verifyResult.valid) {
           authService.ipassLoginStatus.value = true
           authService.useVpn = true
+          // 保存用户名到store，供App.vue使用
+          if (verifyResult.username) {
+            await store.putString('IPASS_USER_NAME', verifyResult.username)
+          }
           return { loggedIn: true, username: verifyResult.username }
         } else {
           // 登录已过期，清除保存的cookies

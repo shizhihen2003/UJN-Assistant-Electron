@@ -251,7 +251,9 @@ const checkLoginStatus = async () => {
 
     if (isLoggedIn.value) {
       const userInfo = authService.getUserInfo()
-      userName.value = userInfo.name || userInfo.studentId || '用户'
+      // 优先从store读取IPASS用户名
+      const ipassUserName = await store.getString('IPASS_USER_NAME', '')
+      userName.value = ipassUserName || userInfo.name || userInfo.studentId || '用户'
     }
   } catch (error) {
     console.error('检查登录状态失败', error)
@@ -262,6 +264,8 @@ const checkLoginStatus = async () => {
 const handleLogout = async () => {
   try {
     await authService.logoutAll()
+    // 清除用户名
+    await store.remove('IPASS_USER_NAME')
     isLoggedIn.value = false
     userName.value = ''
     ElMessage.success('已退出登录')
