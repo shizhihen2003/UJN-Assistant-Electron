@@ -702,11 +702,11 @@ onBeforeUnmount(() => {
 
 /* ========== 背景装饰 ========== */
 .bg-decoration {
-  position: absolute;
+  position: fixed;
   top: 0;
   left: 0;
-  right: 0;
-  bottom: 0;
+  width: 100%;
+  height: 100%;
   overflow: hidden;
   z-index: 0;
   pointer-events: none;
@@ -715,24 +715,36 @@ onBeforeUnmount(() => {
 .bg-particles {
   position: absolute;
   border-radius: 50%;
-  background: var(--app-primary-color);
-  opacity: 0.03;
-  animation: float 30s infinite;
+  background: radial-gradient(circle, var(--app-primary-color) 0%, transparent 70%);
+  opacity: 0.1;
+  filter: blur(10px);
+  animation: float 30s linear infinite;
 }
 
+.bg-particles:nth-child(1) { width: 300px; height: 300px; top: 10%; left: 5%; animation-duration: 45s; }
+.bg-particles:nth-child(2) { width: 200px; height: 200px; top: 40%; right: 10%; animation-duration: 35s; animation-delay: 2s; }
+.bg-particles:nth-child(3) { width: 100px; height: 100px; bottom: 30%; left: 20%; animation-duration: 25s; animation-delay: 5s; }
+.bg-particles:nth-child(4) { width: 150px; height: 150px; bottom: 10%; right: 15%; animation-duration: 40s; animation-delay: 10s; }
+.bg-particles:nth-child(5) { width: 180px; height: 180px; top: 20%; right: 30%; animation-duration: 50s; animation-delay: 7s; }
+.bg-particles:nth-child(6) { width: 120px; height: 120px; bottom: 40%; right: 40%; animation-duration: 55s; animation-delay: 3s; }
+.bg-particles:nth-child(7) { width: 250px; height: 250px; top: 60%; left: 10%; animation-duration: 60s; animation-delay: 15s; }
+.bg-particles:nth-child(8) { width: 200px; height: 200px; bottom: 20%; left: 40%; animation-duration: 45s; animation-delay: 8s; }
+
 @keyframes float {
-  0%, 100% { transform: translateY(0) rotate(0deg); }
-  50% { transform: translateY(-20px) rotate(180deg); }
+  0% { transform: translate(0, 0) rotate(0deg) scale(1); }
+  25% { transform: translate(20px, 30px) rotate(90deg) scale(1.1); }
+  50% { transform: translate(40px, 20px) rotate(180deg) scale(1.2); }
+  75% { transform: translate(20px, -10px) rotate(270deg) scale(1.1); }
+  100% { transform: translate(0, 0) rotate(360deg) scale(1); }
 }
 
 .bg-gradient {
   position: absolute;
-  top: -50%;
-  right: -50%;
+  top: 0;
+  left: 0;
   width: 100%;
   height: 100%;
-  background: radial-gradient(circle, var(--app-primary-color-light) 0%, transparent 70%);
-  opacity: 0.5;
+  background: linear-gradient(135deg, rgba(92, 108, 255, 0.03) 0%, rgba(92, 108, 255, 0) 50%);
 }
 
 /* ========== 页面头部 ========== */
