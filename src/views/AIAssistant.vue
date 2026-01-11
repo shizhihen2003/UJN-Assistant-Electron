@@ -1169,33 +1169,23 @@ const exitVoiceChatMode = () => {
  * 开始语音识别（VoiceChat组件调用）
  */
 const startVoiceRecognition = async () => {
-  // 如果已经在识别中，忽略
-  if (isRecognizing.value) {
-    console.log('[AI] 已在识别中，忽略');
-    return;
-  }
+  console.log('[AI] 开始语音识别, 当前状态: isRecognizing=', isRecognizing.value, 'isProcessingVoice=', isProcessingVoice.value);
 
   // 如果正在播放，先停止
-  if (isProcessingVoice.value || isSpeaking.value) {
+  if (isSpeaking.value) {
     console.log('[AI] 正在播放，先停止');
     speechService.stopPlayback();
     isSpeaking.value = false;
   }
 
   try {
-    console.log('[AI] 开始语音识别');
-
-    // 设置处理状态
+    // 重置状态
     isProcessingVoice.value = true;
-
-    // 重置识别结果
     recognitionResult.value = '';
     inputMessage.value = '';
-
-    // 更新语音识别状态
     isRecognizing.value = true;
 
-    // 启动语音识别服务
+    // 启动语音识别服务（speechService 内部会处理重复启动的情况）
     await speechService.startRecognize(
         // 识别结果回调
         (text, isLast) => {
@@ -1208,8 +1198,6 @@ const startVoiceRecognition = async () => {
           if (voiceChatRef.value) {
             voiceChatRef.value.handleSpeechResult(text);
           }
-
-          // 如果是最终结果，不在这里处理，等待stopVoiceRecognition调用
         },
         // 错误回调
         (error) => {
@@ -1240,7 +1228,6 @@ const startVoiceRecognition = async () => {
  * 停止语音识别（VoiceChat组件调用）
  */
 const stopVoiceRecognition = async (isSilence, recognizedText) => {
-  // 即使 isRecognizing 为 false，也要处理状态同步
   console.log('[AI] 停止语音识别, 静音触发:', isSilence, '识别文本:', recognizedText, 'isRecognizing:', isRecognizing.value);
 
   try {
@@ -1257,18 +1244,9 @@ const stopVoiceRecognition = async (isSilence, recognizedText) => {
       console.log('[AI] 识别文本太短，不处理:', finalText);
       isProcessingVoice.value = false;
 
-      // 通知 VoiceChat 回到 idle 状态
+      // 通知 VoiceChat 回到 idle 状态，让用户决定是否继续
       if (voiceChatRef.value) {
         voiceChatRef.value.setState('idle');
-      }
-
-      // 如果在语音对话模式且是静音触发，重新开始
-      if (voiceChatMode.value && isSilence) {
-        setTimeout(() => {
-          if (voiceChatRef.value && voiceChatMode.value) {
-            voiceChatRef.value.startListening();
-          }
-        }, 1000);
       }
       return;
     }

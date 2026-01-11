@@ -273,9 +273,17 @@ export default {
      * AI 回答完成
      */
     completeSpeaking() {
-      console.log('[VoiceChat] -> 回答完成，直接开始下一轮');
-      // 不经过 idle 状态，直接开始录音
-      this.startListening();
+      console.log('[VoiceChat] -> 回答完成，准备开始下一轮');
+      // 先切换到 idle，清理上一轮状态
+      this.recognizedText = '';
+      this.clearTimers();
+      // 短暂延迟确保上一轮完全结束，然后开始新一轮
+      setTimeout(() => {
+        if (this.active) {
+          console.log('[VoiceChat] 自动开始下一轮录音');
+          this.startListening();
+        }
+      }, 200);
     },
 
     /**

@@ -131,9 +131,12 @@ class SpeechService {
     // ==================== 语音识别 ====================
 
     async startRecognize(onResult, onError) {
+        // 如果已在识别中，先停止
         if (this.recognizing) {
-            console.log('[Speech] 已在识别中');
-            return;
+            console.log('[Speech] 已在识别中，先停止');
+            await this.stopRecognize();
+            // 等待一下确保完全停止
+            await new Promise(resolve => setTimeout(resolve, 200));
         }
 
         try {
