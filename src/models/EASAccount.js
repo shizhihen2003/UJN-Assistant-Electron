@@ -119,7 +119,7 @@ class EASAccount extends Account {
         this._pathPrefixInitialized = false;  // 标记是否已完成初始化
         this._pathPrefixPending = null;  // 正在进行的初始化Promise（用于处理并发调用）
         this._lastSchoolId = EASAccount.getCurrentSchoolId();  // 记录当前学校ID，用于检测切换
-        
+
         // 自动清理旧的全局存储key（迁移到按学校区分的key）
         try {
             const oldKey = 'ujn_assistant_EA_PATH_PREFIX';
@@ -128,7 +128,7 @@ class EASAccount extends Account {
                 localStorage.removeItem(oldKey);
             }
         } catch (e) {}
-        
+
         // 尝试从localStorage加载已保存的路径前缀（按学校区分）
         try {
             const pathPrefixKey = EASAccount.getPathPrefixKey();
@@ -170,12 +170,12 @@ class EASAccount extends Account {
     static getInstance() {
         const currentSchoolId = EASAccount.getCurrentSchoolId();
         const currentHost = UJNAPI.EA_HOSTS && UJNAPI.EA_HOSTS[0];
-        
+
         // 检查学校ID变化或主机变化
         if (EASAccount.instance) {
             const schoolChanged = EASAccount.lastSchoolId && EASAccount.lastSchoolId !== currentSchoolId;
             const hostChanged = currentHost && EASAccount.instance.host !== currentHost;
-            
+
             if (schoolChanged || hostChanged) {
                 console.log(`getInstance: 检测到学校/主机变化:`);
                 console.log(`  学校ID: ${EASAccount.lastSchoolId} -> ${currentSchoolId}`);
@@ -341,7 +341,7 @@ class EASAccount extends Account {
     extractPathPrefix(url) {
         try {
             let pathname;
-            
+
             // 处理完整URL或路径
             if (url.startsWith('http')) {
                 const urlObj = new URL(url);
@@ -351,9 +351,9 @@ class EASAccount extends Account {
             } else {
                 pathname = '/' + url;
             }
-            
+
             console.log(`解析路径: ${pathname}`);
-            
+
             // 方法1: 查找 /xtgl/ 的位置
             const xtglIndex = pathname.indexOf('/xtgl/');
             if (xtglIndex > 0) {
@@ -366,7 +366,7 @@ class EASAccount extends Account {
                 console.log(`URL没有路径前缀(xtgl在根路径): ${url}`);
                 return '';
             }
-            
+
             // 方法2: 尝试其他模块路径
             const modulePatterns = ['/kbcx/', '/cjcx/', '/kwgl/', '/cdjy/', '/xsxy/', '/xsxxxggl/'];
             for (const pattern of modulePatterns) {
@@ -379,7 +379,7 @@ class EASAccount extends Account {
                     return '';
                 }
             }
-            
+
             // 方法3: 处理 /jwglxt 这种简单重定向路径
             // 如果路径是 /xxx 格式（单一路径段），说明 xxx 可能就是前缀
             const simplePathMatch = pathname.match(/^\/([a-zA-Z0-9_-]+)\/?$/);
@@ -388,7 +388,7 @@ class EASAccount extends Account {
                 console.log(`从简单路径提取前缀: "${prefix}" (路径: ${pathname})`);
                 return prefix;
             }
-            
+
             console.log(`无法从URL提取路径前缀: ${url}`);
             return null;
         } catch (error) {
@@ -409,7 +409,7 @@ class EASAccount extends Account {
         try {
             console.log('开始探测教务系统路径前缀...');
             console.log(`当前学校ID: ${EASAccount.getCurrentSchoolId()}`);
-            
+
             // 构建基础URL（不带路径前缀）
             // VPN模式下强制使用HTTP，因为VPN代理的内网地址通常是HTTP
             const urlScheme = EASAccount.useVpn ? 'http' : this.scheme;
@@ -418,22 +418,22 @@ class EASAccount extends Account {
             console.log(`当前协议: ${this.scheme}, 主机: ${this.host}, VPN协议: ${urlScheme}`);
             console.log(`UJNAPI.EA_USE_HTTPS: ${UJNAPI.EA_USE_HTTPS}`);
             console.log(`UJNAPI.DEFAULT_PATH_PREFIX: ${UJNAPI.DEFAULT_PATH_PREFIX}`);
-            
+
             const getMethod = EASAccount.useVpn ? ipc.ipassGet : ipc.easGet;
-            
+
             // 发送请求，允许重定向
             const response = await getMethod(baseUrl, {
                 followRedirect: true,
                 maxRedirects: 5
             });
-            
+
             console.log(`探测响应: success=${response.success}, hasData=${!!response.data}, hasHeaders=${!!response.headers}`);
-            
+
             // 放宽检查条件：只要有响应数据或头信息就尝试解析
             if (response.success || response.data || response.headers) {
                 // 尝试从响应的最终URL或响应内容中提取前缀
                 let detectedPrefix = null;
-                
+
                 // 方法1: 从响应的最终URL提取
                 if (response.finalUrl) {
                     console.log(`尝试方法1: finalUrl = ${response.finalUrl}`);
@@ -442,7 +442,7 @@ class EASAccount extends Account {
                         console.log(`方法1成功: 从finalUrl提取前缀 "${detectedPrefix}"`);
                     }
                 }
-                
+
                 // 方法2: 从响应内容中的重定向脚本提取
                 if (detectedPrefix === null && response.data) {
                     // 处理不同类型的响应数据
@@ -461,10 +461,10 @@ class EASAccount extends Account {
                             content = JSON.stringify(response.data);
                         }
                     }
-                    
+
                     console.log(`响应内容长度: ${content.length}, 内容: ${content.substring(0, 300)}`);
                     console.log(`响应数据类型: ${typeof response.data}`);
-                    
+
                     // 多种匹配模式（按优先级排序）
                     const patterns = [
                         // 最简单直接的 url= 匹配（meta refresh）
@@ -478,24 +478,24 @@ class EASAccount extends Account {
                         /href\s*=\s*["'](\/[^"']*\/xtgl\/[^"']+)["']/,
                         /action\s*=\s*["'](\/[^"']*\/xtgl\/[^"']+)["']/
                     ];
-                    
+
                     for (const pattern of patterns) {
                         const match = content.match(pattern);
                         if (match) {
                             let redirectPath = match[1];
                             console.log(`从页面内容中发现重定向路径: ${redirectPath}`);
-                            
+
                             // 确保路径以/开头
                             if (!redirectPath.startsWith('/') && !redirectPath.startsWith('http')) {
                                 redirectPath = '/' + redirectPath;
                             }
-                            
+
                             // 构建完整URL来提取前缀
-                            const fullRedirectUrl = redirectPath.startsWith('http') 
-                                ? redirectPath 
+                            const fullRedirectUrl = redirectPath.startsWith('http')
+                                ? redirectPath
                                 : `${this.scheme}://${this.host}${redirectPath}`;
                             detectedPrefix = this.extractPathPrefix(fullRedirectUrl);
-                            
+
                             if (detectedPrefix !== null) {
                                 console.log(`方法2成功: 从页面脚本提取前缀 "${detectedPrefix}"`);
                                 break;
@@ -503,7 +503,7 @@ class EASAccount extends Account {
                         }
                     }
                 }
-                
+
                 // 方法3: 从Location响应头提取
                 if (detectedPrefix === null && response.headers) {
                     const location = response.headers['location'] || response.headers['Location'];
@@ -515,7 +515,7 @@ class EASAccount extends Account {
                         }
                     }
                 }
-                
+
                 if (detectedPrefix !== null) {
                     this._pathPrefix = detectedPrefix;
                     // 保存到localStorage（按学校区分）
@@ -525,7 +525,7 @@ class EASAccount extends Account {
                     return detectedPrefix;
                 }
             }
-            
+
             // 探测失败，尝试使用配置文件中的默认前缀
             console.warn('自动探测失败，尝试使用配置文件中的默认前缀');
             const defaultPrefix = UJNAPI.DEFAULT_PATH_PREFIX;
@@ -537,14 +537,14 @@ class EASAccount extends Account {
                 console.log(`成功设置默认路径前缀: "${defaultPrefix}" (key: ${pathPrefixKey})`);
                 return defaultPrefix;
             }
-            
+
             console.warn('无法探测路径前缀，且配置文件中没有默认值');
             // 最后兜底：设置为空字符串而不是null
             this._pathPrefix = '';
             return '';
         } catch (error) {
             console.error(`探测路径前缀失败: ${error.message}`);
-            
+
             // 出错时也尝试使用默认前缀
             const defaultPrefix = UJNAPI.DEFAULT_PATH_PREFIX;
             if (defaultPrefix !== undefined && defaultPrefix !== null) {
@@ -554,7 +554,7 @@ class EASAccount extends Account {
                 console.log(`探测出错，使用配置的默认路径前缀: "${defaultPrefix}" (key: ${pathPrefixKey})`);
                 return defaultPrefix;
             }
-            
+
             return null;
         }
     }
@@ -572,16 +572,16 @@ class EASAccount extends Account {
         if (this._pathPrefixInitialized && this._pathPrefix !== null) {
             return this._pathPrefix;
         }
-        
+
         // 如果有正在进行的初始化，等待它完成
         if (this._pathPrefixPending) {
             console.log("ensurePathPrefix: 等待正在进行的初始化...");
             return await this._pathPrefixPending;
         }
-        
+
         // 创建初始化Promise并保存引用（防止并发调用）
         this._pathPrefixPending = this._doEnsurePathPrefix();
-        
+
         try {
             const result = await this._pathPrefixPending;
             return result;
@@ -590,14 +590,14 @@ class EASAccount extends Account {
             this._pathPrefixPending = null;
         }
     }
-    
+
     /**
      * 实际执行路径前缀初始化的内部方法
      * @private
      */
     async _doEnsurePathPrefix() {
         console.log("开始初始化路径前缀...");
-        
+
         // 再次检查 localStorage（可能在其他地方被设置）（按学校区分）
         try {
             const pathPrefixKey = EASAccount.getPathPrefixKey();
@@ -611,7 +611,7 @@ class EASAccount extends Account {
         } catch (e) {
             console.error("读取localStorage失败", e);
         }
-        
+
         // 尝试探测
         console.log("ensurePathPrefix: 开始探测路径前缀...");
         const detected = await this.detectPathPrefix();
@@ -620,7 +620,7 @@ class EASAccount extends Account {
             console.log(`ensurePathPrefix: 探测成功 "${detected}"`);
             return detected;
         }
-        
+
         // 探测失败，使用配置的默认前缀（如果有）
         const defaultPrefix = UJNAPI.DEFAULT_PATH_PREFIX;
         if (defaultPrefix !== null && defaultPrefix !== undefined) {
@@ -633,7 +633,7 @@ class EASAccount extends Account {
             this._pathPrefix = '';
             console.log("ensurePathPrefix: 无默认前缀，使用空字符串");
         }
-        
+
         this._pathPrefixInitialized = true;
         return this._pathPrefix;
     }
@@ -666,10 +666,10 @@ class EASAccount extends Account {
         this._pathPrefix = null;
         this._pathPrefixInitialized = false;
         this._pathPrefixPending = null;
-        
+
         // 更新记录的学校ID
         this._lastSchoolId = EASAccount.getCurrentSchoolId();
-        
+
         // 删除存储的路径前缀，强制重新探测（因为切换学校后旧前缀不适用）
         try {
             const pathPrefixKey = EASAccount.getPathPrefixKey();
@@ -678,7 +678,7 @@ class EASAccount extends Account {
         } catch (e) {
             console.error('清除路径前缀存储失败', e);
         }
-        
+
         console.log('路径前缀已重置，需要重新探测');
     }
 
@@ -689,19 +689,19 @@ class EASAccount extends Account {
     _checkSchoolChange() {
         const currentSchoolId = EASAccount.getCurrentSchoolId();
         const currentHost = UJNAPI.EA_HOSTS && UJNAPI.EA_HOSTS[0];
-        
+
         // 检测学校ID变化或主机变化（双重保险）
         const schoolChanged = this._lastSchoolId && this._lastSchoolId !== currentSchoolId;
         const hostChanged = currentHost && this.host !== currentHost;
-        
+
         if (schoolChanged || hostChanged) {
             console.log(`检测到学校/主机变化:`);
             console.log(`  学校ID: ${this._lastSchoolId} -> ${currentSchoolId} (变化: ${schoolChanged})`);
             console.log(`  主机: ${this.host} -> ${currentHost} (变化: ${hostChanged})`);
-            
+
             // 重新加载主机配置
             this._reloadHostConfig();
-            
+
             // 重置路径前缀
             this.resetPathPrefix();
         }
@@ -715,10 +715,10 @@ class EASAccount extends Account {
         console.log('重新加载主机配置...');
         console.log('当前 UJNAPI.EA_HOSTS:', UJNAPI.EA_HOSTS);
         console.log('当前 UJNAPI.SCHOOL_ID:', UJNAPI.SCHOOL_ID);
-        
+
         // 更新学校ID记录
         this._lastSchoolId = EASAccount.getCurrentSchoolId();
-        
+
         // 获取新学校的主机索引（优先使用默认索引0）
         let hostIndex = 0;
         try {
@@ -728,18 +728,18 @@ class EASAccount extends Account {
         } catch (e) {
             console.error('清除主机索引缓存失败', e);
         }
-        
+
         // 获取新学校的主机地址
         const newHost = UJNAPI.EA_HOSTS[hostIndex];
         if (newHost) {
             this.host = newHost;
-            
+
             // 更新协议
             const useHttps = UJNAPI.getHostHttps(hostIndex);
             this.scheme = useHttps ? 'https' : 'http';
-            
+
             console.log(`主机配置已更新: host=${this.host}, scheme=${this.scheme}, schoolId=${this._lastSchoolId}`);
-            
+
             // 重新创建CookieJar（使用新的域名）
             // 这会清空旧Cookie，因为切换学校后旧Cookie无效
             console.log(`重新创建CookieJar，新域名: ${this.host}`);
@@ -791,7 +791,7 @@ class EASAccount extends Account {
         try {
             console.log("检查教务系统登录状态, VPN模式:", EASAccount.useVpn);
             console.log("当前主机:", this.host);
-            
+
             // 确保路径前缀已初始化（会自动探测或使用默认值）
             await this.ensurePathPrefix();
             console.log(`当前路径前缀: "${this._pathPrefix}"`);
@@ -901,13 +901,15 @@ class EASAccount extends Account {
                         }
 
                         if (studentName) {
-                            // 从存储中读取用户信息
-                            const userInfo = await store.getObject('userInfo', {});
+                            // ========== 修复：使用按学校区分的存储键 ==========
+                            const userInfoKey = `userInfo_${EASAccount.getCurrentSchoolId()}`;
+                            const userInfo = await store.getObject(userInfoKey, {});
 
                             // 更新姓名并保存
                             userInfo.name = studentName;
-                            await store.putObject('userInfo', userInfo);
-                            console.log('登录状态检查时更新了用户姓名:', studentName);
+                            await store.putObject(userInfoKey, userInfo);
+                            console.log('登录状态检查时更新了用户姓名:', studentName, '存储键:', userInfoKey);
+                            // ========== 修复结束 ==========
                         }
                     } catch (error) {
                         console.error('提取姓名失败:', error);
@@ -1006,7 +1008,7 @@ class EASAccount extends Account {
             }
 
             const loginPageHtml = loginPageResult.data;
-            
+
             // 检测是否需要密码加密（从页面隐藏字段mmsfjm获取，0=不加密，非0=加密）
             let passwordNeedsEncryption = true;  // 默认需要加密
             const mmsfjmMatch = loginPageHtml.match(/<input[^>]+name="mmsfjm"[^>]+value=\s*(\d+)/i);
@@ -1026,7 +1028,7 @@ class EASAccount extends Account {
                     console.log("未检测到mmsfjm参数，默认使用RSA加密");
                 }
             }
-            
+
             // 提取CSRF令牌
             const csrfTokenRegex = /<input[^>]+name="csrftoken"[^>]+value="([^"]+)"/i;
             const csrfTokenMatch = loginPageHtml.match(csrfTokenRegex);
@@ -1051,25 +1053,25 @@ class EASAccount extends Account {
                 }
             }
             console.log("成功获取CSRF令牌:", csrfToken);
-            
+
             // 步骤1.5: 如果配置要求，登录前先调用登出接口
             if (UJNAPI.LOGOUT_BEFORE_LOGIN && UJNAPI.EA_LOGOUT) {
                 console.log(`\n[步骤1.5] 登录前调用登出接口`);
                 const logoutUrl = this.getFullUrl(UJNAPI.EA_LOGOUT);
                 console.log(`登出URL: ${logoutUrl}`);
-                
+
                 try {
                     // 获取当前Cookie
                     let logoutCookies = await (EASAccount.useVpn ?
                         IPassAccount.getInstance().vpnCookieJar.getCookies() :
                         this.cookieJar.getCookies());
-                    
+
                     const logoutHeaders = {
                         'X-Requested-With': 'XMLHttpRequest',
                         'Referer': loginPageUrl,
                         'Origin': EASAccount.useVpn ? 'https://' + UJNAPI.VPN_HOST : this.getFullUrl('')
                     };
-                    
+
                     const logoutResult = await postMethod(
                         logoutUrl,
                         '',  // 空body
@@ -1086,7 +1088,7 @@ class EASAccount extends Account {
 
             // 步骤2: 获取RSA公钥（如果需要加密）
             let rsaPassword = password;  // 默认使用明文密码
-            
+
             if (passwordNeedsEncryption) {
                 console.log(`\n[步骤2] 获取RSA公钥`);
 
@@ -1171,27 +1173,27 @@ class EASAccount extends Account {
                 // 自定义URL编码，确保特殊字符被正确编码
                 return encodeURIComponent(str);
             };
-            
+
             // 按照抓包数据的顺序构建表单：csrftoken, language, ydType, yhm, mm, mm
             const loginDataParts = [
                 `csrftoken=${urlEncodeComponent(csrfToken)}`
             ];
-            
+
             // 添加language参数
             loginDataParts.push(`language=zh_CN`);
-            
+
             // 如果配置要求，添加ydType参数
             if (UJNAPI.REQUIRE_YD_TYPE) {
                 loginDataParts.push(`ydType=`);  // 空值
             }
-            
+
             // 添加用户名
             loginDataParts.push(`yhm=${urlEncodeComponent(account)}`);
-            
+
             // 添加密码（发送两次）
             loginDataParts.push(`mm=${urlEncodeComponent(rsaPassword)}`);
             loginDataParts.push(`mm=${urlEncodeComponent(rsaPassword)}`);  // 重复mm参数，与抓包一致
-            
+
             const loginData = loginDataParts.join('&');
 
             console.log("登录表单数据 (字符串格式):");
@@ -1344,7 +1346,7 @@ class EASAccount extends Account {
 
             // 使用统一方法检查响应是否有效
             let hasStudentInfo = false;
-            
+
             // 首先检查是否是JSON格式的有效响应
             if (personalInfoResult.data) {
                 try {
@@ -1524,13 +1526,15 @@ class EASAccount extends Account {
                     }
 
                     if (studentName) {
-                        // 从存储中读取用户信息
-                        const userInfo = await store.getObject('userInfo', {});
+                        // ========== 修复：使用按学校区分的存储键 ==========
+                        const userInfoKey = `userInfo_${EASAccount.getCurrentSchoolId()}`;
+                        const userInfo = await store.getObject(userInfoKey, {});
 
                         // 更新姓名并保存
                         userInfo.name = studentName;
-                        await store.putObject('userInfo', userInfo);
-                        console.log('获取学生信息时更新了用户姓名:', studentName);
+                        await store.putObject(userInfoKey, userInfo);
+                        console.log('获取学生信息时更新了用户姓名:', studentName, '存储键:', userInfoKey);
+                        // ========== 修复结束 ==========
                     } else {
                         console.log('未能从响应中提取到学生姓名');
                     }

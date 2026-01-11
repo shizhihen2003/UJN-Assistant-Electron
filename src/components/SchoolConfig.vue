@@ -89,7 +89,7 @@
         v-model="showAddDialog"
         :title="editMode ? '编辑学校配置' : '添加学校配置'"
         width="700px"
-        :close-on-click-modal="false"
+        @close="handleDialogClose"
     >
       <el-tabs v-model="activeTab">
         <!-- 基本信息 -->
@@ -98,16 +98,22 @@
             <el-form-item label="学校ID" required>
               <el-input
                   v-model="editingConfig.id"
-                  placeholder="英文简称，如 sdu, hnu"
+                  placeholder="如：sdu（唯一标识）"
                   :disabled="editMode"
               />
-              <div class="form-tip">唯一标识，创建后不可修改</div>
+              <div class="form-tip">唯一标识，保存后不可修改</div>
             </el-form-item>
             <el-form-item label="学校名称" required>
-              <el-input v-model="editingConfig.name" placeholder="如：山东大学" />
+              <el-input
+                  v-model="editingConfig.name"
+                  placeholder="如：山东大学"
+              />
             </el-form-item>
             <el-form-item label="学校简称">
-              <el-input v-model="editingConfig.shortName" placeholder="如：山大" />
+              <el-input
+                  v-model="editingConfig.shortName"
+                  placeholder="如：山大"
+              />
             </el-form-item>
           </el-form>
         </el-tab-pane>
@@ -115,30 +121,19 @@
         <!-- VPN配置 -->
         <el-tab-pane label="VPN配置" name="vpn">
           <el-form :model="editingConfig.vpn" label-width="120px">
-            <el-form-item label="启用VPN">
-              <el-switch v-model="editingConfig.vpn.enabled" />
+            <el-form-item label="VPN主机">
+              <el-input
+                  v-model="editingConfig.vpn.host"
+                  placeholder="如：webvpn.sdu.edu.cn"
+              />
             </el-form-item>
-            <template v-if="editingConfig.vpn.enabled">
-              <el-form-item label="VPN主机" required>
-                <el-input
-                    v-model="editingConfig.vpn.host"
-                    placeholder="如：webvpn.sdu.edu.cn"
-                />
-              </el-form-item>
-              <el-form-item label="VPN登录URL" required>
-                <el-input
-                    v-model="editingConfig.vpn.loginUrl"
-                    placeholder="如：https://webvpn.sdu.edu.cn/"
-                />
-              </el-form-item>
-              <el-form-item label="加密密钥">
-                <el-input
-                    v-model="editingConfig.vpn.encryptKey"
-                    placeholder="默认：wrdvpnisthebest"
-                />
-                <div class="form-tip">大多数学校使用默认密钥</div>
-              </el-form-item>
-            </template>
+            <el-form-item label="使用HTTPS">
+              <el-switch v-model="editingConfig.vpn.https" />
+            </el-form-item>
+            <el-form-item label="仅VPN访问">
+              <el-switch v-model="editingConfig.vpn.vpnOnly" />
+              <div class="form-tip">开启后，教务系统只能通过VPN访问</div>
+            </el-form-item>
           </el-form>
         </el-tab-pane>
 
@@ -186,7 +181,6 @@
                 <el-option label="自定义系统" value="custom" />
               </el-select>
             </el-form-item>
-
             <el-form-item label="教务主机" required>
               <div class="hosts-list">
                 <div
@@ -212,25 +206,22 @@
                   添加节点
                 </el-button>
               </div>
-              <div class="form-tip">支持多节点负载均衡</div>
             </el-form-item>
-          </el-form>
-        </el-tab-pane>
+            <el-form-item label="使用HTTPS">
+              <el-switch v-model="editingConfig.eas.https" />
+            </el-form-item>
+            <el-form-item label="默认路径前缀">
+              <el-input
+                  v-model="editingConfig.eas.defaultPathPrefix"
+                  placeholder="如：jwglxt（留空则自动探测）"
+              />
+              <div class="form-tip">新正方系统通常为 jwglxt</div>
+            </el-form-item>
 
-        <!-- API路径配置 -->
-        <el-tab-pane label="API路径" name="apis">
-          <el-form :model="editingConfig.eas.apis" label-width="140px" size="small">
-            <el-alert
-                title="大多数使用新正方系统的学校可保持默认值"
-                type="info"
-                :closable="false"
-                style="margin-bottom: 16px"
-            />
-            <el-form-item label="登录接口">
+            <el-divider content-position="left">API路径配置</el-divider>
+
+            <el-form-item label="登录页面">
               <el-input v-model="editingConfig.eas.apis.login" />
-            </el-form-item>
-            <el-form-item label="公钥接口">
-              <el-input v-model="editingConfig.eas.apis.publicKey" />
             </el-form-item>
             <el-form-item label="课表查询">
               <el-input v-model="editingConfig.eas.apis.lessonTable" />
@@ -314,6 +305,9 @@ import { Plus, Edit, Delete, Download } from '@element-plus/icons-vue';
 import schoolService from '../services/schoolService';
 import { PresetSchools } from '../constants/api';
 import { getBlankTemplate } from '../constants/schoolConfig';
+// ========== 新增导入 ==========
+import authService from '../services/authService';
+import store from '../utils/store';
 
 // 当前学校ID
 const currentSchoolId = ref('');
@@ -355,13 +349,65 @@ onMounted(async () => {
   Object.assign(currentConfig, schoolService.currentConfig);
 });
 
-// 切换学校
+// ========== 修复：切换学校时登出所有账号 ==========
 const handleSchoolChange = async (schoolId) => {
-  const success = await schoolService.switchSchool(schoolId);
-  if (success) {
-    Object.assign(currentConfig, schoolService.currentConfig);
-    ElMessage.success(`已切换到 ${currentConfig.name}`);
-  } else {
+  // 如果选择的是当前学校，不做任何操作
+  if (schoolId === schoolService.currentSchoolId) {
+    return;
+  }
+
+  try {
+    // ========== 修复：先清除 store 中的用户信息，防止 logoutAll 的 saveUserInfo 把旧数据写回 ==========
+    await store.remove('userInfo');
+    await store.remove('IPASS_USER_NAME');
+
+    // 切换学校前，先登出所有账号
+    console.log('[SchoolConfig] 切换学校，登出所有账号...');
+    await authService.logoutAll();
+
+    // 清除保存的账号密码
+    await store.remove('EAS_ACCOUNT');
+    await store.remove('EAS_PASSWORD');
+    await store.remove('IPASS_ACCOUNT');
+    await store.remove('IPASS_PASSWORD');
+
+    // 清除荆楚理工VPN cookies（如果有）
+    await store.remove('JCUT_VPN_COOKIES');
+    try {
+      await store.putString('JCUT_VPN_COOKIES', '');
+    } catch (e) {
+      // 忽略错误
+    }
+
+    // 清除authService中的cookies
+    if (authService.jcutVpnCookies) {
+      authService.jcutVpnCookies = [];
+    }
+    // ========== 修复：彻底清除 authService 内存中的用户信息 ==========
+    if (authService.userInfo) {
+      authService.userInfo.studentId = '';
+      authService.userInfo.name = '';
+      authService.userInfo.college = '';
+      authService.userInfo.major = '';
+      authService.userInfo.class = '';
+    }
+
+    // 执行学校切换
+    const success = await schoolService.switchSchool(schoolId);
+    if (success) {
+      Object.assign(currentConfig, schoolService.currentConfig);
+      ElMessage.success(`已切换到 ${currentConfig.name}，请重新登录`);
+
+      // 触发全局刷新事件，通知其他组件更新
+      window.dispatchEvent(new CustomEvent('school-changed', {
+        detail: { schoolId, schoolName: currentConfig.name }
+      }));
+    } else {
+      ElMessage.error('切换学校失败');
+      currentSchoolId.value = schoolService.currentSchoolId;
+    }
+  } catch (error) {
+    console.error('[SchoolConfig] 切换学校失败:', error);
     ElMessage.error('切换学校失败');
     currentSchoolId.value = schoolService.currentSchoolId;
   }

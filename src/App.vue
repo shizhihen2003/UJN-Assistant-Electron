@@ -132,7 +132,7 @@
           <div class="breadcrumb">
             <el-breadcrumb separator="/">
               <el-breadcrumb-item :to="{ path: '/' }">首页</el-breadcrumb-item>
-              <el-breadcrumb-item v-if="currentRoute.meta.title">{{ currentRoute.meta.title }}</el-breadcrumb-item>
+              <el-breadcrumb-item v-if="breadcrumbTitle">{{ breadcrumbTitle }}</el-breadcrumb-item>
             </el-breadcrumb>
           </div>
 
@@ -184,7 +184,8 @@
 
 <script setup>
 // App.vue 的 script 部分
-import { ref, computed, onMounted, watch } from 'vue'
+// ========== 修复：添加 onUnmounted ==========
+import { ref, computed, onMounted, watch, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
 import {
   HomeFilled, Calendar, School, User, Setting, Monitor, Notebook,
@@ -202,9 +203,16 @@ import { UJNAPI } from '@/constants/api'
 // 学校选择对话框引用
 const schoolSetupDialog = ref(null)
 
-// 动态获取学校名称
-const schoolShortName = computed(() => UJNAPI.SCHOOL_SHORT_NAME || '济大')
-const schoolName = computed(() => UJNAPI.SCHOOL_NAME || '济南大学')
+// ========== 修复：将学校名称改为 ref，以便在切换学校时手动更新 ==========
+const schoolShortName = ref(UJNAPI.SCHOOL_SHORT_NAME || '济大')
+const schoolName = ref(UJNAPI.SCHOOL_NAME || '济南大学')
+
+// 更新学校名称（从 UJNAPI 读取最新值）
+const updateSchoolNames = () => {
+  schoolShortName.value = UJNAPI.SCHOOL_SHORT_NAME || '济大'
+  schoolName.value = UJNAPI.SCHOOL_NAME || '济南大学'
+  console.log('[App] 更新学校名称:', schoolShortName.value, schoolName.value)
+}
 
 // 侧边栏状态
 const isSidebarCollapsed = ref(false)
@@ -217,6 +225,22 @@ const toggleSidebar = () => {
 const route = useRoute()
 const activeMenu = computed(() => route.path)
 const currentRoute = computed(() => route)
+
+// ========== 修复：动态面包屑标题，替换静态学校名称 ==========
+const breadcrumbTitle = computed(() => {
+  const title = route.meta?.title
+  if (!title) return ''
+
+  // 动态替换学校名称（处理"智慧济大"、"济大"等静态文本）
+  if (title.includes('智慧济大') || title.includes('济大')) {
+    return title.replace(/智慧济大|济大/g, schoolShortName.value)
+  }
+  // 处理荆楚理工等其他学校名称
+  if (title.includes('荆楚理工')) {
+    return title.replace(/荆楚理工/g, schoolShortName.value)
+  }
+  return title
+})
 
 // 缓存视图
 const cachedViews = ref(['Home', 'DailyLesson', 'TermLesson'])
@@ -250,14 +274,81 @@ const checkLoginStatus = async () => {
     isLoggedIn.value = status.isLoggedIn
 
     if (isLoggedIn.value) {
-      const userInfo = authService.getUserInfo()
-      // 优先从store读取IPASS用户名
       const ipassUserName = await store.getString('IPASS_USER_NAME', '')
-      userName.value = ipassUserName || userInfo.name || userInfo.studentId || '用户'
+      const easAccount = await store.getString('EAS_ACCOUNT', '')
+
+      // ========== 修复：使用按学校区分的存储键读取 userInfo ==========
+      const schoolId = localStorage.getItem('ujn_assistant_current_school_id') || 'ujn';
+      const userInfoKey = `userInfo_${schoolId}`;
+
+      let storedUserInfo = null;
+      try {
+        // 优先从按学校区分的键读取
+        storedUserInfo = await store.getObject(userInfoKey, null);
+
+        // 向后兼容：如果按学校区分的键没有数据，尝试从旧的 userInfo 键读取
+        if (!storedUserInfo || !storedUserInfo.name) {
+          const legacyUserInfo = await store.getObject('userInfo', null);
+          if (legacyUserInfo && legacyUserInfo.name) {
+            console.log('[App] 从旧的 userInfo 键读取数据（向后兼容）');
+            storedUserInfo = legacyUserInfo;
+          }
+        }
+      } catch (e) {
+        console.log('[App] 读取 userInfo 失败:', e);
+      }
+      // ========== 修复结束 ==========
+
+      // 也从 authService 获取作为备选
+      const authUserInfo = authService.getUserInfo()
+
+      // 合并用户信息（优先使用 store 中的最新数据）
+      const userInfo = {
+        name: storedUserInfo?.name || authUserInfo.name || '',
+        studentId: storedUserInfo?.studentId || authUserInfo.studentId || ''
+      }
+
+      // 按优先级选择用户名：IPASS用户名 > 真实姓名 > EAS账号 > 学号
+      if (ipassUserName) {
+        userName.value = ipassUserName
+        console.log('[App] 用户名:', userName.value, '来源: IPASS_USER_NAME')
+      } else if (userInfo.name && userInfo.name !== '用户' && userInfo.name.trim()) {
+        userName.value = userInfo.name
+        console.log('[App] 用户名:', userName.value, '来源: userInfo.name')
+      } else if (easAccount) {
+        userName.value = easAccount
+        console.log('[App] 用户名:', userName.value, '来源: EAS_ACCOUNT')
+      } else if (userInfo.studentId) {
+        userName.value = userInfo.studentId
+        console.log('[App] 用户名:', userName.value, '来源: studentId')
+      } else {
+        userName.value = '已登录'
+        console.log('[App] 用户名:', userName.value, '来源: default')
+      }
+    } else {
+      // 未登录时清空用户名
+      userName.value = ''
     }
   } catch (error) {
     console.error('检查登录状态失败', error)
   }
+}
+
+// ========== 新增：处理登录成功事件 ==========
+const handleLoginSuccess = async (event) => {
+  console.log('[App] 检测到登录成功:', event.detail);
+  const { username, type } = event.detail || {};
+
+  if (username) {
+    userName.value = username;
+  }
+
+  isLoggedIn.value = true;
+
+  // 延迟再次检查，确保 store 数据已保存
+  setTimeout(async () => {
+    await checkLoginStatus();
+  }, 500);
 }
 
 // 登出
@@ -320,6 +411,18 @@ const onSchoolSetupCompleted = async (schoolId) => {
   window.location.reload();
 }
 
+// ========== 修复：处理学校切换事件 ==========
+const handleSchoolChanged = async (event) => {
+  console.log('[App] 检测到学校切换:', event.detail);
+  // 重置登录状态和用户名
+  isLoggedIn.value = false;
+  userName.value = '';
+  // ========== 修复：更新侧边栏学校名称 ==========
+  updateSchoolNames();
+  // 重新检查登录状态
+  await checkLoginStatus();
+}
+
 // 组件挂载
 onMounted(async () => {
   // 恢复侧边栏状态
@@ -346,6 +449,30 @@ onMounted(async () => {
   watch(() => authService.ipassLoginStatus.value, (newVal) => {
     checkLoginStatus()
   })
+
+  // ========== 修复：监听路由变化，从登录页面跳转回来时重新检查用户名 ==========
+  watch(() => route.path, async (newPath, oldPath) => {
+    // 如果从登录页面跳转回来
+    if (oldPath && (oldPath.includes('/login/') || oldPath.includes('/Login/'))) {
+      console.log('[App] 从登录页面跳转，延迟检查用户名')
+      // 延迟检查，确保 store 数据已保存
+      setTimeout(async () => {
+        await checkLoginStatus()
+      }, 300)
+    }
+  })
+
+  // ========== 修复：监听学校切换事件 ==========
+  window.addEventListener('school-changed', handleSchoolChanged);
+
+  // ========== 新增：监听登录成功事件 ==========
+  window.addEventListener('login-success', handleLoginSuccess);
+})
+
+// ========== 修复：组件卸载时移除监听器 ==========
+onUnmounted(() => {
+  window.removeEventListener('school-changed', handleSchoolChanged);
+  window.removeEventListener('login-success', handleLoginSuccess);
 })
 </script>
 

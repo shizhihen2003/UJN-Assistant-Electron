@@ -131,9 +131,10 @@
 
         <el-divider />
 
+        <!-- ========== 修复：智慧校园账号名称动态显示 ========== -->
         <div class="account-item">
           <div class="account-info">
-            <h4>智慧校园账号</h4>
+            <h4>{{ ipassAccountName }}</h4>
             <div v-if="accountInfo.ipass.username" class="account-details">
               <div>登录账号：{{ accountInfo.ipass.username }}</div>
               <div>
@@ -143,7 +144,7 @@
                 </el-tag>
               </div>
             </div>
-            <el-empty v-else description="未设置智慧校园账号" :image-size="60"></el-empty>
+            <el-empty v-else :description="`未设置${ipassAccountName}`" :image-size="60"></el-empty>
           </div>
           <div class="account-actions">
             <el-button type="primary" size="small" @click="goToLogin('ipass')">{{ accountInfo.ipass.username ? '重新登录' : '去登录' }}</el-button>
@@ -290,7 +291,8 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted, computed } from 'vue';
+// ========== 修复：添加 onUnmounted ==========
+import { ref, reactive, onMounted, computed, onUnmounted } from 'vue';
 import { useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { School, Plus, Delete, Moon, Sunny } from '@element-plus/icons-vue';
@@ -298,7 +300,8 @@ import store from '@/utils/store';
 import authService from '@/services/authService';
 import schoolService from '@/services/schoolService';
 import SchoolConfig from '@/components/SchoolConfig.vue';
-import API from '@/constants/api';
+// ========== 修复：添加 UJNAPI 导入 ==========
+import API, { UJNAPI } from '@/constants/api';
 
 const router = useRouter();
 
@@ -311,11 +314,24 @@ const toggleTheme = () => {
   localStorage.setItem('ujn_dark_mode', isDarkMode.value ? '1' : '0');
 };
 
+const loadThemePreference = () => {
+  const savedTheme = localStorage.getItem('ujn_dark_mode');
+  isDarkMode.value = savedTheme === '1';
+  if (isDarkMode.value) {
+    document.documentElement.classList.add('dark-theme');
+  }
+};
+
 const appVersion = ref('2.0.1');
 
 // 学校名称（动态）
 const schoolName = computed(() => API.SCHOOL_NAME || '济南大学');
 const appName = computed(() => `${API.SCHOOL_SHORT_NAME || '济大'} Assistant`);
+
+// ========== 修复：智慧校园账号名称（根据学校动态显示）==========
+const ipassAccountName = computed(() => {
+  return `${UJNAPI.SCHOOL_SHORT_NAME || '智慧'}校园账号`;
+});
 
 // 设置表单
 const settingsForm = reactive({
@@ -405,6 +421,21 @@ const loadSettings = async () => {
     }
 
     // 加载时间段设置
+    await loadTimeSlotsFromStore();
+
+    // 加载账号信息
+    await loadAccountInfo();
+
+    // 加载数据状态
+    await loadDataStatus();
+  } catch (error) {
+    console.error('加载设置失败:', error);
+  }
+};
+
+// 从存储加载时间段设置
+const loadTimeSlotsFromStore = async () => {
+  try {
     const timeSettings = await store.getObject('LESSON_TIME_SETTINGS', null);
     if (timeSettings) {
       lessonSettings.timeSlots = timeSettings.map(slot => ({
@@ -430,14 +461,8 @@ const loadSettings = async () => {
         end: createTimeDate(slot.end)
       }));
     }
-
-    // 加载账号信息
-    await loadAccountInfo();
-
-    // 加载数据状态
-    await loadDataStatus();
   } catch (error) {
-    console.error('加载设置失败:', error);
+    console.error('加载时间段设置失败:', error);
   }
 };
 
@@ -732,109 +757,76 @@ const checkUpdate = async () => {
           {
             confirmButtonText: '前往下载',
             cancelButtonText: '暂不更新',
-            type: 'info',
-            dangerouslyUseHTMLString: true,
-            message: `<div>
-              <p>发现新版本 <strong>${result.latestVersion}</strong></p>
-              <p>当前版本: ${appVersion.value}</p>
-              <div style="margin-top: 10px; padding: 10px; background: #f5f5f5; border-radius: 4px; max-height: 200px; overflow-y: auto;">
-                ${result.releaseNotes ? result.releaseNotes.replace(/\n/g, '<br>') : '无详细说明'}
-              </div>
-            </div>`
+            type: 'info'
           }
-      ).then(() => {
-        window.ipcRenderer.invoke('open-external-url', result.releaseUrl);
-      }).catch(() => {});
+      );
+
+      // 打开下载链接
+      if (result.downloadUrl) {
+        window.open(result.downloadUrl, '_blank');
+      }
     } else {
       ElMessage.success('当前已是最新版本');
     }
   } catch (error) {
+    if (error === 'cancel') return;
     console.error('检查更新失败:', error);
-    ElMessage.error('检查更新失败: ' + error.message);
+    ElMessage.error('检查更新失败');
   }
 };
 
 // 打开项目主页
 const openProject = () => {
-  const projectUrl = 'https://github.com/shizhihen2003/UJN-Assistant-Electron';
-  if (window.ipcRenderer) {
-    window.ipcRenderer.invoke('open-external-url', projectUrl);
-  } else {
-    window.open(projectUrl, '_blank', 'noopener,noreferrer');
-  }
+  window.open('https://github.com/your-repo/ujn-assistant', '_blank');
 };
 
 // 打开帮助文档
 const openHelp = () => {
-  const helpUrl = 'https://github.com/shizhihen2003/UJN-Assistant-Electron/blob/main/README.md';
-  if (window.ipcRenderer) {
-    window.ipcRenderer.invoke('open-external-url', helpUrl);
-  } else {
-    window.open(helpUrl, '_blank', 'noopener,noreferrer');
-  }
+  window.open('https://your-docs-url.com', '_blank');
 };
 
-// 初始化
-onMounted(async () => {
-  // 加载主题设置
-  const savedDarkMode = localStorage.getItem('ujn_dark_mode');
-  if (savedDarkMode === '1') {
-    isDarkMode.value = true;
-    document.documentElement.classList.add('dark-theme');
-  }
+// ========== 修复：处理学校切换事件 ==========
+const handleSchoolChanged = async () => {
+  console.log('[Settings] 检测到学校切换，刷新账号信息');
+  await loadAccountInfo();
+};
 
+// 组件挂载
+onMounted(async () => {
+  loadThemePreference();
   await loadSettings();
+
+  // ========== 修复：监听学校切换事件 ==========
+  window.addEventListener('school-changed', handleSchoolChanged);
+});
+
+// ========== 修复：组件卸载时移除监听器 ==========
+onUnmounted(() => {
+  window.removeEventListener('school-changed', handleSchoolChanged);
 });
 </script>
 
-<style>
-/* 全局CSS变量 */
+<style scoped>
+/* ========== CSS变量定义 ========== */
 :root {
   --primary-color: #5c6cff;
   --primary-color-rgb: 92, 108, 255;
-  --primary-light: #8a96ff;
-  --primary-dark: #4155e2;
-  --success-color: #34C759;
-  --warning-color: #FF9500;
-  --danger-color: #FF3B30;
-  --info-color: #5AC8FA;
   --bg-color: #f5f7fa;
   --card-bg: #ffffff;
   --text-primary: #303133;
   --text-secondary: #606266;
-  --text-hint: #909399;
-  --border-color: #EBEEF5;
   --shadow-light: 0 2px 12px 0 rgba(0, 0, 0, 0.05);
   --shadow-medium: 0 4px 16px 0 rgba(0, 0, 0, 0.08);
   --transition-normal: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
 }
 
-:root.dark-theme {
-  --primary-color: #7c8aff;
-  --primary-light: #a5afff;
-  --primary-dark: #5c6cff;
-  --bg-color: #121212;
-  --card-bg: #242424;
-  --text-primary: rgba(255, 255, 255, 0.9);
-  --text-secondary: rgba(255, 255, 255, 0.7);
-  --text-hint: rgba(255, 255, 255, 0.5);
-  --border-color: #3e3e3e;
-  --shadow-light: 0 2px 12px 0 rgba(0, 0, 0, 0.2);
-  --shadow-medium: 0 4px 16px 0 rgba(0, 0, 0, 0.3);
-}
-</style>
-
-<style scoped>
 /* 页面容器 */
 .page-container {
   padding: 20px;
-  max-width: 1200px;
+  max-width: 900px;
   margin: 0 auto;
   position: relative;
   min-height: 100vh;
-  background-color: var(--bg-color);
-  color: var(--text-primary);
-  transition: var(--transition-normal);
 }
 
 /* 背景装饰 */
@@ -859,10 +851,10 @@ onMounted(async () => {
 }
 
 .bg-particles:nth-child(1) { width: 300px; height: 300px; top: 10%; left: 5%; animation-duration: 45s; }
-.bg-particles:nth-child(2) { width: 200px; height: 200px; top: 40%; right: 10%; animation-duration: 35s; animation-delay: 2s; }
-.bg-particles:nth-child(3) { width: 100px; height: 100px; bottom: 30%; left: 20%; animation-duration: 25s; animation-delay: 5s; }
-.bg-particles:nth-child(4) { width: 150px; height: 150px; bottom: 10%; right: 15%; animation-duration: 40s; animation-delay: 10s; }
-.bg-particles:nth-child(5) { width: 180px; height: 180px; top: 20%; right: 30%; animation-duration: 50s; animation-delay: 7s; }
+.bg-particles:nth-child(2) { width: 200px; height: 200px; top: 30%; right: 10%; animation-duration: 40s; animation-delay: 5s; }
+.bg-particles:nth-child(3) { width: 150px; height: 150px; bottom: 20%; left: 15%; animation-duration: 35s; animation-delay: 10s; }
+.bg-particles:nth-child(4) { width: 180px; height: 180px; top: 50%; left: 50%; animation-duration: 38s; animation-delay: 2s; }
+.bg-particles:nth-child(5) { width: 220px; height: 220px; bottom: 30%; right: 20%; animation-duration: 50s; animation-delay: 7s; }
 .bg-particles:nth-child(6) { width: 120px; height: 120px; bottom: 40%; right: 40%; animation-duration: 55s; animation-delay: 3s; }
 .bg-particles:nth-child(7) { width: 250px; height: 250px; top: 60%; left: 10%; animation-duration: 60s; animation-delay: 15s; }
 .bg-particles:nth-child(8) { width: 200px; height: 200px; bottom: 20%; left: 40%; animation-duration: 45s; animation-delay: 8s; }
