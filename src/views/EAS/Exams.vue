@@ -175,28 +175,134 @@ const queryExams = async () => {
   }
 }
 
-// 获取考试状态
+// ========== 修复：解析考试时间 ==========
+// 考试时间格式：2026-01-11(14:00-15:30)
+// 需要正确解析日期和时间部分
+const parseExamTime = (timeStr) => {
+  if (!timeStr) return null
+
+  try {
+    // 匹配格式：2026-01-11(14:00-15:30) 或 2026-01-11(14:00~15:30)
+    const match = timeStr.match(/(\d{4}-\d{2}-\d{2})\s*\((\d{2}:\d{2})\s*[-~]\s*(\d{2}:\d{2})\)/)
+
+    if (match) {
+      const dateStr = match[1]  // 2026-01-11
+      const startTime = match[2]  // 14:00
+      const endTime = match[3]  // 15:30
+
+      // 解析日期
+      const [year, month, day] = dateStr.split('-').map(Number)
+
+      // 解析开始时间
+      const [startHour, startMinute] = startTime.split(':').map(Number)
+
+      // 解析结束时间
+      const [endHour, endMinute] = endTime.split(':').map(Number)
+
+      // 创建开始和结束的 Date 对象
+      const startDate = new Date(year, month - 1, day, startHour, startMinute, 0)
+      const endDate = new Date(year, month - 1, day, endHour, endMinute, 0)
+
+      return {
+        date: new Date(year, month - 1, day, 0, 0, 0),
+        startTime: startDate,
+        endTime: endDate
+      }
+    }
+
+    // 如果不匹配带时间的格式，尝试只解析日期
+    // 格式：2026-01-11
+    const dateOnlyMatch = timeStr.match(/(\d{4}-\d{2}-\d{2})/)
+    if (dateOnlyMatch) {
+      const [year, month, day] = dateOnlyMatch[1].split('-').map(Number)
+      const date = new Date(year, month - 1, day, 23, 59, 59)  // 设置为当天结束时间
+      return {
+        date: new Date(year, month - 1, day, 0, 0, 0),
+        startTime: null,
+        endTime: date
+      }
+    }
+
+    return null
+  } catch (e) {
+    console.error('解析考试时间失败:', e, timeStr)
+    return null
+  }
+}
+
+// ========== 修复：获取考试状态 ==========
 const getExamStatus = (exam) => {
   if (!exam.time) return '未安排'
 
   try {
-    const examTime = new Date(exam.time.replace(/-/g, '/'))
+    const parsedTime = parseExamTime(exam.time)
+
+    if (!parsedTime) {
+      console.warn('无法解析考试时间:', exam.time)
+      return '未知'
+    }
+
     const now = new Date()
 
-    if (examTime < now) {
-      return '已结束'
-    } else {
+    // 获取今天的日期（去掉时间部分）
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+    const examDate = new Date(parsedTime.date.getFullYear(), parsedTime.date.getMonth(), parsedTime.date.getDate())
+
+    // 如果有开始时间和结束时间
+    if (parsedTime.startTime && parsedTime.endTime) {
+      // 考试已结束：当前时间 > 结束时间
+      if (now > parsedTime.endTime) {
+        return '已结束'
+      }
+
+      // 考试进行中：开始时间 <= 当前时间 <= 结束时间
+      if (now >= parsedTime.startTime && now <= parsedTime.endTime) {
+        return '进行中'
+      }
+
+      // 检查是否是今天的考试（比较日期部分）
+      if (examDate.getTime() === today.getTime()) {
+        return '今日考试'
+      }
+
+      // 计算距离考试还有多少天
+      const diffTime = examDate - today
+      const diffDays = Math.round(diffTime / (1000 * 60 * 60 * 24))
+
+      // 7天内
+      if (diffDays <= 7) {
+        return '即将考试'
+      }
+
+      return '待考试'
+    }
+
+    // 如果只有日期没有具体时间
+    if (parsedTime.date) {
+      // 考试日期在今天之前
+      if (examDate < today) {
+        return '已结束'
+      }
+
+      // 考试日期是今天
+      if (examDate.getTime() === today.getTime()) {
+        return '今日考试'
+      }
+
       // 计算剩余天数
-      const diffTime = examTime - now
-      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24))
+      const diffTime = examDate - today
+      const diffDays = Math.round(diffTime / (1000 * 60 * 60 * 24))
 
       if (diffDays <= 7) {
         return '即将考试'
-      } else {
-        return '待考试'
       }
+
+      return '待考试'
     }
+
+    return '未知'
   } catch (e) {
+    console.error('获取考试状态失败:', e)
     return '未知'
   }
 }
@@ -208,10 +314,14 @@ const getExamStatusType = (exam) => {
   switch (status) {
     case '已结束':
       return 'info'
-    case '即将考试':
+    case '进行中':
+      return 'success'
+    case '今日考试':
       return 'danger'
-    case '待考试':
+    case '即将考试':
       return 'warning'
+    case '待考试':
+      return 'primary'
     case '未安排':
       return 'info'
     default:
