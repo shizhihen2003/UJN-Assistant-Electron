@@ -92,13 +92,14 @@
             </el-button>
           </el-tooltip>
 
-          <el-tooltip content="语音对话模式">
-            <el-switch
-                v-model="voiceConversationMode"
-                @change="handleVoiceConversationModeChange"
-                active-color="#13ce66"
-                inactive-color="#909399">
-            </el-switch>
+          <!-- 语音对话模式按钮 -->
+          <el-tooltip :content="voiceConversationMode ? '退出语音对话' : '语音对话模式'">
+            <button
+                class="voice-chat-btn"
+                :class="{ 'active': voiceConversationMode }"
+                @click="toggleVoiceChatMode">
+              <el-icon :size="20"><Microphone /></el-icon>
+            </button>
           </el-tooltip>
 
           <el-tooltip content="设置">
@@ -490,24 +491,66 @@
         <el-form-item label="语音识别 API Secret">
           <el-input v-model="speechSettings.iatApiSecret" placeholder="输入语音识别API Secret" show-password />
         </el-form-item>
-        <el-form-item label="语音合成 API Key">
-          <el-input v-model="speechSettings.ttsApiKey" placeholder="输入语音合成API Key" show-password />
+
+        <el-divider content-position="left">语音合成设置</el-divider>
+
+        <el-form-item label="TTS类型">
+          <el-radio-group v-model="speechSettings.ttsType" @change="onTtsTypeChange">
+            <el-radio value="normal">普通语音合成</el-radio>
+            <el-radio value="super">超拟人语音合成</el-radio>
+          </el-radio-group>
         </el-form-item>
-        <el-form-item label="语音合成 API Secret">
-          <el-input v-model="speechSettings.ttsApiSecret" placeholder="输入语音合成API Secret" show-password />
-        </el-form-item>
-        <el-form-item label="发音人">
-          <el-select v-model="speechSettings.voice" style="width: 100%">
-            <el-option-group label="女声">
-              <el-option label="聆玉言（交互聊天）" value="x5_lingyuyan_flow" />
-              <el-option label="聆小玥（交互聊天）" value="x5_lingxiaoyue_flow" />
-              <el-option label="聆小璇（交互聊天）" value="x5_lingxiaoxuan_flow" />
-            </el-option-group>
-            <el-option-group label="男声">
-              <el-option label="聆飞逸（交互聊天）" value="x5_lingfeiyi_flow" />
-            </el-option-group>
-          </el-select>
-        </el-form-item>
+
+        <!-- 普通TTS配置 -->
+        <template v-if="speechSettings.ttsType === 'normal'">
+          <el-form-item label="普通TTS API Key">
+            <el-input v-model="speechSettings.ttsApiKey" placeholder="输入普通语音合成API Key" show-password />
+          </el-form-item>
+          <el-form-item label="普通TTS API Secret">
+            <el-input v-model="speechSettings.ttsApiSecret" placeholder="输入普通语音合成API Secret" show-password />
+          </el-form-item>
+          <el-form-item label="发音人">
+            <el-select v-model="speechSettings.voice" style="width: 100%">
+              <el-option-group label="女声">
+                <el-option label="讯飞小燕" value="xiaoyan" />
+                <el-option label="讯飞小露(叶子)" value="x4_yezi" />
+              </el-option-group>
+              <el-option-group label="男声">
+                <el-option label="讯飞许久" value="aisjiuxu" />
+                <el-option label="讯飞小婧" value="aisjinger" />
+                <el-option label="讯飞许小宝" value="aisbabyxu" />
+              </el-option-group>
+            </el-select>
+          </el-form-item>
+        </template>
+
+        <!-- 超拟人TTS配置 -->
+        <template v-if="speechSettings.ttsType === 'super'">
+          <el-form-item label="超拟人TTS AppID">
+            <el-input v-model="speechSettings.superTtsAppId" placeholder="输入超拟人语音合成AppID（可与识别相同）" />
+          </el-form-item>
+          <el-form-item label="超拟人TTS API Key">
+            <el-input v-model="speechSettings.superTtsApiKey" placeholder="输入超拟人语音合成API Key" show-password />
+          </el-form-item>
+          <el-form-item label="超拟人TTS API Secret">
+            <el-input v-model="speechSettings.superTtsApiSecret" placeholder="输入超拟人语音合成API Secret" show-password />
+          </el-form-item>
+          <el-form-item label="发音人">
+            <el-select v-model="speechSettings.superVoice" style="width: 100%">
+              <el-option-group label="女声">
+                <el-option label="聆玉言（交互聊天）" value="x5_lingyuyan_flow" />
+                <el-option label="聆小玥（交互聊天）" value="x5_lingxiaoyue_flow" />
+                <el-option label="聆小璇（交互聊天）" value="x5_lingxiaoxuan_flow" />
+              </el-option-group>
+              <el-option-group label="男声">
+                <el-option label="聆飞逸（交互聊天）" value="x5_lingfeiyi_flow" />
+              </el-option-group>
+            </el-select>
+          </el-form-item>
+        </template>
+
+        <el-divider content-position="left">播放设置</el-divider>
+
         <el-form-item label="自动朗读设置">
           <el-switch
               v-model="autoReadMessages"
@@ -1039,15 +1082,32 @@ const speechSettings = ref({
   appId: '',
   iatApiKey: '',
   iatApiSecret: '',
+  // TTS类型
+  ttsType: 'normal', // 'normal' 或 'super'
+  // 普通TTS配置
   ttsApiKey: '',
   ttsApiSecret: '',
-  voice: 'x5_lingfeiyi_flow', // 默认发音人（聆飞逸）
-  speed: 50, // 语速
-  volume: 50, // 音量
-  pitch: 50, // 音调
+  voice: 'xiaoyan', // 普通TTS默认发音人
+  // 超拟人TTS配置
+  superTtsAppId: '',
+  superTtsApiKey: '',
+  superTtsApiSecret: '',
+  superVoice: 'x5_lingfeiyi_flow', // 超拟人默认发音人
+  // 通用设置
+  speed: 50,
+  volume: 50,
+  pitch: 50,
 });
 
 const autoReadMessages = ref(false);
+
+// 获取当前TTS发音人
+const currentVoice = computed(() => {
+  if (speechSettings.value.ttsType === 'super') {
+    return speechSettings.value.superVoice;
+  }
+  return speechSettings.value.voice;
+});
 
 // 本地模型状态变量
 const testingConnection = ref(false);
@@ -1105,6 +1165,13 @@ const selectedModelInfo = computed(() => {
 // =============================================================================
 // 语音对话核心方法 - 重构后的简化版本
 // =============================================================================
+
+/**
+ * 切换语音对话模式
+ */
+const toggleVoiceChatMode = () => {
+  handleVoiceConversationModeChange(!voiceConversationMode.value);
+};
 
 /**
  * 处理语音对话模式切换
@@ -1437,7 +1504,7 @@ const sendToAIWithVoiceResponse = async (message) => {
         },
         // options
         {
-          voice: speechSettings.value.voice,
+          voice: currentVoice.value,
           speed: speechSettings.value.speed,
           volume: speechSettings.value.volume,
           pitch: speechSettings.value.pitch
@@ -1675,7 +1742,7 @@ const playVoiceResponse = async (text) => {
         },
         // 语音参数
         {
-          voice: speechSettings.value.voice,
+          voice: currentVoice.value,
           speed: speechSettings.value.speed,
           volume: speechSettings.value.volume,
           pitch: speechSettings.value.pitch
@@ -1838,7 +1905,7 @@ const speakMessage = async (text, index, onComplete) => {
 
     // 获取动态调整的TTS参数
     const ttsParams = {
-      voice: speechSettings.value.voice,
+      voice: currentVoice.value,
       speed: speechSettings.value.speed,
       volume: speechSettings.value.volume,
       pitch: speechSettings.value.pitch
@@ -3415,36 +3482,55 @@ const loadSpeechSettings = async () => {
       speechSettings.value.iatApiSecret = iatConfig.apiSecret || '';
     }
 
-    // 从存储加载语音合成配置
+    // 加载TTS类型
+    const ttsType = await store.get('speech_tts_type');
+    if (ttsType) {
+      speechSettings.value.ttsType = ttsType;
+    }
+
+    // 从存储加载普通语音合成配置
     const ttsConfig = await store.getObject('speech_tts_config');
     if (ttsConfig) {
-      // 如果appId在iatConfig中没有，尝试从ttsConfig中获取
       if (!speechSettings.value.appId && ttsConfig.appId) {
         speechSettings.value.appId = ttsConfig.appId;
       }
       speechSettings.value.ttsApiKey = ttsConfig.apiKey || '';
       speechSettings.value.ttsApiSecret = ttsConfig.apiSecret || '';
-
-      // 加载语音合成偏好设置
-      const ttsPrefs = await store.getObject('speech_tts_prefs');
-      if (ttsPrefs) {
-        speechSettings.value.voice = ttsPrefs.voice || 'x5_lingfeiyi_flow';
-        speechSettings.value.speed = ttsPrefs.speed || 50;
-        speechSettings.value.volume = ttsPrefs.volume || 50;
-        speechSettings.value.pitch = ttsPrefs.pitch || 50;
-      }
-
-      // 加载自动朗读设置
-      const autoReadSettings = await store.getObject('speech_auto_read');
-      if (autoReadSettings) {
-        autoReadMessages.value = autoReadSettings.enabled || false;
-      }
     }
 
-    console.log('语音设置加载完成');
+    // 从存储加载超拟人语音合成配置
+    const superTtsConfig = await store.getObject('speech_super_tts_config');
+    if (superTtsConfig) {
+      speechSettings.value.superTtsAppId = superTtsConfig.appId || '';
+      speechSettings.value.superTtsApiKey = superTtsConfig.apiKey || '';
+      speechSettings.value.superTtsApiSecret = superTtsConfig.apiSecret || '';
+    }
+
+    // 加载语音合成偏好设置
+    const ttsPrefs = await store.getObject('speech_tts_prefs');
+    if (ttsPrefs) {
+      speechSettings.value.voice = ttsPrefs.voice || 'xiaoyan';
+      speechSettings.value.superVoice = ttsPrefs.superVoice || 'x5_lingfeiyi_flow';
+      speechSettings.value.speed = ttsPrefs.speed || 50;
+      speechSettings.value.volume = ttsPrefs.volume || 50;
+      speechSettings.value.pitch = ttsPrefs.pitch || 50;
+    }
+
+    // 加载自动朗读设置
+    const autoReadSettings = await store.getObject('speech_auto_read');
+    if (autoReadSettings) {
+      autoReadMessages.value = autoReadSettings.enabled || false;
+    }
+
+    console.log('语音设置加载完成, TTS类型:', speechSettings.value.ttsType);
   } catch (error) {
     console.error('加载语音设置失败:', error);
   }
+};
+
+// TTS类型切换处理
+const onTtsTypeChange = async (type) => {
+  console.log('TTS类型切换:', type);
 };
 
 /**
@@ -3459,16 +3545,27 @@ const saveSpeechSettings = async () => {
       apiSecret: speechSettings.value.iatApiSecret
     });
 
-    // 保存语音合成配置
+    // 保存TTS类型
+    await speechService.setTtsType(speechSettings.value.ttsType);
+
+    // 保存普通语音合成配置
     await speechService.setConfig('tts', {
       appId: speechSettings.value.appId,
       apiKey: speechSettings.value.ttsApiKey,
       apiSecret: speechSettings.value.ttsApiSecret
     });
 
+    // 保存超拟人语音合成配置
+    await speechService.setConfig('superTts', {
+      appId: speechSettings.value.superTtsAppId || speechSettings.value.appId,
+      apiKey: speechSettings.value.superTtsApiKey,
+      apiSecret: speechSettings.value.superTtsApiSecret
+    });
+
     // 保存语音合成偏好设置
     await store.putObject('speech_tts_prefs', {
       voice: speechSettings.value.voice,
+      superVoice: speechSettings.value.superVoice,
       speed: speechSettings.value.speed,
       volume: speechSettings.value.volume,
       pitch: speechSettings.value.pitch
@@ -5131,6 +5228,47 @@ pre code.hljs {
 
   .message-stopped .message-body::after {
     color: #ff7875;
+  }
+}
+
+/* 语音对话模式按钮样式 */
+.voice-chat-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: none;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  box-shadow: 0 2px 8px rgba(102, 126, 234, 0.4);
+  margin: 0 8px;
+}
+
+.voice-chat-btn:hover {
+  transform: scale(1.1);
+  box-shadow: 0 4px 16px rgba(102, 126, 234, 0.5);
+}
+
+.voice-chat-btn:active {
+  transform: scale(0.95);
+}
+
+.voice-chat-btn.active {
+  background: linear-gradient(135deg, #f5576c 0%, #f093fb 100%);
+  animation: pulse-glow 1.5s ease-in-out infinite;
+  box-shadow: 0 2px 12px rgba(245, 87, 108, 0.5);
+}
+
+@keyframes pulse-glow {
+  0%, 100% {
+    box-shadow: 0 2px 12px rgba(245, 87, 108, 0.5);
+  }
+  50% {
+    box-shadow: 0 4px 20px rgba(245, 87, 108, 0.8);
   }
 }
 </style>

@@ -322,6 +322,50 @@ class Store {
     }
 
     /**
+     * 设置任意值（自动处理类型）
+     * @param {string} key 键名
+     * @param {*} value 值
+     */
+    async put(key, value) {
+        if (this.useElectron) {
+            await ipc.setStoreValue(this.getFullKey(key), value);
+        } else {
+            // 根据类型决定如何存储
+            if (value === null || value === undefined) {
+                localStorage.removeItem(this.getFullKey(key));
+            } else if (typeof value === 'object') {
+                localStorage.setItem(this.getFullKey(key), JSON.stringify(value));
+            } else {
+                localStorage.setItem(this.getFullKey(key), String(value));
+            }
+        }
+    }
+
+    /**
+     * 获取任意值（自动处理类型）
+     * @param {string} key 键名
+     * @param {*} defaultValue 默认值
+     * @returns {Promise<*>|*} 值
+     */
+    async get(key, defaultValue = null) {
+        if (this.useElectron) {
+            const value = await ipc.getStoreValue(this.getFullKey(key));
+            return value !== undefined && value !== null ? value : defaultValue;
+        } else {
+            const value = localStorage.getItem(this.getFullKey(key));
+            if (value === null) return defaultValue;
+
+            // 尝试解析为JSON
+            try {
+                return JSON.parse(value);
+            } catch (e) {
+                // 不是JSON，返回原始字符串
+                return value;
+            }
+        }
+    }
+
+    /**
      * 清空所有数据
      */
     async clear() {
