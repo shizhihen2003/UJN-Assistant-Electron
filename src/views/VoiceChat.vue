@@ -1,4 +1,4 @@
-<!-- VoiceChat.vue - 语音对话覆盖层组件 -->
+<!-- VoiceChat.vue - 语音对话覆盖层组件 (优化版) -->
 <template>
   <div class="voice-chat-overlay" v-if="active">
     <div class="voice-chat-container">
@@ -16,25 +16,19 @@
           <img src="@/assets/ai-avatar.png" alt="AI助手" class="ai-avatar">
 
           <!-- 状态指示器 -->
-          <div class="status-indicator" :class="{
-            'listening-status': currentState === 'listening',
-            'thinking-status': currentState === 'thinking',
-            'speaking-status': currentState === 'speaking',
-            'idle-status': currentState === 'idle'
-          }"></div>
+          <div class="status-indicator" :class="statusClass"></div>
 
           <!-- 语音状态指示器 -->
           <div class="voice-status">
             <template v-if="currentState === 'listening'">
-              <!-- 用户说话时的波形动画 -->
               <div class="voice-wave">
                 <span v-for="i in 5" :key="i"></span>
               </div>
               <div class="status-text">正在聆听...</div>
+              <div class="recognized-text" v-if="recognizedText">{{ recognizedText }}</div>
             </template>
 
             <template v-else-if="currentState === 'thinking'">
-              <!-- AI思考中的动画 -->
               <div class="thinking-dots">
                 <span v-for="i in 3" :key="i"></span>
               </div>
@@ -42,7 +36,6 @@
             </template>
 
             <template v-else-if="currentState === 'speaking'">
-              <!-- AI说话时的波形动画 -->
               <div class="speaking-wave">
                 <span v-for="i in 5" :key="i"></span>
               </div>
@@ -50,7 +43,6 @@
             </template>
 
             <template v-else>
-              <!-- 空闲状态 - 提示用户说话 -->
               <div class="idle-prompt">
                 <el-icon><Microphone /></el-icon>
               </div>
@@ -64,28 +56,22 @@
       <div class="voice-chat-controls">
         <button
             class="mic-button"
-            :class="{ 'listening': currentState === 'listening' }"
-            @click="toggleListening"
-            :disabled="isTransitioning">
+            :class="{
+              'listening': currentState === 'listening',
+              'thinking': currentState === 'thinking'
+            }"
+            @click="handleMicClick">
           <el-icon><Microphone /></el-icon>
         </button>
 
-        <!-- 仅在回答时显示的停止按钮 -->
+        <!-- 停止按钮 - 在回答时显示 -->
         <button
             v-if="currentState === 'speaking'"
             class="stop-button"
-            @click="stopSpeaking">
+            @click="handleStopClick">
           <el-icon><VideoPause /></el-icon>
         </button>
       </div>
-
-      <!-- 调试模式 (开发环境可开启) -->
-<!--      <div v-if="debugMode" class="debug-panel">-->
-<!--        <div>当前状态: {{ currentState }}</div>-->
-<!--        <div>识别文本: {{ recognizedText }}</div>-->
-<!--        <div>转换中: {{ isTransitioning }}</div>-->
-<!--        <button @click="debugReset">重置状态</button>-->
-<!--      </div>-->
     </div>
   </div>
 </template>
@@ -106,193 +92,139 @@ export default {
       default: false
     }
   },
+  emits: ['start-listening', 'stop-listening', 'stop-speaking', 'exit-voice-mode'],
   data() {
     return {
-      // 统一状态管理 - 只用一个状态变量
-      currentState: 'idle', // 'idle' | 'listening' | 'thinking' | 'speaking'
-
-      // 防止状态转换冲突
-      isTransitioning: false,
-
-      // 辅助数据
+      // 简化状态：idle | listening | thinking | speaking
+      currentState: 'idle',
       recognizedText: '',
-      debugMode: true,
 
-      // 内部计时器
+      // 静音检测
       silenceTimer: null,
-      nextTurnTimer: null,
-
-      // 配置
       silenceThreshold: 3000, // 3秒静音自动停止
-      nextTurnDelay: 2000,    // 下一轮延迟时间
+
+      // 自动开始下一轮
+      nextTurnTimer: null,
+      nextTurnDelay: 1500, // 1.5秒后自动开始下一轮
+    }
+  },
+  computed: {
+    statusClass() {
+      return {
+        'listening-status': this.currentState === 'listening',
+        'thinking-status': this.currentState === 'thinking',
+        'speaking-status': this.currentState === 'speaking',
+        'idle-status': this.currentState === 'idle'
+      };
     }
   },
   watch: {
-    currentState(newState, oldState) {
-      console.log(`[VoiceChat] 状态变化: ${oldState} -> ${newState}`);
-
-      // 状态变化时清理定时器
-      this.clearAllTimers();
-
-      // 根据新状态设置相应的定时器或逻辑
-      this.handleStateChange(newState, oldState);
-    },
-
     active(newVal) {
-      console.log('[VoiceChat] 组件激活状态变化:', newVal);
+      console.log('[VoiceChat] active changed:', newVal);
       if (newVal) {
-        this.initializeComponent();
+        this.reset();
       } else {
         this.cleanup();
       }
+    },
+
+    currentState(newState, oldState) {
+      console.log(`[VoiceChat] 状态: ${oldState} -> ${newState}`);
+      this.onStateChange(newState, oldState);
     }
   },
   methods: {
-    // =============================================================================
-    // 核心状态管理方法
-    // =============================================================================
+    // ==================== 状态管理 ====================
 
     /**
-     * 安全地改变状态
+     * 直接设置状态（不做复杂验证，提高响应速度）
      */
-    changeState(newState, force = false) {
-      if (this.isTransitioning && !force) {
-        console.warn(`[VoiceChat] 状态转换中，忽略改变到 ${newState}`);
-        return false;
-      }
-
-      if (this.currentState === newState) {
-        console.log(`[VoiceChat] 状态已经是 ${newState}，跳过`);
-        return true;
-      }
-
-      // 验证状态转换是否合法
-      if (!this.isValidStateTransition(this.currentState, newState)) {
-        console.error(`[VoiceChat] 非法状态转换: ${this.currentState} -> ${newState}`);
-        return false;
-      }
-
-      console.log(`[VoiceChat] 执行状态转换: ${this.currentState} -> ${newState}`);
-
-      this.isTransitioning = true;
-      const oldState = this.currentState;
+    setState(newState) {
+      if (this.currentState === newState) return;
       this.currentState = newState;
-
-      // 状态转换完成后解除锁定
-      this.$nextTick(() => {
-        this.isTransitioning = false;
-      });
-
-      return true;
     },
 
     /**
-     * 验证状态转换是否合法
+     * 状态变化处理
      */
-    isValidStateTransition(fromState, toState) {
-      const validTransitions = {
-        'idle': ['listening'],
-        'listening': ['thinking', 'idle'],
-        'thinking': ['speaking', 'idle'],
-        'speaking': ['idle']
-      };
+    onStateChange(newState, oldState) {
+      // 清理定时器
+      this.clearTimers();
 
-      return validTransitions[fromState]?.includes(toState) || toState === 'idle';
-    },
-
-    /**
-     * 处理状态变化
-     */
-    handleStateChange(newState, oldState) {
       switch (newState) {
         case 'listening':
-          this.onEnterListening();
-          break;
-        case 'thinking':
-          this.onEnterThinking();
-          break;
-        case 'speaking':
-          this.onEnterSpeaking();
+          this.startSilenceDetection();
           break;
         case 'idle':
-          this.onEnterIdle(oldState);
+          // 如果是从 speaking 结束，自动开始下一轮
+          if (oldState === 'speaking' && this.active) {
+            this.scheduleNextTurn();
+          }
           break;
       }
     },
 
-    // =============================================================================
-    // 状态进入处理方法
-    // =============================================================================
-
-    onEnterListening() {
-      console.log('[VoiceChat] 进入聆听状态');
-      // 启动静音检测
-      this.startSilenceDetection();
-    },
-
-    onEnterThinking() {
-      console.log('[VoiceChat] 进入思考状态');
-      // 思考状态不需要特殊处理，等待父组件完成AI处理
-    },
-
-    onEnterSpeaking() {
-      console.log('[VoiceChat] 进入回答状态');
-      // 回答状态由父组件控制语音播放
-    },
-
-    onEnterIdle(fromState) {
-      console.log('[VoiceChat] 进入空闲状态，来自:', fromState);
-
-      // 如果是从speaking状态进入idle，且组件仍然激活，则安排下一轮
-      if (fromState === 'speaking' && this.active) {
-        this.scheduleNextTurn();
-      }
-    },
-
-    // =============================================================================
-    // 用户操作方法
-    // =============================================================================
+    // ==================== 用户交互 ====================
 
     /**
-     * 切换聆听状态（用户点击麦克风）
+     * 麦克风按钮点击
      */
-    toggleListening() {
-      console.log('[VoiceChat] 用户点击麦克风，当前状态:', this.currentState);
-
-      if (this.isTransitioning) {
-        console.log('[VoiceChat] 状态转换中，忽略点击');
-        return;
-      }
+    handleMicClick() {
+      console.log('[VoiceChat] 麦克风点击，当前状态:', this.currentState);
 
       switch (this.currentState) {
         case 'idle':
           this.startListening();
           break;
         case 'listening':
-          this.stopListening(false); // 用户主动停止
+          this.stopListening(false);
           break;
         case 'speaking':
-          this.stopSpeaking();
+          // 回答时点击麦克风 = 打断回答，然后开始新录音
+          this.$emit('stop-speaking');
+          this.setState('idle');
+          // 延迟一下再开始录音，确保播放完全停止
+          setTimeout(() => {
+            if (this.active && this.currentState === 'idle') {
+              this.startListening();
+            }
+          }, 300);
           break;
         case 'thinking':
-          // 思考中不允许操作
-          console.log('[VoiceChat] 思考中，忽略点击');
+          // 思考中点击，取消当前操作，回到 idle
+          this.$emit('stop-speaking');
+          this.setState('idle');
           break;
       }
     },
 
     /**
+     * 停止按钮点击
+     */
+    handleStopClick() {
+      console.log('[VoiceChat] 停止按钮点击');
+      this.$emit('stop-speaking');
+      this.setState('idle');
+    },
+
+    /**
+     * 退出语音模式
+     */
+    exitVoiceMode() {
+      console.log('[VoiceChat] 退出语音模式');
+      this.cleanup();
+      this.$emit('exit-voice-mode');
+    },
+
+    // ==================== 语音识别控制 ====================
+
+    /**
      * 开始聆听
      */
     startListening() {
-      if (!this.changeState('listening')) {
-        return;
-      }
-
-      // 清空之前的识别结果
+      console.log('[VoiceChat] 开始聆听');
       this.recognizedText = '';
-
-      // 通知父组件开始语音识别
+      this.setState('listening');
       this.$emit('start-listening');
     },
 
@@ -300,116 +232,98 @@ export default {
      * 停止聆听
      */
     stopListening(isSilence = false) {
-      if (this.currentState !== 'listening') {
-        console.log('[VoiceChat] 当前不在聆听状态，忽略停止请求');
-        return;
+      if (this.currentState !== 'listening') return;
+
+      console.log('[VoiceChat] 停止聆听, 静音触发:', isSilence);
+
+      // 立即切换到 idle 或 thinking 状态，不要等待父组件回调
+      // 如果有识别文本，切换到 thinking；否则切换到 idle
+      if (this.recognizedText && this.recognizedText.trim().length >= 2) {
+        this.setState('thinking');
+      } else {
+        this.setState('idle');
       }
 
-      console.log('[VoiceChat] 停止聆听，静音触发:', isSilence);
-
-      // 通知父组件停止语音识别
       this.$emit('stop-listening', isSilence, this.recognizedText);
     },
 
-    /**
-     * 停止回答
-     */
-    stopSpeaking() {
-      if (this.currentState !== 'speaking') {
-        return;
-      }
-
-      console.log('[VoiceChat] 用户停止回答');
-
-      // 通知父组件停止语音播放
-      this.$emit('stop-speaking');
-
-      // 立即转换到空闲状态
-      this.changeState('idle', true);
-    },
-
-    // =============================================================================
-    // 父组件调用的方法
-    // =============================================================================
+    // ==================== 父组件调用的方法 ====================
 
     /**
-     * 父组件调用：收到语音识别结果
+     * 收到语音识别结果
      */
     handleSpeechResult(text) {
-      console.log('[VoiceChat] 收到语音识别结果:', text);
+      console.log('[VoiceChat] 识别结果:', text);
       this.recognizedText = text;
 
-      // 如果正在聆听，重置静音检测
+      // 重置静音检测
       if (this.currentState === 'listening') {
         this.resetSilenceDetection();
       }
     },
 
     /**
-     * 父组件调用：开始AI思考
+     * 开始 AI 思考
      */
     startThinking() {
-      console.log('[VoiceChat] 父组件通知开始思考');
-      this.changeState('thinking');
+      console.log('[VoiceChat] -> thinking');
+      this.setState('thinking');
     },
 
     /**
-     * 父组件调用：开始AI回答
+     * 开始 AI 回答（语音播放）
      */
     startSpeaking(response) {
-      console.log('[VoiceChat] 父组件通知开始回答');
-      this.changeState('speaking');
+      console.log('[VoiceChat] -> speaking');
+      this.setState('speaking');
     },
 
     /**
-     * 父组件调用：AI回答完成
+     * AI 回答完成
      */
     completeSpeaking() {
-      console.log('[VoiceChat] 父组件通知回答完成');
-      this.changeState('idle');
+      console.log('[VoiceChat] -> idle (speaking complete)');
+      this.setState('idle');
     },
 
     /**
-     * 父组件调用：发生错误
+     * AI 被停止
+     */
+    handleAIStop() {
+      console.log('[VoiceChat] AI stopped');
+      this.setState('idle');
+    },
+
+    /**
+     * 处理错误
      */
     handleError(message) {
-      console.error('[VoiceChat] 收到错误:', message);
-      this.changeState('idle', true);
+      console.error('[VoiceChat] Error:', message);
+      this.setState('idle');
     },
 
-    // =============================================================================
-    // 内部辅助方法
-    // =============================================================================
+    // ==================== 静音检测 ====================
 
-    /**
-     * 启动静音检测
-     */
     startSilenceDetection() {
       this.silenceTimer = setTimeout(() => {
         if (this.currentState === 'listening') {
-          console.log('[VoiceChat] 检测到静音，自动停止');
+          console.log('[VoiceChat] 静音超时，自动停止');
           this.stopListening(true);
         }
       }, this.silenceThreshold);
     },
 
-    /**
-     * 重置静音检测
-     */
     resetSilenceDetection() {
       if (this.silenceTimer) {
         clearTimeout(this.silenceTimer);
-        this.silenceTimer = null;
       }
       this.startSilenceDetection();
     },
 
-    /**
-     * 安排下一轮对话
-     */
+    // ==================== 自动下一轮 ====================
+
     scheduleNextTurn() {
       console.log('[VoiceChat] 安排下一轮对话');
-
       this.nextTurnTimer = setTimeout(() => {
         if (this.active && this.currentState === 'idle') {
           console.log('[VoiceChat] 自动开始下一轮');
@@ -418,72 +332,43 @@ export default {
       }, this.nextTurnDelay);
     },
 
-    /**
-     * 清理所有定时器
-     */
-    clearAllTimers() {
+    // ==================== 工具方法 ====================
+
+    clearTimers() {
       if (this.silenceTimer) {
         clearTimeout(this.silenceTimer);
         this.silenceTimer = null;
       }
-
       if (this.nextTurnTimer) {
         clearTimeout(this.nextTurnTimer);
         this.nextTurnTimer = null;
       }
     },
 
-    /**
-     * 初始化组件
-     */
-    initializeComponent() {
-      console.log('[VoiceChat] 初始化组件');
+    reset() {
+      console.log('[VoiceChat] 重置');
+      this.clearTimers();
       this.currentState = 'idle';
-      this.isTransitioning = false;
       this.recognizedText = '';
-      this.clearAllTimers();
     },
 
-    /**
-     * 清理资源
-     */
     cleanup() {
-      console.log('[VoiceChat] 清理资源');
-      this.clearAllTimers();
+      console.log('[VoiceChat] 清理');
+      this.clearTimers();
       this.currentState = 'idle';
-      this.isTransitioning = false;
-    },
-
-    /**
-     * 退出语音模式
-     */
-    exitVoiceMode() {
-      console.log('[VoiceChat] 退出语音模式');
-
-      // 清理所有状态
-      this.cleanup();
-
-      // 通知父组件退出
-      this.$emit('exit-voice-mode');
-    },
-
-    /**
-     * 调试重置
-     */
-    debugReset() {
-      console.log('[VoiceChat] 调试重置');
-      this.cleanup();
-      this.initializeComponent();
+      this.recognizedText = '';
     }
   },
 
   mounted() {
-    console.log('[VoiceChat] 组件挂载');
-    this.initializeComponent();
+    console.log('[VoiceChat] mounted');
+    if (this.active) {
+      this.reset();
+    }
   },
 
   beforeUnmount() {
-    console.log('[VoiceChat] 组件即将卸载');
+    console.log('[VoiceChat] beforeUnmount');
     this.cleanup();
   }
 }
@@ -494,9 +379,9 @@ export default {
   position: fixed;
   top: 0;
   left: 0;
-  width: 100%;
-  height: 100%;
-  background-color: rgba(0, 0, 0, 0.85);
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.85);
   z-index: 9999;
   display: flex;
   align-items: center;
@@ -506,37 +391,36 @@ export default {
 
 .voice-chat-container {
   width: 100%;
-  height: 100%;
   max-width: 500px;
-  max-height: 700px;
+  height: 100%;
   display: flex;
   flex-direction: column;
-  color: white;
+  padding: 20px;
 }
 
 .voice-chat-header {
   display: flex;
   justify-content: flex-end;
-  padding: 20px;
+  padding: 10px;
 }
 
 .close-button {
-  background: transparent;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.1);
   border: none;
   color: white;
-  font-size: 24px;
   cursor: pointer;
-  width: 40px;
-  height: 40px;
-  border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: background-color 0.2s ease;
+  font-size: 20px;
+  transition: background 0.2s;
 }
 
 .close-button:hover {
-  background: rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.2);
 }
 
 .voice-chat-content {
@@ -544,127 +428,114 @@ export default {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 20px;
 }
 
 .ai-avatar-container {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
+  text-align: center;
+  position: relative;
 }
 
 .ai-avatar {
   width: 120px;
   height: 120px;
   border-radius: 50%;
-  margin-bottom: 30px;
-  border: 2px solid rgba(255, 255, 255, 0.2);
-  box-shadow: 0 0 30px rgba(0, 122, 255, 0.3);
-  transition: all 0.3s ease;
+  object-fit: cover;
+  border: 3px solid rgba(255, 255, 255, 0.2);
 }
 
-/* 状态指示器 */
 .status-indicator {
-  width: 10px;
-  height: 10px;
+  position: absolute;
+  bottom: 5px;
+  right: 5px;
+  width: 20px;
+  height: 20px;
   border-radius: 50%;
-  margin: 0 auto 10px;
-  background-color: #999;
-  transition: all 0.3s ease;
+  border: 2px solid white;
 }
 
-.listening-status {
-  background-color: #FF3B30;
-  box-shadow: 0 0 10px #FF3B30;
-  animation: pulse 1.5s infinite;
-}
+.idle-status { background: #909399; }
+.listening-status { background: #67C23A; animation: pulse 1.5s infinite; }
+.thinking-status { background: #E6A23C; animation: pulse 1s infinite; }
+.speaking-status { background: #409EFF; animation: pulse 1.2s infinite; }
 
-.thinking-status {
-  background-color: #FFCC00;
-  box-shadow: 0 0 10px #FFCC00;
-  animation: glow 2s infinite ease-in-out;
-}
-
-.speaking-status {
-  background-color: #5AC8FA;
-  box-shadow: 0 0 10px #5AC8FA;
-  animation: pulse 1.5s infinite;
-}
-
-.idle-status {
-  background-color: #8E8E93;
+@keyframes pulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.2); opacity: 0.7; }
 }
 
 .voice-status {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  height: 80px;
-  justify-content: center;
+  margin-top: 30px;
+  min-height: 100px;
 }
 
 .status-text {
-  margin-top: 15px;
+  color: white;
   font-size: 18px;
+  margin-top: 15px;
+}
+
+.recognized-text {
   color: rgba(255, 255, 255, 0.8);
-  text-align: center;
+  font-size: 14px;
+  margin-top: 10px;
+  max-width: 300px;
+  word-break: break-word;
 }
 
 /* 波形动画 */
 .voice-wave, .speaking-wave {
   display: flex;
   align-items: center;
-  height: 40px;
   justify-content: center;
+  height: 40px;
+  gap: 4px;
 }
 
 .voice-wave span, .speaking-wave span {
-  display: inline-block;
+  display: block;
   width: 4px;
   height: 20px;
-  margin: 0 3px;
-  background-color: #007AFF;
+  background: #67C23A;
   border-radius: 2px;
-  animation: wave 1.2s infinite ease-in-out;
+  animation: wave 1s ease-in-out infinite;
+}
+
+.speaking-wave span {
+  background: #409EFF;
 }
 
 .voice-wave span:nth-child(1) { animation-delay: 0s; }
-.voice-wave span:nth-child(2) { animation-delay: 0.2s; }
-.voice-wave span:nth-child(3) { animation-delay: 0.4s; }
-.voice-wave span:nth-child(4) { animation-delay: 0.6s; }
-.voice-wave span:nth-child(5) { animation-delay: 0.8s; }
+.voice-wave span:nth-child(2) { animation-delay: 0.1s; }
+.voice-wave span:nth-child(3) { animation-delay: 0.2s; }
+.voice-wave span:nth-child(4) { animation-delay: 0.3s; }
+.voice-wave span:nth-child(5) { animation-delay: 0.4s; }
 
-.speaking-wave span {
-  background-color: #5AC8FA;
-}
+.speaking-wave span:nth-child(1) { animation-delay: 0s; }
+.speaking-wave span:nth-child(2) { animation-delay: 0.15s; }
+.speaking-wave span:nth-child(3) { animation-delay: 0.3s; }
+.speaking-wave span:nth-child(4) { animation-delay: 0.45s; }
+.speaking-wave span:nth-child(5) { animation-delay: 0.6s; }
 
 @keyframes wave {
-  0%, 100% {
-    height: 10px;
-    opacity: 0.7;
-  }
-  50% {
-    height: 30px;
-    opacity: 1;
-  }
+  0%, 100% { height: 10px; }
+  50% { height: 35px; }
 }
 
-/* 思考点动画 */
+/* 思考动画 */
 .thinking-dots {
   display: flex;
   align-items: center;
-  height: 40px;
   justify-content: center;
+  height: 40px;
+  gap: 8px;
 }
 
 .thinking-dots span {
-  display: inline-block;
-  width: 10px;
-  height: 10px;
-  margin: 0 5px;
-  background-color: #5AC8FA;
+  width: 12px;
+  height: 12px;
+  background: #E6A23C;
   border-radius: 50%;
-  animation: thinking 1.4s infinite ease-in-out;
+  animation: thinking 1.4s ease-in-out infinite;
 }
 
 .thinking-dots span:nth-child(1) { animation-delay: 0s; }
@@ -672,218 +543,85 @@ export default {
 .thinking-dots span:nth-child(3) { animation-delay: 0.4s; }
 
 @keyframes thinking {
-  0%, 100% {
-    opacity: 0.2;
-    transform: scale(0.8);
-  }
-  50% {
-    opacity: 1;
-    transform: scale(1.2);
-  }
+  0%, 100% { transform: translateY(0); opacity: 0.4; }
+  50% { transform: translateY(-10px); opacity: 1; }
 }
 
-/* 空闲状态提示 */
+/* 空闲提示 */
 .idle-prompt {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  height: 40px;
-  font-size: 28px;
-  color: rgba(255, 255, 255, 0.7);
-  animation: breathe 3s infinite ease-in-out;
+  font-size: 48px;
+  color: rgba(255, 255, 255, 0.5);
 }
 
-@keyframes breathe {
-  0%, 100% {
-    opacity: 0.7;
-    transform: scale(1);
-  }
-  50% {
-    opacity: 1;
-    transform: scale(1.1);
-  }
-}
-
-/* 底部控制区 */
+/* 控制区 */
 .voice-chat-controls {
   display: flex;
   justify-content: center;
   align-items: center;
-  padding: 30px 0;
   gap: 20px;
+  padding: 30px;
 }
 
 .mic-button {
-  width: 70px;
-  height: 70px;
+  width: 80px;
+  height: 80px;
   border-radius: 50%;
+  background: linear-gradient(135deg, #409EFF, #66b1ff);
   border: none;
-  background-color: #007AFF;
   color: white;
-  font-size: 24px;
   cursor: pointer;
-  transition: all 0.3s ease;
   display: flex;
   align-items: center;
   justify-content: center;
-  box-shadow: 0 0 20px rgba(0, 122, 255, 0.5);
+  font-size: 32px;
+  transition: all 0.3s;
+  box-shadow: 0 4px 15px rgba(64, 158, 255, 0.4);
 }
 
-.mic-button:hover:not(:disabled) {
+.mic-button:hover:not(.disabled) {
   transform: scale(1.05);
-  box-shadow: 0 0 25px rgba(0, 122, 255, 0.7);
-}
-
-.mic-button:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-  transform: scale(0.95);
+  box-shadow: 0 6px 20px rgba(64, 158, 255, 0.5);
 }
 
 .mic-button.listening {
-  background-color: #FF3B30;
-  box-shadow: 0 0 20px rgba(255, 59, 48, 0.5);
-  animation: pulse 1.5s infinite;
+  background: linear-gradient(135deg, #67C23A, #85ce61);
+  box-shadow: 0 4px 15px rgba(103, 194, 58, 0.4);
+  animation: mic-pulse 1.5s infinite;
+}
+
+.mic-button.thinking {
+  background: linear-gradient(135deg, #E6A23C, #ebb563);
+  box-shadow: 0 4px 15px rgba(230, 162, 60, 0.4);
+  animation: mic-pulse 1s infinite;
+}
+
+.mic-button.disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+@keyframes mic-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(103, 194, 58, 0.4); }
+  50% { box-shadow: 0 0 0 20px rgba(103, 194, 58, 0); }
 }
 
 .stop-button {
-  width: 50px;
-  height: 50px;
+  width: 60px;
+  height: 60px;
   border-radius: 50%;
+  background: linear-gradient(135deg, #F56C6C, #f78989);
   border: none;
-  background-color: rgba(255, 255, 255, 0.2);
   color: white;
-  font-size: 18px;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: all 0.3s ease;
+  font-size: 24px;
+  transition: all 0.3s;
+  box-shadow: 0 4px 15px rgba(245, 108, 108, 0.4);
 }
 
 .stop-button:hover {
-  background-color: rgba(255, 255, 255, 0.3);
   transform: scale(1.05);
-}
-
-@keyframes pulse {
-  0% {
-    transform: scale(1);
-    box-shadow: 0 0 20px rgba(255, 59, 48, 0.5);
-  }
-  50% {
-    transform: scale(1.05);
-    box-shadow: 0 0 30px rgba(255, 59, 48, 0.7);
-  }
-  100% {
-    transform: scale(1);
-    box-shadow: 0 0 20px rgba(255, 59, 48, 0.5);
-  }
-}
-
-@keyframes glow {
-  0%, 100% {
-    box-shadow: 0 0 10px #FFCC00;
-  }
-  50% {
-    box-shadow: 0 0 20px #FFCC00, 0 0 30px rgba(255, 204, 0, 0.5);
-  }
-}
-
-/* 调试面板 */
-.debug-panel {
-  position: absolute;
-  top: 10px;
-  left: 10px;
-  background-color: rgba(0, 0, 0, 0.7);
-  padding: 10px;
-  border-radius: 5px;
-  font-size: 12px;
-  z-index: 10000;
-  backdrop-filter: blur(5px);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-}
-
-.debug-panel div {
-  margin-bottom: 5px;
-  font-family: monospace;
-}
-
-.debug-panel button {
-  background-color: #007AFF;
-  color: white;
-  border: none;
-  padding: 5px 10px;
-  border-radius: 3px;
-  cursor: pointer;
-  font-size: 11px;
-  transition: background-color 0.2s ease;
-}
-
-.debug-panel button:hover {
-  background-color: #0056b3;
-}
-
-/* 响应式设计 */
-@media (max-width: 768px) {
-  .voice-chat-container {
-    max-width: 100%;
-    padding: 0 10px;
-  }
-
-  .ai-avatar {
-    width: 100px;
-    height: 100px;
-  }
-
-  .mic-button {
-    width: 60px;
-    height: 60px;
-    font-size: 20px;
-  }
-
-  .stop-button {
-    width: 45px;
-    height: 45px;
-    font-size: 16px;
-  }
-
-  .status-text {
-    font-size: 16px;
-  }
-
-  .debug-panel {
-    font-size: 10px;
-    padding: 8px;
-  }
-}
-
-/* 状态转换动画 */
-.voice-chat-container * {
-  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-/* 可访问性支持 */
-@media (prefers-reduced-motion: reduce) {
-  * {
-    animation-duration: 0.01ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
-  }
-}
-
-/* 高对比度支持 */
-@media (prefers-contrast: high) {
-  .voice-chat-overlay {
-    background-color: rgba(0, 0, 0, 0.95);
-  }
-
-  .status-indicator {
-    border: 2px solid currentColor;
-  }
-
-  .mic-button, .stop-button {
-    border: 2px solid rgba(255, 255, 255, 0.5);
-  }
 }
 </style>

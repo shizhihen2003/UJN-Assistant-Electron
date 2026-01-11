@@ -1169,9 +1169,17 @@ const exitVoiceChatMode = () => {
  * 开始语音识别（VoiceChat组件调用）
  */
 const startVoiceRecognition = async () => {
-  if (isProcessingVoice.value) {
-    console.log('[AI] 正在处理语音，忽略新的识别请求');
+  // 如果已经在识别中，忽略
+  if (isRecognizing.value) {
+    console.log('[AI] 已在识别中，忽略');
     return;
+  }
+
+  // 如果正在播放，先停止
+  if (isProcessingVoice.value || isSpeaking.value) {
+    console.log('[AI] 正在播放，先停止');
+    speechService.stopPlayback();
+    isSpeaking.value = false;
   }
 
   try {
@@ -1232,16 +1240,14 @@ const startVoiceRecognition = async () => {
  * 停止语音识别（VoiceChat组件调用）
  */
 const stopVoiceRecognition = async (isSilence, recognizedText) => {
-  if (!isRecognizing.value) {
-    console.log('[AI] 未在进行语音识别');
-    return;
-  }
+  // 即使 isRecognizing 为 false，也要处理状态同步
+  console.log('[AI] 停止语音识别, 静音触发:', isSilence, '识别文本:', recognizedText, 'isRecognizing:', isRecognizing.value);
 
   try {
-    console.log('[AI] 停止语音识别, 静音触发:', isSilence, '识别文本:', recognizedText);
-
-    // 停止语音识别服务
-    await speechService.stopRecognize();
+    // 停止语音识别服务（如果正在识别）
+    if (isRecognizing.value) {
+      await speechService.stopRecognize();
+    }
     isRecognizing.value = false;
 
     // 检查识别文本长度
@@ -1251,7 +1257,12 @@ const stopVoiceRecognition = async (isSilence, recognizedText) => {
       console.log('[AI] 识别文本太短，不处理:', finalText);
       isProcessingVoice.value = false;
 
-      // 如果在语音对话模式且不是用户主动停止，重新开始
+      // 通知 VoiceChat 回到 idle 状态
+      if (voiceChatRef.value) {
+        voiceChatRef.value.setState('idle');
+      }
+
+      // 如果在语音对话模式且是静音触发，重新开始
       if (voiceChatMode.value && isSilence) {
         setTimeout(() => {
           if (voiceChatRef.value && voiceChatMode.value) {
@@ -1324,7 +1335,7 @@ const isExitCommand = (text) => {
 };
 
 /**
- * 发送到AI并处理语音响应 - 修改版本，添加停止支持
+ * 发送到AI并处理语音响应 - 流式 TTS 版本，边生成边播放
  */
 const sendToAIWithVoiceResponse = async (message) => {
   try {
@@ -1417,6 +1428,83 @@ const sendToAIWithVoiceResponse = async (message) => {
       }
     };
 
+    // ========== 流式 TTS 相关 ==========
+    let sentenceBuffer = '';           // 当前积累的文本
+    let lastSentIndex = 0;             // 上次发送的位置
+    let ttsStarted = false;            // TTS 是否已启动
+    let thinkingComplete = false;      // 思维链是否完成
+
+    // 分句标点
+    const sentenceEnders = /[。！？；\n]/;
+    const minorBreaks = /[，、：]/;
+
+    // 启动流式 TTS
+    speechService.startStreamingTTS(
+        // onStart - 首个音频开始播放时
+        () => {
+          console.log('[AI] 语音播放开始');
+          if (voiceChatRef.value) {
+            voiceChatRef.value.startSpeaking();
+          }
+        },
+        // onEnd - 全部播放完成
+        () => {
+          console.log('[AI] 语音播放完成');
+          isProcessingVoice.value = false;
+          if (voiceChatRef.value) {
+            voiceChatRef.value.completeSpeaking();
+          }
+        },
+        // onError
+        (error) => {
+          console.error('[AI] TTS 错误:', error);
+        },
+        // options
+        {
+          voice: speechSettings.value.voice,
+          speed: speechSettings.value.speed,
+          volume: speechSettings.value.volume,
+          pitch: speechSettings.value.pitch
+        }
+    );
+
+    ttsStarted = true;
+
+    // 处理文本并发送到 TTS
+    const processTextForTTS = (fullText) => {
+      if (!ttsStarted || aiAssistantService.shouldStop()) return;
+
+      // 只处理新增的部分
+      const newText = fullText.substring(lastSentIndex);
+      sentenceBuffer += newText;
+      lastSentIndex = fullText.length;
+
+      // 检查是否有完整句子
+      let lastBreak = -1;
+      for (let i = 0; i < sentenceBuffer.length; i++) {
+        if (sentenceEnders.test(sentenceBuffer[i])) {
+          lastBreak = i;
+        } else if (minorBreaks.test(sentenceBuffer[i]) && i > 30) {
+          // 较长时在逗号处断开
+          lastBreak = i;
+        }
+      }
+
+      if (lastBreak >= 0) {
+        const sentence = sentenceBuffer.substring(0, lastBreak + 1).trim();
+        sentenceBuffer = sentenceBuffer.substring(lastBreak + 1);
+
+        if (sentence.length >= 2) {
+          // 预处理文本
+          const cleanText = preprocessTextForTTS(sentence);
+          if (cleanText) {
+            console.log('[AI] 发送句子到 TTS:', cleanText.substring(0, 30) + '...');
+            speechService.addTextToTTS(cleanText);
+          }
+        }
+      }
+    };
+
     // 跟踪状态
     let hasDetectedThinking = false;
     let isThinkingPhase = false;
@@ -1431,8 +1519,6 @@ const sendToAIWithVoiceResponse = async (message) => {
             console.log('[AI] 检测到停止状态，忽略语音对话数据块');
             return;
           }
-
-          console.log('[AI] 收到块:', { contentChunk, reasoningChunk, type });
 
           if (type === 'thinking' && reasoningChunk) {
             // 处理思维链内容
@@ -1464,12 +1550,20 @@ const sendToAIWithVoiceResponse = async (message) => {
             // 检测思考完成（从思维链模式切换到答案模式）
             if (isThinkingPhase) {
               isThinkingPhase = false;
+              thinkingComplete = true;
               console.log('[AI] 思考阶段完成，开始答案阶段');
+              // 通知 VoiceChat 进入回答状态
+              if (voiceChatRef.value) {
+                voiceChatRef.value.startSpeaking();
+              }
             }
 
             // 更新最终答案内容
             finalAnswer.value += contentChunk;
             updateAnswerContent(finalAnswer.value);
+
+            // 实时处理文本发送到 TTS
+            processTextForTTS(finalAnswer.value);
           }
         },
         // 完成时的回调
@@ -1478,6 +1572,7 @@ const sendToAIWithVoiceResponse = async (message) => {
           if (aiAssistantService.shouldStop()) {
             console.log('[AI] 语音对话AI响应被停止，跳过语音播放');
             isProcessingVoice.value = false;
+            speechService.stopPlayback();
             if (voiceChatRef.value) {
               voiceChatRef.value.handleAIStop();
             }
@@ -1509,13 +1604,16 @@ const sendToAIWithVoiceResponse = async (message) => {
           // 保存对话
           saveConversationHistory();
 
-          // 通知VoiceChat组件开始语音播放
-          if (voiceChatRef.value) {
-            voiceChatRef.value.startSpeaking(assistantMessage.content);
+          // 发送剩余的文本到 TTS
+          if (sentenceBuffer.trim()) {
+            const cleanText = preprocessTextForTTS(sentenceBuffer.trim());
+            if (cleanText) {
+              speechService.addTextToTTS(cleanText);
+            }
           }
 
-          // 开始语音播放
-          await playVoiceResponse(assistantMessage.content);
+          // 标记 TTS 输入完成
+          speechService.finishStreamingTTS();
         },
         // 错误处理
         (error) => {
@@ -1528,6 +1626,9 @@ const sendToAIWithVoiceResponse = async (message) => {
           isLoading.value = false;
           isThinking.value = false;
           isProcessingVoice.value = false;
+
+          // 停止 TTS
+          speechService.stopPlayback();
 
           // 只有在非用户主动停止的情况下才显示错误
           if (!aiAssistantService.shouldStop() && voiceChatRef.value) {
@@ -1545,6 +1646,9 @@ const sendToAIWithVoiceResponse = async (message) => {
     isLoading.value = false;
     isThinking.value = false;
     isProcessingVoice.value = false;
+
+    // 停止 TTS
+    speechService.stopPlayback();
 
     // 只有在非用户主动停止的情况下才显示错误
     if (!aiAssistantService.shouldStop() && voiceChatRef.value) {
@@ -1619,9 +1723,7 @@ const stopAllSpeechActivities = () => {
   console.log('[AI] 停止所有语音活动');
 
   // 停止AI响应
-  if (isLoading.value || isThinking.value) {
-    aiAssistantService.stopCurrentResponse();
-  }
+  aiAssistantService.stopCurrentResponse();
 
   // 停止语音识别
   if (isRecognizing.value) {
@@ -1629,7 +1731,7 @@ const stopAllSpeechActivities = () => {
     isRecognizing.value = false;
   }
 
-  // 停止语音合成
+  // 停止语音合成和流式TTS
   speechService.stopPlayback();
 
   // 重置状态
