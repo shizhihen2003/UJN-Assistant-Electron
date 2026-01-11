@@ -59,17 +59,35 @@ class CalendarService {
         console.error('[校历服务] 错误:', ...args);
     }
 
-    // ========== 新增：获取当前学校ID ==========
+    // ========== 修复：获取当前学校ID ==========
     /**
      * 获取当前学校ID
+     * 修复：使用与api.js一致的存储键和获取方式
      * @returns {Promise<string>} 学校ID
      */
     async getCurrentSchoolId() {
         try {
-            // 方式1：从 CURRENT_SCHOOL 获取（对象格式）
-            const savedSchool = await store.getString('CURRENT_SCHOOL', '');
-            this.log('CURRENT_SCHOOL 原始值:', savedSchool);
+            // 方式1（推荐）：从localStorage获取（与api.js使用相同的键）
+            try {
+                const key = 'ujn_assistant_current_school_id';
+                const schoolId = localStorage.getItem(key);
+                if (schoolId) {
+                    this.log('从localStorage获取学校ID:', schoolId);
+                    return schoolId;
+                }
+            } catch (e) {
+                this.error('从localStorage获取学校ID失败:', e);
+            }
 
+            // 方式2：从 authService 获取
+            if (authService.currentSchool) {
+                const id = authService.currentSchool.id || authService.currentSchool;
+                this.log('从authService获取学校ID:', id);
+                return id;
+            }
+
+            // 方式3：从 store 获取（兼容旧版本存储）
+            const savedSchool = await store.getString('CURRENT_SCHOOL', '');
             if (savedSchool) {
                 try {
                     const school = JSON.parse(savedSchool);
@@ -84,20 +102,6 @@ class CalendarService {
                 }
             }
 
-            // 方式2：从 SCHOOL_ID 获取（字符串格式）
-            const schoolId = await store.getString('SCHOOL_ID', '');
-            if (schoolId) {
-                this.log('从SCHOOL_ID获取学校ID:', schoolId);
-                return schoolId;
-            }
-
-            // 方式3：从 authService 获取
-            if (authService.currentSchool) {
-                const id = authService.currentSchool.id || authService.currentSchool;
-                this.log('从authService获取学校ID:', id);
-                return id;
-            }
-
             // 方式4：检查是否有荆楚理工的Cookie（作为后备判断）
             const jcutCookies = await store.getString('JCUT_VPN_COOKIES', '');
             if (jcutCookies) {
@@ -105,11 +109,12 @@ class CalendarService {
                 return 'jcut';
             }
 
-            this.log('未能获取学校ID，返回空');
-            return '';
+            // 默认返回济南大学
+            this.log('未能获取学校ID，返回默认值ujn');
+            return 'ujn';
         } catch (e) {
             this.error('获取学校ID失败:', e);
-            return '';
+            return 'ujn';
         }
     }
 
@@ -131,8 +136,25 @@ class CalendarService {
             if (!forceRefresh) {
                 const cachedData = await this.getCalendarFromCache();
                 if (cachedData) {
-                    this.log('从缓存获取校历数据成功');
-                    return cachedData;
+                    // 检查缓存的数据是否与当前学校匹配
+                    // 兼容老版本缓存：如果没有schoolId和type字段，认为是济南大学的HTML数据
+                    const cachedSchoolId = cachedData.schoolId || (cachedData.type === 'pdf' ? 'jcut' : 'ujn');
+
+                    // 检查缓存数据是否有效（必须有type字段，否则视为老版本数据需要刷新）
+                    const hasValidType = cachedData.type === 'pdf' || cachedData.type === 'html';
+
+                    if (cachedSchoolId === schoolId && hasValidType) {
+                        this.log('从缓存获取校历数据成功');
+                        return cachedData;
+                    } else {
+                        this.log('缓存数据不匹配或无效，需要重新获取', {
+                            cachedSchoolId,
+                            currentSchoolId: schoolId,
+                            hasValidType
+                        });
+                        // 清除无效缓存
+                        await this.clearCache();
+                    }
                 }
             }
 
@@ -348,6 +370,8 @@ class CalendarService {
                 appInfo: calendarApp,
                 // 标记为PDF类型
                 type: 'pdf',
+                // 标记学校ID（用于缓存匹配）
+                schoolId: 'jcut',
                 // 兼容字段
                 htmlContent: null,
                 semesterInfo: null,
@@ -664,7 +688,9 @@ class CalendarService {
                     weeks: this.extractWeeks(calendarContent),
                     importantDates: this.extractImportantDates(calendarContent),
                     // 标记为HTML类型
-                    type: 'html'
+                    type: 'html',
+                    // 标记学校ID（用于缓存匹配）
+                    schoolId: await this.getCurrentSchoolId()
                 };
                 this.log('数据组装完成');
 
@@ -1070,43 +1096,86 @@ class CalendarService {
     }
 
     /**
-     * 提取HTML内容
+     * 从JSONP响应中提取HTML内容
+     * @param {string} jsonpData JSONP数据
+     * @returns {string} HTML内容
      */
-    extractHtmlContent(jsonpContent) {
-        if (!jsonpContent) return '';
-
+    extractHtmlContent(jsonpData) {
         try {
-            // 尝试从JSONP中提取JSON
-            const jsonMatch = jsonpContent.match(/\((\{[\s\S]*\})\)/);
-            if (jsonMatch && jsonMatch[1]) {
-                try {
-                    const jsonData = JSON.parse(jsonMatch[1]);
-                    if (jsonData.CONTENT) {
-                        return jsonData.CONTENT;
+            this.log('开始从JSONP响应中提取HTML内容');
+
+            if (!jsonpData) {
+                this.log('JSONP数据为空');
+                return '';
+            }
+
+            // 从JSONP响应中提取JSON部分
+            // 改进正则表达式以匹配任何jsonp回调名称
+            const jsonMatch = jsonpData.match(/jsonp_\d+\s*\(({.*})\)/);
+            if (!jsonMatch || jsonMatch.length < 2) {
+                this.log('无法从JSONP响应中提取JSON部分');
+
+                // 尝试备用正则
+                const altMatch = jsonpData.match(/\((\{[\s\S]*\})\)/);
+                if (altMatch && altMatch[1]) {
+                    try {
+                        const data = JSON.parse(altMatch[1]);
+                        if (data && data.content) {
+                            this.log('使用备用正则从content字段提取HTML内容，长度:', data.content.length);
+                            return data.content;
+                        } else if (data && data.result) {
+                            this.log('使用备用正则从result字段提取HTML内容，长度:', data.result.length);
+                            return data.result;
+                        } else if (data && data.CONTENT) {
+                            this.log('使用备用正则从CONTENT字段提取HTML内容，长度:', data.CONTENT.length);
+                            return data.CONTENT;
+                        }
+                    } catch (e) {
+                        this.error('备用正则解析JSON失败:', e);
                     }
-                } catch (e) {
-                    // JSON解析失败，继续其他方法
                 }
+
+                return '';
             }
 
-            // 直接查找HTML表格
-            const tableMatch = jsonpContent.match(/<table[\s\S]*?<\/table>/i);
-            if (tableMatch) {
-                return tableMatch[0];
+            const jsonStr = jsonMatch[1];
+            this.log('提取到的JSON字符串长度:', jsonStr.length);
+
+            let data;
+            try {
+                data = JSON.parse(jsonStr);
+                this.log('成功解析JSON数据');
+            } catch (e) {
+                this.error('解析JSON数据失败:', e);
+                return '';
             }
 
-            // 查找CONTENT字段
-            const contentMatch = jsonpContent.match(/"CONTENT"\s*:\s*"([\s\S]*?)(?<!\\)"/);
-            if (contentMatch && contentMatch[1]) {
-                return contentMatch[1]
-                    .replace(/\\n/g, '\n')
-                    .replace(/\\r/g, '\r')
-                    .replace(/\\t/g, '\t')
-                    .replace(/\\"/g, '"')
-                    .replace(/\\\\/g, '\\');
-            }
+            // 从JSON中提取HTML内容 - 检查多个可能的字段名
+            if (data && data.content) {
+                this.log('成功从content字段提取HTML内容，长度:', data.content.length);
+                return data.content;
+            } else if (data && data.result) {
+                this.log('成功从result字段提取HTML内容，长度:', data.result.length);
+                return data.result;
+            } else if (data && data.CONTENT) {
+                this.log('成功从CONTENT字段提取HTML内容，长度:', data.CONTENT.length);
+                return data.CONTENT;
+            } else {
+                this.log('JSON数据中没有content、result或CONTENT字段');
+                // 额外检查是否有其他可能包含HTML的字段
+                const potentialHtmlFields = Object.keys(data).filter(key =>
+                    typeof data[key] === 'string' &&
+                    (data[key].includes('<div') || data[key].includes('<table'))
+                );
 
-            return '';
+                if (potentialHtmlFields.length > 0) {
+                    const firstField = potentialHtmlFields[0];
+                    this.log(`找到可能包含HTML的字段: ${firstField}, 长度:`, data[firstField].length);
+                    return data[firstField];
+                }
+
+                return '';
+            }
         } catch (error) {
             this.error('提取HTML内容失败:', error);
             return '';
@@ -1121,12 +1190,37 @@ class CalendarService {
             const yearMatch = title.match(/(\d{4})[—-](\d{4})/);
             const semesterMatch = title.match(/第([一二])学期/);
 
+            // 尝试从内容中提取周数
+            let weekcount = 19; // 默认值
+            if (content) {
+                // 查找最大周数
+                const weekMatches = content.match(/第?(十[一二三四五六七八九]?|二十)周/g);
+                if (weekMatches && weekMatches.length > 0) {
+                    const chineseToNum = {
+                        '十一': 11, '十二': 12, '十三': 13, '十四': 14, '十五': 15,
+                        '十六': 16, '十七': 17, '十八': 18, '十九': 19, '二十': 20,
+                        '十': 10
+                    };
+                    let maxWeek = 0;
+                    weekMatches.forEach(w => {
+                        const numPart = w.replace(/第|周/g, '');
+                        if (chineseToNum[numPart] && chineseToNum[numPart] > maxWeek) {
+                            maxWeek = chineseToNum[numPart];
+                        }
+                    });
+                    if (maxWeek > 0) {
+                        weekcount = maxWeek;
+                    }
+                }
+            }
+
             return {
                 year: yearMatch ? `${yearMatch[1]}-${yearMatch[2]}` : '',
-                semester: semesterMatch ? (semesterMatch[1] === '一' ? '第一学期' : '第二学期') : ''
+                semester: semesterMatch ? (semesterMatch[1] === '一' ? '第一学期' : '第二学期') : '',
+                weekcount: weekcount
             };
         } catch (error) {
-            return { year: '', semester: '' };
+            return { year: '', semester: '', weekcount: 19 };
         }
     }
 

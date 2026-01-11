@@ -169,17 +169,14 @@ class EASAccount extends Account {
      */
     static getInstance() {
         const currentSchoolId = EASAccount.getCurrentSchoolId();
-        const currentHost = UJNAPI.EA_HOSTS && UJNAPI.EA_HOSTS[0];
 
-        // 检查学校ID变化或主机变化
+        // 检查学校ID变化（不检查主机变化，因为用户可能手动选择了其他节点）
         if (EASAccount.instance) {
             const schoolChanged = EASAccount.lastSchoolId && EASAccount.lastSchoolId !== currentSchoolId;
-            const hostChanged = currentHost && EASAccount.instance.host !== currentHost;
 
-            if (schoolChanged || hostChanged) {
-                console.log(`getInstance: 检测到学校/主机变化:`);
+            if (schoolChanged) {
+                console.log(`getInstance: 检测到学校变化:`);
                 console.log(`  学校ID: ${EASAccount.lastSchoolId} -> ${currentSchoolId}`);
-                console.log(`  主机: ${EASAccount.instance.host} -> ${currentHost}`);
                 // 学校变化，重新加载主机配置和路径前缀
                 EASAccount.instance._reloadHostConfig();
                 EASAccount.instance.resetPathPrefix();
@@ -237,7 +234,20 @@ class EASAccount extends Account {
         this.isLogin = false;
         this.cookieJar.clearCookies();
         this.host = UJNAPI.EA_HOSTS[index];
+
+        // 同时更新协议 - 修复：不同节点可能使用不同协议
+        const useHttps = UJNAPI.getHostHttps(index);
+        this.scheme = useHttps ? 'https' : 'http';
+
+        // 更新当前节点索引
+        this._currentHostIndex = index;
+
+        // 重新创建CookieJar以使用新的scheme和host
+        this.cookieJar = new CookieJar(this.scheme, this.host, this.cookieName);
+
         store.edit(editor => editor.putInt('EA_HOST', index));
+
+        console.log(`节点切换完成: host=${this.host}, scheme=${this.scheme}, index=${index}`);
     }
 
     /**
@@ -688,16 +698,13 @@ class EASAccount extends Account {
      */
     _checkSchoolChange() {
         const currentSchoolId = EASAccount.getCurrentSchoolId();
-        const currentHost = UJNAPI.EA_HOSTS && UJNAPI.EA_HOSTS[0];
 
-        // 检测学校ID变化或主机变化（双重保险）
+        // 只检测学校ID变化（不检查主机变化，因为用户可能手动选择了其他节点）
         const schoolChanged = this._lastSchoolId && this._lastSchoolId !== currentSchoolId;
-        const hostChanged = currentHost && this.host !== currentHost;
 
-        if (schoolChanged || hostChanged) {
-            console.log(`检测到学校/主机变化:`);
-            console.log(`  学校ID: ${this._lastSchoolId} -> ${currentSchoolId} (变化: ${schoolChanged})`);
-            console.log(`  主机: ${this.host} -> ${currentHost} (变化: ${hostChanged})`);
+        if (schoolChanged) {
+            console.log(`检测到学校变化:`);
+            console.log(`  学校ID: ${this._lastSchoolId} -> ${currentSchoolId}`);
 
             // 重新加载主机配置
             this._reloadHostConfig();
@@ -959,11 +966,33 @@ class EASAccount extends Account {
                 return false;
             }
 
-            // VPN模式下的登录
+            // VPN模式下的登录 - 使用driotlogin入口自动完成
             if (EASAccount.useVpn) {
-                console.log("使用VPN模式登录");
-                // 这里可以添加VPN模式下的登录逻辑
-                // 目前先使用普通模式登录流程，后续可以扩展
+                console.log("使用VPN模式登录教务系统");
+
+                // 获取IPassAccount实例
+                const ipassAccount = IPassAccount.getInstance();
+
+                // 检查VPN是否已登录
+                const vpnCookies = await ipassAccount.vpnCookieJar.getCookies();
+                if (!vpnCookies || vpnCookies.length === 0) {
+                    console.error("VPN模式下未找到有效Cookie，请先登录统一认证");
+                    return false;
+                }
+
+                console.log(`当前VPN Cookie数量: ${vpnCookies.length}`);
+
+                // 使用driotlogin入口登录教务系统
+                const loginSuccess = await this._loginEasViaDriotlogin(vpnCookies);
+
+                if (loginSuccess) {
+                    console.log("VPN模式教务登录成功");
+                    this.isLogin = true;
+                    return true;
+                } else {
+                    console.log("VPN模式driotlogin失败，尝试普通登录流程");
+                    // 继续执行下面的普通登录流程
+                }
             }
 
             // 步骤0: 确保路径前缀已初始化
@@ -1413,6 +1442,216 @@ class EASAccount extends Account {
         } catch (error) {
             console.error('登录过程发生异常:', error);
             this.isLogin = false;
+            return false;
+        }
+    }
+
+    /**
+     * 通过driotlogin入口登录教务系统（VPN模式）
+     * @param {Array} vpnCookies VPN Cookie数组
+     * @returns {Promise<boolean>} 登录是否成功
+     * @private
+     */
+    async _loginEasViaDriotlogin(vpnCookies) {
+        try {
+            console.log('===== 开始通过driotlogin登录教务系统 =====');
+
+            // 构建driotlogin入口URL - 使用当前选择的节点（this.host）
+            const easHost = this.host; // 使用用户选择的节点，而不是默认节点
+            // VPN模式下原始URL使用http（跟其他地方的逻辑一致）
+            const easScheme = EASAccount.useVpn ? 'http' : this.scheme;
+            const driotLoginPath = 'sso/driotlogin';
+
+            // 构建原始URL
+            const originalUrl = `${easScheme}://${easHost}/${driotLoginPath}`;
+            // 加密为VPN URL
+            const vpnDriotLoginUrl = VpnEncodeUtils.encryptUrl(originalUrl);
+
+            console.log(`当前节点: ${easHost}`);
+            console.log(`当前协议: ${easScheme} (VPN模式: ${EASAccount.useVpn})`);
+            console.log(`原始driotlogin URL: ${originalUrl}`);
+            console.log(`加密后的VPN URL: ${vpnDriotLoginUrl}`);
+
+            // 获取IPassAccount实例
+            const ipassAccount = IPassAccount.getInstance();
+
+            // 步骤1: 访问driotlogin入口并跟随重定向
+            let currentUrl = vpnDriotLoginUrl;
+            let maxRedirects = 10;
+            let redirectCount = 0;
+            let loginSuccess = false;
+
+            // 复制Cookie数组
+            let currentCookies = [...vpnCookies];
+
+            while (redirectCount < maxRedirects) {
+                console.log(`[重定向 ${redirectCount}] 访问: ${currentUrl}`);
+
+                const result = await ipc.ipassGet(currentUrl, {
+                    cookies: currentCookies,
+                    followRedirect: false
+                });
+
+                console.log(`响应状态: ${result.status}`);
+
+                // 保存新Cookie
+                if (result.cookies && result.cookies.length > 0) {
+                    console.log(`收到 ${result.cookies.length} 个新Cookie`);
+                    await ipassAccount.vpnCookieJar.saveCookies(result.cookies);
+
+                    // 更新currentCookies
+                    for (const cookie of result.cookies) {
+                        const cookieParts = cookie.split(';')[0].split('=');
+                        const cookieName = cookieParts[0];
+
+                        const existingIndex = currentCookies.findIndex(c => {
+                            const parts = c.split(';')[0].split('=');
+                            return parts[0] === cookieName;
+                        });
+
+                        if (existingIndex >= 0) {
+                            currentCookies[existingIndex] = cookie;
+                        } else {
+                            currentCookies.push(cookie);
+                        }
+                    }
+                }
+
+                // 检查是否到达教务系统主页
+                if (result.data) {
+                    if (result.data.includes('index_initMenu') ||
+                        result.data.includes('xtgl/index_initMenu')) {
+                        console.log('已到达教务系统主页，登录成功');
+                        loginSuccess = true;
+                        break;
+                    }
+
+                    // 检查是否包含学生信息（且不是登录页）
+                    if (result.data.includes('xh') && result.data.includes('xm') &&
+                        !result.data.includes('login_slogin') &&
+                        !result.data.includes('id="yhm"')) {
+                        console.log('检测到学生信息，登录成功');
+                        loginSuccess = true;
+                        break;
+                    }
+                }
+
+                // 处理重定向
+                if (result.status === 302 || result.status === 301) {
+                    let location = result.headers?.location || result.location || '';
+                    if (!location) {
+                        console.log('重定向但没有location头');
+                        break;
+                    }
+
+                    console.log(`重定向到: ${location}`);
+
+                    // 处理相对URL
+                    const vpnHost = UJNAPI.VPN_HOST || 'webvpn.ujn.edu.cn';
+                    if (location.startsWith('/')) {
+                        location = `https://${vpnHost}${location}`;
+                    } else if (!location.startsWith('http')) {
+                        const baseUrl = currentUrl.substring(0, currentUrl.lastIndexOf('/') + 1);
+                        location = baseUrl + location;
+                    }
+
+                    currentUrl = location;
+                    redirectCount++;
+                } else if (result.status === 200) {
+                    // 检查是否包含登录表单
+                    if (result.data && (
+                        result.data.includes('id="yhm"') ||
+                        result.data.includes('name="yhm"') ||
+                        result.data.includes('login_slogin')
+                    )) {
+                        console.log('到达登录页面，VPN教务登录失败');
+                        loginSuccess = false;
+                        break;
+                    }
+
+                    // 检查meta refresh重定向
+                    const metaRefreshMatch = result.data?.match(/<meta[^>]*http-equiv=["']refresh["'][^>]*content=["']\d+;\s*url=([^"']+)["']/i);
+                    if (metaRefreshMatch) {
+                        let refreshUrl = metaRefreshMatch[1];
+                        console.log(`检测到meta refresh: ${refreshUrl}`);
+
+                        const vpnHost = UJNAPI.VPN_HOST || 'webvpn.ujn.edu.cn';
+                        if (refreshUrl.startsWith('/')) {
+                            refreshUrl = `https://${vpnHost}${refreshUrl}`;
+                        } else if (!refreshUrl.startsWith('http')) {
+                            const baseUrl = currentUrl.substring(0, currentUrl.lastIndexOf('/') + 1);
+                            refreshUrl = baseUrl + refreshUrl;
+                        }
+
+                        currentUrl = refreshUrl;
+                        redirectCount++;
+                        continue;
+                    }
+
+                    // 尝试验证登录状态
+                    if (result.data && !result.data.includes('login')) {
+                        console.log('页面不包含登录表单，验证登录状态...');
+                        const verifySuccess = await this._verifyVpnLoginStatus(currentCookies);
+                        if (verifySuccess) {
+                            loginSuccess = true;
+                        }
+                        break;
+                    }
+                    break;
+                } else {
+                    console.log(`未预期的状态码: ${result.status}`);
+                    break;
+                }
+            }
+
+            console.log(`===== driotlogin登录${loginSuccess ? '成功' : '失败'} =====`);
+            return loginSuccess;
+
+        } catch (error) {
+            console.error('driotlogin登录失败:', error);
+            return false;
+        }
+    }
+
+    /**
+     * 验证VPN模式下的登录状态
+     * @param {Array} cookies Cookie数组
+     * @returns {Promise<boolean>} 是否已登录
+     * @private
+     */
+    async _verifyVpnLoginStatus(cookies) {
+        try {
+            console.log('验证VPN登录状态...');
+
+            const verifyPath = UJNAPI.EA_YEAR_DATA || 'xtgl/index_cxAreaFive.html?localeKey=zh_CN&gnmkdm=index';
+            const verifyUrl = this.getFullUrl(verifyPath);
+
+            console.log(`验证URL: ${verifyUrl}`);
+
+            const result = await ipc.ipassGet(verifyUrl, {
+                cookies: cookies
+            });
+
+            if (result.success && result.data) {
+                try {
+                    const jsonData = JSON.parse(result.data);
+                    if (jsonData && (jsonData.xnm || jsonData.xqm || Array.isArray(jsonData))) {
+                        console.log('验证成功：收到有效JSON数据');
+                        return true;
+                    }
+                } catch (e) {
+                    if (!result.data.includes('login_slogin') &&
+                        !result.data.includes('id="yhm"')) {
+                        console.log('验证成功：页面不包含登录表单');
+                        return true;
+                    }
+                }
+            }
+
+            console.log('验证失败');
+            return false;
+        } catch (error) {
+            console.error('验证登录状态失败:', error);
             return false;
         }
     }

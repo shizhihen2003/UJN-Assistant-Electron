@@ -314,6 +314,7 @@ import calendarService from '@/services/calendarService';
 import store from '@/utils/store';
 import authService from '@/services/authService';
 
+// 获取路由器实例
 const router = useRouter();
 
 // 状态变量
@@ -324,14 +325,14 @@ const updateTime = ref(null);
 const currentWeek = ref(1);
 const activeTabName = ref('table');
 const isDarkMode = ref(false);
-const isLoginError = ref(false);
+const isLoginError = ref(false); // 添加标识登录错误的变量
 const filters = ref({
   holiday: true,
   exam: true,
   event: true
 });
 
-// 周历数据
+// 创建周历数据
 const weekDays = ref([]);
 
 // 判断是否为PDF类型（根据calendarService返回的type字段）
@@ -355,7 +356,7 @@ const semesterProgress = computed(() => {
 
 // 过滤后的重要日期
 const filteredImportantDates = computed(() => {
-  const allDates = calendarData.value.importantDates || [];
+  const allDates = getImportantDates();
   return allDates.filter(date => {
     if (date.type === 'holiday' && filters.value.holiday) return true;
     if (date.type === 'exam' && filters.value.exam) return true;
@@ -373,12 +374,14 @@ const toggleFilter = (type) => {
 const toggleDarkMode = () => {
   isDarkMode.value = !isDarkMode.value;
 
+  // 保存到本地存储
   try {
     localStorage.setItem('calendar_dark_mode', isDarkMode.value ? '1' : '0');
   } catch (e) {
     console.error('保存主题设置失败:', e);
   }
 
+  // 应用主题色到根元素
   if (isDarkMode.value) {
     document.documentElement.classList.add('dark-theme');
   } else {
@@ -405,18 +408,36 @@ const getCurrentMonthYear = () => {
   return `${monthNames[now.getMonth()]} ${now.getFullYear()}`;
 };
 
+// 获取当前周的日期范围
+const getCurrentWeekDates = () => {
+  const now = new Date();
+  const dayOfWeek = now.getDay() || 7; // 将0(周日)转为7
+
+  // 计算本周一的日期
+  const monday = new Date(now);
+  monday.setDate(now.getDate() - (dayOfWeek - 1));
+
+  // 计算本周日的日期
+  const sunday = new Date(now);
+  sunday.setDate(now.getDate() + (7 - dayOfWeek));
+
+  return `${monday.getMonth() + 1}月${monday.getDate()}日 - ${sunday.getMonth() + 1}月${sunday.getDate()}日`;
+};
+
 // 生成当前周日历数据
 const generateWeekDays = () => {
   const now = new Date();
-  const currentDay = now.getDay() || 7;
+  const currentDay = now.getDay() || 7; // 0是周日，转为7
   const dayNames = ['一', '二', '三', '四', '五', '六', '日'];
 
   const days = [];
 
+  // 生成当前周的天数
   for (let i = 1; i <= 7; i++) {
     const dayDate = new Date(now);
     dayDate.setDate(now.getDate() - (currentDay - i));
 
+    // 检查是否有重要事件
     let event = null;
     const dateStr = `${dayDate.getMonth() + 1}月${dayDate.getDate()}日`;
 
@@ -444,6 +465,7 @@ const generateWeekDays = () => {
 // 计算当前周次
 const calculateCurrentWeek = async (data) => {
   try {
+    // 首先尝试从HTML内容获取开学日期
     let startDate = null;
 
     if (data.htmlContent) {
@@ -452,41 +474,67 @@ const calculateCurrentWeek = async (data) => {
         const startMonth = parseInt(notesMatch[1]);
         const startDay = parseInt(notesMatch[2]);
         const currentYear = new Date().getFullYear();
+
+        // 创建开学日期对象
         startDate = new Date(currentYear, startMonth - 1, startDay);
+
+        // 处理年份问题：如果开学日期在未来且是第一学期（8月以后），可能是去年的日期
+        const now = new Date();
+        if (startDate > now && startMonth <= 6) {
+          // 春季学期，如果开学日期在未来，使用当前年份
+          // 不做调整
+        } else if (startDate < now && startMonth >= 8) {
+          // 秋季学期，如果开学日期在过去，使用当前年份
+          // 不做调整
+        }
+
+        console.log('从HTML内容提取到开学日期:', startDate.toLocaleDateString());
       }
     }
 
+    // 如果从HTML提取失败，尝试从设置中获取自定义开学日期
     if (!startDate) {
       try {
         const customOpeningDate = await store.getString('CUSTOM_OPENING_DATE', '');
         if (customOpeningDate) {
           startDate = new Date(customOpeningDate);
+          console.log('从自定义设置获取开学日期:', startDate.toLocaleDateString());
         }
       } catch (error) {
         console.error('从自定义设置获取开学日期失败:', error);
       }
     }
 
+    // 如果都没有获取到，使用合理的默认值
     if (!startDate) {
       const currentYear = new Date().getFullYear();
       const currentMonth = new Date().getMonth();
 
+      // 如果当前月份在1-7月，说明是春季学期，开学日期应该是当年2月
+      // 如果当前月份在8-12月，说明是秋季学期，开学日期应该是当年9月
       if (currentMonth < 7) {
-        startDate = new Date(currentYear, 1, 24);
+        startDate = new Date(currentYear, 1, 24); // 当年2月24日
       } else {
-        startDate = new Date(currentYear, 8, 1);
+        startDate = new Date(currentYear, 8, 1); // 当年9月1日
       }
+
+      console.log('使用默认开学日期:', startDate.toLocaleDateString());
     }
 
+    // 计算当前是第几周
     const now = new Date();
     const timeDiff = now - startDate;
     const dayDiff = Math.floor(timeDiff / (24 * 60 * 60 * 1000));
     const weekDiff = Math.floor(dayDiff / 7) + 1;
 
-    return Math.max(1, Math.min(weekDiff, 20));
+    // 确保周数在合理范围内（1-20周）
+    const calculatedWeek = Math.max(1, Math.min(weekDiff, 20));
+
+    console.log('计算得到当前周次:', calculatedWeek);
+    return calculatedWeek;
   } catch (error) {
     console.error('计算当前周次失败:', error);
-    return 1;
+    return 1; // 出错时返回第1周
   }
 };
 
@@ -494,8 +542,10 @@ const calculateCurrentWeek = async (data) => {
 const processHtmlContent = (html) => {
   if (!html) return '';
 
+  // 保留颜色样式，移除其他无用样式
   let processedHtml = html
       .replace(/style="[^"]*"/g, function(match) {
+        // 只保留包含color属性的样式
         if (match.includes('color:')) {
           const colorMatch = match.match(/color:\s*([^;"}]+)/);
           if (colorMatch) {
@@ -510,11 +560,20 @@ const processHtmlContent = (html) => {
       .replace(/<o:p><\/o:p>/g, '')
       .replace(/&nbsp;/g, ' ');
 
+  // 给表格添加类
   processedHtml = processedHtml.replace(/<table/g, '<table class="calendar-table"');
   processedHtml = processedHtml.replace(/<tr/g, '<tr class="calendar-row"');
   processedHtml = processedHtml.replace(/<td/g, '<td class="calendar-cell"');
 
   return processedHtml;
+};
+
+// 获取重要日期
+const getImportantDates = () => {
+  // 直接使用calendarService提取的重要日期
+  const dates = calendarData.value.importantDates || [];
+  console.log('Vue组件中的重要日期:', dates);  // 添加调试日志
+  return dates;
 };
 
 // 显示消息提示
@@ -528,10 +587,11 @@ const showMessage = (message, type = 'info', duration = 3000) => {
   });
 };
 
-// 跳转到登录页面
+// 跳转到登录页面的方法
 const goToLogin = () => {
+  // 校历数据来自智慧济大，所以跳转到智慧济大登录页面
   router.push('/login/ipass');
-};
+}
 
 // 打开PDF
 const openPdf = () => {
@@ -574,7 +634,7 @@ const refreshCalendar = async () => {
   try {
     loading.value = true;
     error.value = null;
-    isLoginError.value = false;
+    isLoginError.value = false; // 重置登录错误状态
 
     // calendarService会根据学校类型自动选择获取方式
     const data = await calendarService.getCalendarData(true);
@@ -591,6 +651,7 @@ const refreshCalendar = async () => {
   } catch (err) {
     console.error('刷新校历失败:', err);
 
+    // 检查是否是登录错误
     if (err.message && err.message.startsWith('NOT_LOGGED_IN:')) {
       isLoginError.value = true;
       error.value = err.message.replace('NOT_LOGGED_IN:', '');
@@ -626,11 +687,11 @@ const initTheme = () => {
 const initParticles = () => {
   const particles = document.querySelectorAll('.bg-particles');
   particles.forEach((particle, index) => {
-    const size = Math.floor(Math.random() * 20) + 10;
+    const size = Math.floor(Math.random() * 20) + 10; // 10-30px
     const posX = Math.floor(Math.random() * 100);
     const posY = Math.floor(Math.random() * 100);
     const delay = Math.random() * 5;
-    const duration = Math.random() * 20 + 20;
+    const duration = Math.random() * 20 + 20; // 20-40s
 
     particle.style.width = `${size}px`;
     particle.style.height = `${size}px`;
@@ -641,101 +702,147 @@ const initParticles = () => {
   });
 };
 
-// 组件挂载
+// 初始加载
 onMounted(async () => {
+  // 初始化主题
   initTheme();
-  initParticles();
-  await refreshCalendar();
+
+  // 初始化粒子背景
+  setTimeout(initParticles, 100);
+
+  try {
+    // 从服务获取校历数据
+    const data = await calendarService.getCalendarData();
+    calendarData.value = data;
+    updateTime.value = data.updateTime;
+
+    // 如果是HTML类型，计算周次和生成周历
+    if (data.type !== 'pdf') {
+      currentWeek.value = await calculateCurrentWeek(data);
+      generateWeekDays();
+    }
+  } catch (err) {
+    console.error('加载校历数据失败:', err);
+
+    // 检查是否是登录错误
+    if (err.message && err.message.startsWith('NOT_LOGGED_IN:')) {
+      isLoginError.value = true;
+      error.value = err.message.replace('NOT_LOGGED_IN:', '');
+      showMessage('需要登录才能查看校历', 'warning');
+    } else {
+      error.value = '获取校历数据失败: ' + (err.message || '未知错误');
+      showMessage('获取校历数据失败，请稍后再试', 'error');
+    }
+  } finally {
+    loading.value = false;
+  }
 });
 
-// 组件卸载前清理
 onBeforeUnmount(() => {
-  // 清理工作
+  // 移除主题类
+  document.documentElement.classList.remove('dark-theme');
 });
 </script>
 
-<style scoped>
-/* ========== 基础变量 ========== */
+<style>
+/* 深色主题变量 */
+:root.dark-theme {
+  --app-bg: #121212;
+  --app-bg-secondary: #1e1e1e;
+  --app-card-bg: #242424;
+  --app-text-primary: rgba(255, 255, 255, 0.9);
+  --app-text-secondary: rgba(255, 255, 255, 0.6);
+  --app-text-tertiary: rgba(255, 255, 255, 0.4);
+  --app-border-color: rgba(255, 255, 255, 0.1);
+  --app-primary-color: #5c6cff;
+  --app-primary-color-light: rgba(92, 108, 255, 0.2);
+  --app-success-color: #40c98f;
+  --app-warning-color: #ffbe3d;
+  --app-danger-color: #ff726f;
+  --app-card-shadow: 0 8px 16px rgba(0, 0, 0, 0.4);
+  --app-table-bg: #1a1a1a;
+  --app-table-border: #333;
+  --app-table-header-bg: #2a2a2a;
+  --app-tab-active-bg: #2a2a2a;
+}
+
+/* 浅色主题变量（默认） */
 :root {
+  --app-bg: #f5f7fa;
+  --app-bg-secondary: #ffffff;
+  --app-card-bg: #ffffff;
+  --app-text-primary: #303133;
+  --app-text-secondary: #606266;
+  --app-text-tertiary: #909399;
+  --app-border-color: #e4e7ed;
   --app-primary-color: #5c6cff;
   --app-primary-color-light: rgba(92, 108, 255, 0.1);
-  --app-danger-color: #ff726f;
+  --app-success-color: #40c98f;
   --app-warning-color: #ffbe3d;
-  --app-success-color: #52c41a;
-  --app-bg: #ffffff;
-  --app-bg-secondary: #f5f7fa;
-  --app-text-primary: #1a1a2e;
-  --app-text-secondary: #666;
-  --app-text-tertiary: #999;
-  --app-border-color: #eaeaea;
+  --app-danger-color: #ff726f;
+  --app-card-shadow: 0 10px 30px rgba(0, 0, 0, 0.08);
   --app-table-bg: #fff;
-  --app-table-border: #e8e8e8;
+  --app-table-border: #ebeef5;
   --app-table-header-bg: #f5f7fa;
-  --app-tab-active-bg: rgba(92, 108, 255, 0.1);
+  --app-tab-active-bg: #f0f2f5;
+}
+</style>
+
+<style scoped>
+/* 主容器样式 */
+.page-container {
+  padding: 30px;
+  max-width: 1200px;
+  margin: 0 auto;
+  font-family: 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  position: relative;
+  background-color: var(--app-bg);
+  color: var(--app-text-primary);
+  min-height: calc(100vh - 60px);
+  overflow: hidden;
+  border-radius: 16px;
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.05);
+  transition: all 0.3s ease;
 }
 
 .dark-mode {
-  --app-primary-color: #7b8aff;
-  --app-primary-color-light: rgba(123, 138, 255, 0.15);
-  --app-bg: #1a1a2e;
-  --app-bg-secondary: #252542;
-  --app-text-primary: #f0f0f0;
-  --app-text-secondary: #a0a0a0;
-  --app-text-tertiary: #707070;
-  --app-border-color: #3a3a5a;
-  --app-table-bg: #252542;
-  --app-table-border: #3a3a5a;
-  --app-table-header-bg: #1a1a2e;
-  --app-tab-active-bg: rgba(123, 138, 255, 0.2);
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.2);
 }
 
-/* ========== 页面容器 ========== */
-.page-container {
-  position: relative;
-  min-height: 100vh;
-  padding: 30px;
-  background-color: var(--app-bg);
-  color: var(--app-text-primary);
-  overflow: hidden;
-  transition: background-color 0.3s, color 0.3s;
-}
-
-/* ========== 背景装饰 ========== */
+/* 背景装饰 */
 .bg-decoration {
-  position: fixed;
+  position: absolute;
   top: 0;
   left: 0;
   width: 100%;
   height: 100%;
-  overflow: hidden;
   z-index: 0;
-  pointer-events: none;
+  overflow: hidden;
 }
 
 .bg-particles {
   position: absolute;
+  width: 20px;
+  height: 20px;
   border-radius: 50%;
   background: radial-gradient(circle, var(--app-primary-color) 0%, transparent 70%);
-  opacity: 0.1;
-  filter: blur(10px);
+  opacity: 0.3;
   animation: float 30s linear infinite;
 }
 
-.bg-particles:nth-child(1) { width: 300px; height: 300px; top: 10%; left: 5%; animation-duration: 45s; }
-.bg-particles:nth-child(2) { width: 200px; height: 200px; top: 40%; right: 10%; animation-duration: 35s; animation-delay: 2s; }
-.bg-particles:nth-child(3) { width: 100px; height: 100px; bottom: 30%; left: 20%; animation-duration: 25s; animation-delay: 5s; }
-.bg-particles:nth-child(4) { width: 150px; height: 150px; bottom: 10%; right: 15%; animation-duration: 40s; animation-delay: 10s; }
-.bg-particles:nth-child(5) { width: 180px; height: 180px; top: 20%; right: 30%; animation-duration: 50s; animation-delay: 7s; }
-.bg-particles:nth-child(6) { width: 120px; height: 120px; bottom: 40%; right: 40%; animation-duration: 55s; animation-delay: 3s; }
-.bg-particles:nth-child(7) { width: 250px; height: 250px; top: 60%; left: 10%; animation-duration: 60s; animation-delay: 15s; }
-.bg-particles:nth-child(8) { width: 200px; height: 200px; bottom: 20%; left: 40%; animation-duration: 45s; animation-delay: 8s; }
-
 @keyframes float {
-  0% { transform: translate(0, 0) rotate(0deg) scale(1); }
-  25% { transform: translate(20px, 30px) rotate(90deg) scale(1.1); }
-  50% { transform: translate(40px, 20px) rotate(180deg) scale(1.2); }
-  75% { transform: translate(20px, -10px) rotate(270deg) scale(1.1); }
-  100% { transform: translate(0, 0) rotate(360deg) scale(1); }
+  0% {
+    transform: translate(0, 0) rotate(0deg) scale(1);
+  }
+  33% {
+    transform: translate(30px, 50px) rotate(120deg) scale(1.2);
+  }
+  66% {
+    transform: translate(-20px, 20px) rotate(240deg) scale(0.8);
+  }
+  100% {
+    transform: translate(0, 0) rotate(360deg) scale(1);
+  }
 }
 
 .bg-gradient {
@@ -744,10 +851,15 @@ onBeforeUnmount(() => {
   left: 0;
   width: 100%;
   height: 100%;
-  background: linear-gradient(135deg, rgba(92, 108, 255, 0.03) 0%, rgba(92, 108, 255, 0) 50%);
+  background: radial-gradient(circle at top right,
+  rgba(92, 108, 255, 0.08) 0%,
+  transparent 60%),
+  radial-gradient(circle at bottom left,
+      rgba(64, 201, 143, 0.08) 0%,
+      transparent 60%);
 }
 
-/* ========== 页面头部 ========== */
+/* 页面头部 */
 .page-header {
   position: relative;
   z-index: 1;
@@ -755,32 +867,47 @@ onBeforeUnmount(() => {
   justify-content: space-between;
   align-items: center;
   margin-bottom: 30px;
+  padding-bottom: 20px;
+  border-bottom: 1px solid var(--app-border-color);
 }
 
 .header-left {
   display: flex;
   align-items: center;
-  gap: 16px;
 }
 
 .logo-animation {
   position: relative;
-  width: 50px;
-  height: 50px;
+  width: 48px;
+  height: 48px;
+  margin-right: 16px;
 }
 
 .logo-circle {
   position: absolute;
+  top: 0;
+  left: 0;
   width: 100%;
   height: 100%;
   border-radius: 50%;
-  background: linear-gradient(135deg, var(--app-primary-color), #8f9bff);
-  animation: pulse 2s infinite;
+  background: conic-gradient(var(--app-primary-color), var(--app-success-color), var(--app-warning-color), var(--app-danger-color), var(--app-primary-color));
+  animation: rotate 6s linear infinite;
 }
 
-@keyframes pulse {
-  0%, 100% { transform: scale(1); opacity: 1; }
-  50% { transform: scale(1.05); opacity: 0.8; }
+.logo-circle::before {
+  content: '';
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  right: 4px;
+  bottom: 4px;
+  background-color: var(--app-bg);
+  border-radius: 50%;
+}
+
+@keyframes rotate {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
 
 .title-icon {
@@ -789,7 +916,7 @@ onBeforeUnmount(() => {
   left: 50%;
   transform: translate(-50%, -50%);
   font-size: 24px;
-  color: white;
+  color: var(--app-primary-color);
 }
 
 .title-content {
@@ -798,13 +925,14 @@ onBeforeUnmount(() => {
 }
 
 .page-title {
-  font-size: 26px;
+  font-size: 28px;
   font-weight: 700;
   margin: 0;
-  background: linear-gradient(135deg, var(--app-primary-color), #8f9bff);
+  color: var(--app-text-primary);
+  background: linear-gradient(90deg, var(--app-primary-color), var(--app-success-color));
   -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
   background-clip: text;
+  color: transparent;
 }
 
 .page-subtitle {
@@ -823,13 +951,13 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 16px;
-  border-radius: 20px;
-  background-color: var(--app-bg-secondary);
-  cursor: pointer;
   font-size: 14px;
   color: var(--app-text-secondary);
+  cursor: pointer;
+  padding: 6px 12px;
+  border-radius: 20px;
   transition: all 0.3s;
+  background-color: var(--app-bg-secondary);
 }
 
 .theme-switch:hover {
@@ -838,37 +966,50 @@ onBeforeUnmount(() => {
 }
 
 .refresh-btn {
-  font-weight: 500;
+  transition: all 0.3s;
+  font-weight: 600;
+  padding: 10px 20px;
+  box-shadow: 0 4px 12px rgba(92, 108, 255, 0.2);
 }
 
-/* ========== 加载状态 ========== */
+.refresh-btn:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 6px 16px rgba(92, 108, 255, 0.3);
+}
+
+/* 加载状态 */
 .loading-container {
   position: relative;
   z-index: 1;
   display: flex;
   justify-content: center;
   align-items: center;
-  min-height: 400px;
+  height: 400px;
+  padding: 40px 0;
 }
 
 .loader {
+  position: relative;
+  width: 80px;
+  height: 80px;
   display: flex;
   flex-direction: column;
   align-items: center;
 }
 
 .loader-circle {
+  position: absolute;
   width: 60px;
   height: 60px;
   border-radius: 50%;
-  background: linear-gradient(135deg, var(--app-primary-color), #8f9bff);
-  animation: pulse 1.5s infinite;
+  border: 3px solid var(--app-primary-color-light);
 }
 
 .loader-line-mask {
+  position: absolute;
   width: 60px;
   height: 30px;
-  margin-top: -30px;
+  top: 0;
   overflow: hidden;
 }
 
@@ -878,7 +1019,7 @@ onBeforeUnmount(() => {
   border-radius: 50%;
   border: 3px solid transparent;
   border-top-color: var(--app-primary-color);
-  animation: spin 1s linear infinite;
+  animation: spin 1.5s ease infinite;
 }
 
 @keyframes spin {
@@ -887,230 +1028,254 @@ onBeforeUnmount(() => {
 }
 
 .loader-text {
-  margin-top: 20px;
-  font-size: 16px;
+  position: absolute;
+  bottom: -30px;
+  font-size: 14px;
   color: var(--app-text-secondary);
-  animation: blink 1.5s infinite;
+  animation: pulse 1.5s ease infinite;
 }
 
-@keyframes blink {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.5; }
+@keyframes pulse {
+  0%, 100% { opacity: 0.5; }
+  50% { opacity: 1; }
 }
 
-/* ========== 错误状态 ========== */
-.error-container {
-  position: relative;
-  z-index: 1;
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  min-height: 400px;
-}
-
-.login-error, .general-error {
+/* 登录错误样式 */
+.login-error {
   display: flex;
   flex-direction: column;
   align-items: center;
   text-align: center;
-  padding: 40px;
-  background-color: var(--app-bg-secondary);
-  border-radius: 20px;
-  max-width: 400px;
-}
-
-.error-icon {
-  font-size: 60px;
-  margin-bottom: 20px;
+  animation: fadeInUp 0.6s ease-out;
 }
 
 .login-error .error-icon {
-  color: var(--app-warning-color);
-}
-
-.general-error .error-icon {
-  color: var(--app-danger-color);
-}
-
-.error-title {
-  font-size: 20px;
-  font-weight: 600;
-  margin: 0 0 12px 0;
-}
-
-.error-message {
-  font-size: 14px;
-  color: var(--app-text-secondary);
-  margin: 0 0 24px 0;
-  line-height: 1.6;
+  color: var(--app-primary-color);
+  animation: pulse 2s ease infinite;
 }
 
 .error-buttons {
   display: flex;
   gap: 12px;
+  margin-top: 20px;
 }
 
-/* ========== 概览区域 ========== */
-.overview-section {
+.login-button {
+  font-weight: 600;
+  padding: 10px 24px;
+  background-color: var(--app-primary-color);
+  border-color: var(--app-primary-color);
+  box-shadow: 0 4px 12px rgba(92, 108, 255, 0.3);
+  transition: all 0.3s;
+}
+
+.login-button:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 6px 16px rgba(92, 108, 255, 0.4);
+}
+
+.retry-button {
+  font-weight: 500;
+  padding: 10px 24px;
+}
+
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes pulse {
+  0%, 100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.1);
+  }
+}
+
+/* 错误状态 */
+.error-container {
   position: relative;
   z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 400px;
+  padding: 40px;
+  text-align: center;
+}
+
+.error-icon {
+  font-size: 48px;
+  color: var(--app-danger-color);
+  margin-bottom: 20px;
+  animation: bounce 2s ease infinite;
+}
+
+@keyframes bounce {
+  0%, 20%, 50%, 80%, 100% { transform: translateY(0); }
+  40% { transform: translateY(-20px); }
+  60% { transform: translateY(-10px); }
+}
+
+.error-title {
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--app-text-primary);
+  margin-bottom: 12px;
+}
+
+.error-message {
+  font-size: 16px;
+  color: var(--app-text-secondary);
+  margin-bottom: 24px;
+  max-width: 500px;
+}
+
+.error-button {
+  font-weight: 600;
+  padding: 10px 24px;
+}
+
+/* 主要内容 */
+.calendar-content {
+  position: relative;
+  z-index: 1;
+  animation: fadeIn 0.6s ease-out;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(20px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* 概览部分 */
+.overview-section {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: 1fr 1fr 1fr;
   gap: 20px;
   margin-bottom: 30px;
 }
 
 .overview-card {
-  background-color: var(--app-bg-secondary);
+  background-color: var(--app-card-bg);
   border-radius: 16px;
-  padding: 20px;
-  transition: transform 0.3s, box-shadow 0.3s;
+  overflow: hidden;
+  box-shadow: var(--app-card-shadow);
+  transition: all 0.3s;
 }
 
 .overview-card:hover {
-  transform: translateY(-4px);
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+  transform: translateY(-5px);
+  box-shadow: 0 15px 35px rgba(0, 0, 0, 0.1);
 }
 
 .overview-header {
+  padding: 16px 20px;
   display: flex;
   align-items: center;
-  gap: 10px;
-  margin-bottom: 16px;
-  font-size: 16px;
+  gap: 12px;
+  border-bottom: 1px solid var(--app-border-color);
+}
+
+.overview-header .el-icon {
+  font-size: 20px;
   color: var(--app-primary-color);
 }
 
 .overview-header h3 {
   margin: 0;
-  font-size: 16px;
+  font-size: 18px;
   font-weight: 600;
   color: var(--app-text-primary);
 }
 
+.overview-body {
+  padding: 20px;
+}
+
+/* 学期概览 */
 .overview-data {
   display: flex;
-  justify-content: space-around;
-  margin-bottom: 16px;
+  justify-content: space-between;
+  margin-bottom: 24px;
 }
 
 .data-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
   text-align: center;
+  flex: 1;
 }
 
 .data-value {
-  font-size: 28px;
+  font-size: 24px;
   font-weight: 700;
   color: var(--app-primary-color);
+  margin-bottom: 6px;
 }
 
 .data-label {
-  font-size: 13px;
+  font-size: 14px;
   color: var(--app-text-secondary);
-  margin-top: 4px;
 }
 
 .progress-bar-container {
-  margin-top: 12px;
+  padding: 0 10px;
 }
 
 .progress-label {
   display: flex;
   justify-content: space-between;
-  font-size: 13px;
+  font-size: 14px;
   color: var(--app-text-secondary);
   margin-bottom: 8px;
 }
 
 .progress-bar {
   height: 8px;
-  background-color: var(--app-bg);
+  width: 100%;
+  background-color: var(--app-primary-color-light);
   border-radius: 4px;
   overflow: hidden;
 }
 
 .progress-fill {
   height: 100%;
-  background: linear-gradient(90deg, var(--app-primary-color), #8f9bff);
+  background: linear-gradient(90deg, var(--app-primary-color), var(--app-success-color));
   border-radius: 4px;
-  transition: width 0.5s;
+  transition: width 0.5s ease;
 }
 
-/* ========== PDF卡片 ========== */
-.pdf-card {
-  grid-column: span 2;
-}
-
-.pdf-info {
-  display: flex;
-  align-items: center;
-  gap: 20px;
-  padding: 20px;
-  background: var(--app-bg);
-  border-radius: 12px;
-  margin-bottom: 16px;
-}
-
-.pdf-icon-wrapper {
-  width: 64px;
-  height: 64px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: linear-gradient(135deg, #e74c3c, #c0392b);
-  border-radius: 12px;
-}
-
-.pdf-icon {
-  font-size: 32px;
-  color: white;
-}
-
-.pdf-text .pdf-name {
-  font-size: 18px;
-  font-weight: 600;
-  margin: 0 0 4px 0;
-  color: var(--app-text-primary);
-}
-
-.pdf-text .pdf-desc {
-  font-size: 14px;
-  color: var(--app-text-secondary);
-  margin: 0;
-}
-
-.pdf-actions {
-  display: flex;
-  gap: 12px;
-}
-
-/* ========== 周历 ========== */
-.current-week {
-  grid-column: span 2;
-}
-
+/* 本周信息 */
 .week-calendar {
-  background-color: var(--app-bg);
-  border-radius: 12px;
-  padding: 16px;
+  display: flex;
+  flex-direction: column;
 }
 
 .week-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
   margin-bottom: 16px;
+  text-align: center;
 }
 
 .month-year {
   font-size: 16px;
   font-weight: 600;
+  color: var(--app-text-primary);
+  margin-bottom: 4px;
 }
 
 .week-number {
   font-size: 14px;
-  color: var(--app-primary-color);
-  font-weight: 500;
+  color: var(--app-text-secondary);
 }
 
 .days-grid {
@@ -1120,63 +1285,56 @@ onBeforeUnmount(() => {
 }
 
 .day-cell {
-  text-align: center;
-  padding: 10px 4px;
-  border-radius: 10px;
+  padding: 8px 4px;
+  border-radius: 8px;
   background-color: var(--app-bg-secondary);
-  transition: all 0.3s;
+  text-align: center;
+  transition: transform 0.2s;
 }
 
 .day-cell:hover {
+  transform: scale(1.05);
+}
+
+.is-today {
   background-color: var(--app-primary-color-light);
+  border: 1px solid var(--app-primary-color);
 }
 
-.day-cell.is-today {
-  background: linear-gradient(135deg, var(--app-primary-color), #8f9bff);
-  color: white;
-}
-
-.day-cell.is-weekend {
-  background-color: rgba(255, 114, 111, 0.1);
-}
-
-.day-cell.is-weekend.is-today {
-  background: linear-gradient(135deg, var(--app-primary-color), #8f9bff);
+.is-weekend {
+  background-color: rgba(255, 190, 61, 0.1);
 }
 
 .day-name {
   font-size: 12px;
-  color: var(--app-text-secondary);
+  color: var(--app-text-tertiary);
   margin-bottom: 4px;
 }
 
-.day-cell.is-today .day-name {
-  color: rgba(255, 255, 255, 0.8);
-}
-
 .day-number {
-  font-size: 18px;
+  font-size: 16px;
   font-weight: 600;
+  color: var(--app-text-primary);
+  margin-bottom: 4px;
 }
 
 .day-event {
-  font-size: 10px;
-  color: var(--app-danger-color);
-  margin-top: 4px;
+  font-size: 11px;
+  color: var(--app-primary-color);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  padding: 2px 4px;
+  background-color: var(--app-primary-color-light);
+  border-radius: 4px;
 }
 
-.day-cell.is-today .day-event {
-  color: rgba(255, 255, 255, 0.9);
-}
-
-/* ========== 更新信息 ========== */
+/* 更新信息 */
 .update-data {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 16px;
+  margin-bottom: 20px;
 }
 
 .update-item {
@@ -1192,6 +1350,7 @@ onBeforeUnmount(() => {
 
 .update-value {
   font-size: 14px;
+  color: var(--app-text-primary);
   font-weight: 500;
 }
 
@@ -1199,21 +1358,24 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-top: 16px;
   padding: 10px;
-  background-color: var(--app-bg);
+  background-color: var(--app-primary-color-light);
   border-radius: 8px;
   font-size: 13px;
-  color: var(--app-text-secondary);
+  color: var(--app-primary-color);
 }
 
-/* ========== 标签页 ========== */
+.update-note .el-icon {
+  font-size: 16px;
+}
+
+/* 标签页容器 */
 .tab-container {
   position: relative;
-  z-index: 1;
-  background-color: var(--app-bg-secondary);
+  background-color: var(--app-card-bg);
   border-radius: 16px;
   overflow: hidden;
+  box-shadow: var(--app-card-shadow);
 }
 
 .tab-header {
@@ -1251,7 +1413,7 @@ onBeforeUnmount(() => {
   min-height: 300px;
 }
 
-/* ========== 表格视图 ========== */
+/* 表格视图样式 */
 .calendar-table-container {
   overflow-x: auto;
 }
@@ -1289,6 +1451,19 @@ onBeforeUnmount(() => {
   background-color: var(--app-primary-color-light);
 }
 
+.table-content :deep(.calendar-cell[rowspan]) {
+  vertical-align: middle;
+  background-color: var(--app-table-header-bg);
+  font-weight: 600;
+}
+
+.table-content :deep(.calendar-cell[colspan]) {
+  text-align: center;
+  background-color: var(--app-table-header-bg);
+  font-weight: 600;
+}
+
+/* 红色日期突出显示 */
 .table-content :deep(span[style*="color:red"]) {
   color: var(--app-danger-color) !important;
   font-weight: bold;
@@ -1298,7 +1473,7 @@ onBeforeUnmount(() => {
   background-color: rgba(255, 114, 111, 0.1);
 }
 
-/* ========== 重要日期 ========== */
+/* 重要日期样式 */
 .dates-filters {
   margin-bottom: 20px;
   padding: 16px;
@@ -1352,9 +1527,17 @@ onBeforeUnmount(() => {
   border-radius: 3px;
 }
 
-.holiday-color { background-color: var(--app-warning-color); }
-.exam-color { background-color: var(--app-danger-color); }
-.event-color { background-color: var(--app-primary-color); }
+.holiday-color {
+  background-color: var(--app-warning-color);
+}
+
+.exam-color {
+  background-color: var(--app-danger-color);
+}
+
+.event-color {
+  background-color: var(--app-primary-color);
+}
 
 .dates-grid {
   display: grid;
@@ -1404,11 +1587,21 @@ onBeforeUnmount(() => {
   font-size: 20px;
 }
 
-.date-type-holiday .date-icon { color: var(--app-warning-color); }
-.date-type-exam .date-icon { color: var(--app-danger-color); }
-.date-type-event .date-icon { color: var(--app-primary-color); }
+.date-type-holiday .date-icon {
+  color: var(--app-warning-color);
+}
 
-.date-content { flex: 1; }
+.date-type-exam .date-icon {
+  color: var(--app-danger-color);
+}
+
+.date-type-event .date-icon {
+  color: var(--app-primary-color);
+}
+
+.date-content {
+  flex: 1;
+}
 
 .date-name {
   font-size: 16px;
@@ -1422,7 +1615,7 @@ onBeforeUnmount(() => {
   color: var(--app-text-secondary);
 }
 
-/* ========== 页脚 ========== */
+/* 页脚 */
 .page-footer {
   position: relative;
   z-index: 1;
@@ -1435,13 +1628,13 @@ onBeforeUnmount(() => {
   border-top: 1px solid var(--app-border-color);
 }
 
-/* ========== 响应式 ========== */
+/* 响应式调整 */
 @media (max-width: 992px) {
   .overview-section {
     grid-template-columns: 1fr 1fr;
   }
 
-  .current-week, .pdf-card {
+  .current-week {
     grid-column: span 2;
   }
 }
@@ -1466,7 +1659,7 @@ onBeforeUnmount(() => {
     grid-template-columns: 1fr;
   }
 
-  .current-week, .pdf-card {
+  .current-week {
     grid-column: span 1;
   }
 
@@ -1508,6 +1701,74 @@ onBeforeUnmount(() => {
 
   .pdf-actions .el-button {
     width: 100%;
+  }
+}
+
+/* ========== PDF视图样式 ========== */
+.pdf-calendar-section .overview-section {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: 20px;
+}
+
+.pdf-card {
+  grid-column: span 1;
+}
+
+.pdf-info {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  margin-bottom: 24px;
+}
+
+.pdf-icon-wrapper {
+  width: 80px;
+  height: 80px;
+  border-radius: 16px;
+  background: linear-gradient(135deg, var(--app-primary-color), var(--app-success-color));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 8px 20px rgba(92, 108, 255, 0.3);
+}
+
+.pdf-icon {
+  font-size: 40px;
+  color: white;
+}
+
+.pdf-text {
+  flex: 1;
+}
+
+.pdf-name {
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--app-text-primary);
+  margin: 0 0 8px 0;
+}
+
+.pdf-desc {
+  font-size: 14px;
+  color: var(--app-text-secondary);
+  margin: 0;
+}
+
+.pdf-actions {
+  display: flex;
+  gap: 16px;
+}
+
+.pdf-actions .el-button {
+  flex: 1;
+  height: 48px;
+  font-size: 16px;
+}
+
+@media (max-width: 768px) {
+  .pdf-calendar-section .overview-section {
+    grid-template-columns: 1fr;
   }
 }
 </style>

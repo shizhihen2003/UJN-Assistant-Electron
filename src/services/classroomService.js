@@ -14,7 +14,7 @@ class ClassroomService {
     }
 
     /**
-     * 获取当前教务系统URL
+     * 获取当前教务系统URL（仅作为兜底使用）
      * @returns {Promise<string>} 教务系统基础URL
      * @private
      */
@@ -51,6 +51,28 @@ class ClassroomService {
             this.baseUrl = `http://${UJNAPI.EA_DEFAULT_HOST}`;
             return this.baseUrl;
         }
+    }
+
+    /**
+     * 构建完整的请求URL（统一处理路径前缀和VPN加密）
+     * @param {string} apiPath API路径
+     * @returns {string} 完整的请求URL
+     * @private
+     */
+    _buildRequestUrl(apiPath) {
+        // 优先使用 easAccount.getFullUrl()，它会自动处理：
+        // 1. 路径前缀（如 jwglxt/）
+        // 2. VPN加密
+        // 3. HTTP/HTTPS协议
+        if (authService.easAccount && typeof authService.easAccount.getFullUrl === 'function') {
+            return authService.easAccount.getFullUrl(apiPath);
+        }
+
+        // 兜底：直接拼接（可能缺少路径前缀，仅在easAccount不可用时使用）
+        console.warn('easAccount不可用，使用兜底URL构建');
+        const host = UJNAPI.EA_DEFAULT_HOST;
+        const scheme = UJNAPI.EA_USE_HTTPS ? 'https' : 'http';
+        return `${scheme}://${host}/${apiPath}`;
     }
 
     /**
@@ -126,30 +148,14 @@ class ClassroomService {
                 };
             }
 
-            // 获取当前教务系统URL
-            const baseUrl = await this._getBaseUrl();
-
-            // 构造请求URL - 使用动态API路径
-            let requestUrl;
-            if (useVpn && baseUrl === '') {
-                // VPN模式下使用getFullUrl方法
-                requestUrl = authService.easAccount.getFullUrl(UJNAPI.GET_EMPTY_ROOM + '&gnmkdm=N2155');
-            } else {
-                // 非VPN模式下直接拼接
-                requestUrl = `${baseUrl}/${UJNAPI.GET_EMPTY_ROOM}&gnmkdm=N2155`;
-            }
-
+            // 构造请求URL - 统一使用 _buildRequestUrl 处理路径前缀
+            const requestUrl = this._buildRequestUrl(UJNAPI.GET_EMPTY_ROOM + '&gnmkdm=N2155');
             console.log('请求URL:', requestUrl);
             console.log('请求参数:', params);
             console.log('Cookie数量:', cookies.length);
 
             // 生成参考URL供Referer使用
-            let refererUrl;
-            if (useVpn && baseUrl === '') {
-                refererUrl = authService.easAccount.getFullUrl('xtgl/index_initMenu.html');
-            } else {
-                refererUrl = `${baseUrl}/xtgl/index_initMenu.html`;
-            }
+            const refererUrl = this._buildRequestUrl('xtgl/index_initMenu.html');
 
             // 发送请求到教务系统
             const response = await (useVpn ? ipc.ipassPost : ipc.easPost)(requestUrl, params, {
@@ -160,7 +166,7 @@ class ClassroomService {
                     'Accept': 'application/json, text/javascript, */*; q=0.01',
                     'X-Requested-With': 'XMLHttpRequest',
                     'Referer': refererUrl,
-                    'Host': useVpn ? 'webvpn.ujn.edu.cn' : authService.easAccount?.host || 'jwgl.ujn.edu.cn'
+                    'Host': useVpn ? UJNAPI.VPN_HOST : authService.easAccount?.host || UJNAPI.EA_DEFAULT_HOST
                 }
             });
 
@@ -305,33 +311,18 @@ class ClassroomService {
                 throw new Error('登录会话已失效，请重新登录教务系统');
             }
 
-            // 获取当前教务系统URL
-            const baseUrl = await this._getBaseUrl();
-
-            // 构造请求URL - 使用动态API路径
-            let requestUrl;
-            if (useVpn && baseUrl === '') {
-                // VPN模式下使用getFullUrl方法
-                requestUrl = authService.easAccount.getFullUrl(UJNAPI.GET_EMPTY_ROOM_PAGE);
-            } else {
-                // 非VPN模式下直接拼接
-                requestUrl = `${baseUrl}/${UJNAPI.GET_EMPTY_ROOM_PAGE}`;
-            }
+            // 构造请求URL - 统一使用 _buildRequestUrl 处理路径前缀
+            const requestUrl = this._buildRequestUrl(UJNAPI.GET_EMPTY_ROOM_PAGE);
 
             // 生成参考URL供Referer使用
-            let refererUrl;
-            if (useVpn && baseUrl === '') {
-                refererUrl = authService.easAccount.getFullUrl('xtgl/index_initMenu.html');
-            } else {
-                refererUrl = `${baseUrl}/xtgl/index_initMenu.html`;
-            }
+            const refererUrl = this._buildRequestUrl('xtgl/index_initMenu.html');
 
             // 发送请求获取HTML页面
             const response = await (useVpn ? ipc.ipassGet : ipc.easGet)(requestUrl, {
                 cookies: cookies,
                 headers: {
                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                    'Host': useVpn ? 'webvpn.ujn.edu.cn' : authService.easAccount?.host || 'jwgl.ujn.edu.cn',
+                    'Host': useVpn ? UJNAPI.VPN_HOST : authService.easAccount?.host || UJNAPI.EA_DEFAULT_HOST,
                     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
                     'Referer': refererUrl
                 }
@@ -565,26 +556,11 @@ class ClassroomService {
                 };
             }
 
-            // 获取当前教务系统URL
-            const baseUrl = await this._getBaseUrl();
-
-            // 构造请求URL - 使用动态API路径
-            let requestUrl;
-            if (useVpn && baseUrl === '') {
-                // VPN模式下使用getFullUrl方法
-                requestUrl = authService.easAccount.getFullUrl(UJNAPI.GET_BUILDING_LIST);
-            } else {
-                // 非VPN模式下直接拼接
-                requestUrl = `${baseUrl}/${UJNAPI.GET_BUILDING_LIST}`;
-            }
+            // 构造请求URL - 统一使用 _buildRequestUrl 处理路径前缀
+            const requestUrl = this._buildRequestUrl(UJNAPI.GET_BUILDING_LIST);
 
             // 生成参考URL供Referer使用
-            let refererUrl;
-            if (useVpn && baseUrl === '') {
-                refererUrl = authService.easAccount.getFullUrl(UJNAPI.GET_EMPTY_ROOM_PAGE);
-            } else {
-                refererUrl = `${baseUrl}/${UJNAPI.GET_EMPTY_ROOM_PAGE}`;
-            }
+            const refererUrl = this._buildRequestUrl(UJNAPI.GET_EMPTY_ROOM_PAGE);
 
             // 构造请求参数
             const params = {
@@ -602,7 +578,7 @@ class ClassroomService {
                     'Accept': 'application/json, text/javascript, */*; q=0.01',
                     'X-Requested-With': 'XMLHttpRequest',
                     'Referer': refererUrl,
-                    'Host': useVpn ? 'webvpn.ujn.edu.cn' : authService.easAccount?.host || 'jwgl.ujn.edu.cn'
+                    'Host': useVpn ? UJNAPI.VPN_HOST : authService.easAccount?.host || UJNAPI.EA_DEFAULT_HOST
                 }
             });
 

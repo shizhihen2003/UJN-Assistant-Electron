@@ -32,6 +32,9 @@ class IPassAccount extends Account {
         // 添加VPN设置属性
         this._useVpn = false
 
+        // 添加同步教务系统设置属性
+        this._syncEAS = false
+
         // 创建axios实例
         this.axiosInstance = axios.create({
             timeout: 30000,
@@ -100,6 +103,23 @@ class IPassAccount extends Account {
     }
 
     /**
+     * 获取同步教务系统状态
+     * @returns {boolean} 是否同步教务系统
+     */
+    get syncEAS() {
+        return this._syncEAS
+    }
+
+    /**
+     * 设置同步教务系统状态
+     * @param {boolean} value 是否同步教务系统
+     */
+    set syncEAS(value) {
+        this._syncEAS = !!value
+        console.log(`IPassAccount 同步教务设置已更新为: ${this._syncEAS}`)
+    }
+
+    /**
      * 获取完整URL
      * @param {string} path 路径
      * @returns {string} 完整URL
@@ -128,14 +148,20 @@ class IPassAccount extends Account {
             try {
                 const savedUseVpn = await store.getBoolean('EA_USE_VPN', false)
                 this._useVpn = !!savedUseVpn
+
+                // 加载同步教务系统设置
+                const savedSyncEAS = await store.getBoolean('EA_SYNC_EAS', false)
+                this._syncEAS = !!savedSyncEAS
             } catch (error) {
                 console.error('加载VPN设置失败', error)
                 // 默认为false
                 this._useVpn = false
+                this._syncEAS = false
             }
 
             console.log(`===== 检查智慧济大登录状态 =====`)
             console.log(`使用VPN模式: ${this._useVpn}`)
+            console.log(`同步教务系统: ${this._syncEAS}`)
 
             // 直接尝试访问主页确认登录状态
             const isLoggedIn = await this.tryAccessHomePage();
@@ -165,6 +191,7 @@ class IPassAccount extends Account {
             console.log(`账号: ${account}`);
             console.log(`密码长度: ${password.length}`);
             console.log(`使用VPN: ${this._useVpn}`);
+            console.log(`同步教务: ${this._syncEAS}`);
 
             // 清空相应的Cookie
             if (this._useVpn) {
@@ -175,20 +202,33 @@ class IPassAccount extends Account {
                 this.cookieJar.clearCookies();
             }
 
-            // 准备基础URL
+            // 准备基础URL - 使用动态配置支持多学校
             let loginPageUrl;
+
+            // 从 UJNAPI 获取登录URL（动态配置）
+            const baseLoginUrl = UJNAPI.IPASS_LOGIN.replace(/\/$/, ''); // 移除末尾斜杠
+            const portalUrl = UJNAPI.PORTAL_URL || '';
+            const vpnHost = UJNAPI.VPN_HOST || '';
+
+            console.log(`当前学校: ${UJNAPI.SCHOOL_NAME || '未知'} (${UJNAPI.SCHOOL_ID || 'unknown'})`);
+            console.log(`SSO类型: ${UJNAPI.SSO_TYPE || 'tpass'}`);
+            console.log(`基础登录URL: ${baseLoginUrl}`);
+
             if (this._useVpn) {
                 // VPN模式下，需要加密URL并添加正确的service参数
-                const baseUrl = "http://sso.ujn.edu.cn/tpass/login";
-                // 添加service参数，这是关键
-                const serviceParam = "?service=https%3A%2F%2Fwebvpn.ujn.edu.cn%2Flogin%3Fcas_login%3Dtrue";
-                const fullUrl = baseUrl + serviceParam;
+                // service参数指向VPN登录回调
+                const serviceParam = vpnHost ?
+                    `?service=${encodeURIComponent(`https://${vpnHost}/login?cas_login=true`)}` : '';
+                const fullUrl = baseLoginUrl + serviceParam;
                 loginPageUrl = VpnEncodeUtils.encryptUrl(fullUrl);
                 console.log(`VPN模式登录URL: ${loginPageUrl}`);
             } else {
-                // 非VPN模式，也添加正确的service参数
-                const serviceParam = "?service=http%3A%2F%2Fone.ujn.edu.cn%2Fup%2Fview%3Fm%3Dup";
-                loginPageUrl = `${this.scheme}://${this.host}/tpass/login${serviceParam}`;
+                // 非VPN模式，service参数指向门户
+                let serviceParam = '';
+                if (portalUrl) {
+                    serviceParam = `?service=${encodeURIComponent(portalUrl)}`;
+                }
+                loginPageUrl = baseLoginUrl + serviceParam;
                 console.log(`普通模式登录URL: ${loginPageUrl}`);
             }
 
@@ -341,7 +381,7 @@ class IPassAccount extends Account {
                                 // 2. 第二次重定向 - 通常是到wengine-vpn-token-login
                                 const redirect2Url = redirect1Result.location.startsWith('http') ?
                                     redirect1Result.location :
-                                    `https://webvpn.ujn.edu.cn${redirect1Result.location}`;
+                                    `https://${UJNAPI.VPN_HOST || 'webvpn.ujn.edu.cn'}${redirect1Result.location}`;
 
                                 console.log(`第2次重定向请求: ${redirect2Url}`);
                                 const redirect2Result = await ipc.ipassGet(redirect2Url, {
@@ -362,7 +402,7 @@ class IPassAccount extends Account {
                                     // 3. 第三次重定向 - 通常是到token-login
                                     const redirect3Url = redirect2Result.location.startsWith('http') ?
                                         redirect2Result.location :
-                                        `https://webvpn.ujn.edu.cn${redirect2Result.location}`;
+                                        `https://${UJNAPI.VPN_HOST || 'webvpn.ujn.edu.cn'}${redirect2Result.location}`;
 
                                     console.log(`第3次重定向请求: ${redirect3Url}`);
 
@@ -375,7 +415,7 @@ class IPassAccount extends Account {
                                             console.log(`提取到token: ${token}`);
 
                                             // 尝试简化的token URL
-                                            const simpleTokenUrl = `https://webvpn.ujn.edu.cn/token-login?token=${token}`;
+                                            const simpleTokenUrl = `https://${UJNAPI.VPN_HOST || 'webvpn.ujn.edu.cn'}/token-login?token=${token}`;
                                             console.log(`使用简化token URL: ${simpleTokenUrl}`);
 
                                             try {
@@ -396,7 +436,7 @@ class IPassAccount extends Account {
                                                 if (tokenResult.status === 302 && tokenResult.location) {
                                                     const redirect4Url = tokenResult.location.startsWith('http') ?
                                                         tokenResult.location :
-                                                        `https://webvpn.ujn.edu.cn${tokenResult.location}`;
+                                                        `https://${UJNAPI.VPN_HOST || 'webvpn.ujn.edu.cn'}${tokenResult.location}`;
 
                                                     console.log(`第4次重定向请求: ${redirect4Url}`);
 
@@ -551,6 +591,22 @@ class IPassAccount extends Account {
 
                     if (loginVerified) {
                         console.log("==== 智慧济大登录成功 ====");
+
+                        // 【关键】VPN模式下同步登录教务系统
+                        if (this._syncEAS) {
+                            console.log("检测到需要同步教务系统登录...");
+                            try {
+                                const syncResult = await this.syncEducationalSystemLogin();
+                                if (syncResult) {
+                                    console.log("教务系统同步登录成功");
+                                } else {
+                                    console.warn("教务系统同步登录失败，但不影响智慧济大登录状态");
+                                }
+                            } catch (syncError) {
+                                console.error("教务系统同步登录异常:", syncError.message);
+                            }
+                        }
+
                         return true;
                     } else {
                         console.log("==== 智慧济大登录失败：无法访问主页验证 ====");
@@ -670,7 +726,7 @@ class IPassAccount extends Account {
             // 确保URL是完整的
             let currentUrl = initialLocation;
             if (!currentUrl.startsWith('http')) {
-                currentUrl = `https://webvpn.ujn.edu.cn${currentUrl.startsWith('/') ? '' : '/'}${currentUrl}`;
+                currentUrl = `https://${UJNAPI.VPN_HOST || 'webvpn.ujn.edu.cn'}${currentUrl.startsWith('/') ? '' : '/'}${currentUrl}`;
             }
 
             let currentReferer = referer;
@@ -710,7 +766,7 @@ class IPassAccount extends Account {
                     currentReferer = currentUrl;
                     currentUrl = result.location.startsWith('http') ?
                         result.location :
-                        `https://webvpn.ujn.edu.cn${result.location.startsWith('/') ? '' : '/'}${result.location}`;
+                        `https://${UJNAPI.VPN_HOST || 'webvpn.ujn.edu.cn'}${result.location.startsWith('/') ? '' : '/'}${result.location}`;
                 } catch (error) {
                     // 在发生错误时打印信息但继续执行
                     console.warn(`重定向 #${redirectCount + 1} 失败: ${error.message}`);
@@ -771,17 +827,18 @@ class IPassAccount extends Account {
         try {
             console.log(`\n===== 尝试访问主页以确认登录状态 =====`);
 
-            // 构建主页URL - 【关键修复】：使用动态加密而非硬编码
+            // 构建主页URL - 使用动态配置支持多学校
             let homeUrl;
+            const portalHomeUrl = UJNAPI.PORTAL_URL || 'http://one.ujn.edu.cn/up/view?m=up';
+
             if (this._useVpn) {
                 // VPN模式下，使用VpnEncodeUtils动态加密URL
-                const originalUrl = 'http://one.ujn.edu.cn/up/view?m=up';
-                homeUrl = VpnEncodeUtils.encryptUrl(originalUrl);
-                console.log(`VPN模式，原始URL: ${originalUrl}`);
+                homeUrl = VpnEncodeUtils.encryptUrl(portalHomeUrl);
+                console.log(`VPN模式，原始URL: ${portalHomeUrl}`);
                 console.log(`加密后URL: ${homeUrl}`);
             } else {
                 // 普通模式下的主页URL
-                homeUrl = 'http://one.ujn.edu.cn/up/view?m=up';
+                homeUrl = portalHomeUrl;
             }
 
             // 获取最新的Cookie
@@ -835,7 +892,7 @@ class IPassAccount extends Account {
                     try {
                         const redirect = homeResult.location.startsWith('http') ?
                             homeResult.location :
-                            `https://webvpn.ujn.edu.cn${homeResult.location.startsWith('/') ? '' : '/'}${homeResult.location}`;
+                            `https://${UJNAPI.VPN_HOST || 'webvpn.ujn.edu.cn'}${homeResult.location.startsWith('/') ? '' : '/'}${homeResult.location}`;
 
                         const redirectResult = await ipc.ipassGet(redirect, {
                             cookies: cookies,
@@ -877,9 +934,9 @@ class IPassAccount extends Account {
             // 尝试使用备用URL访问
             try {
                 console.log(`尝试使用备用URL访问...`);
-                const backupUrl = this._useVpn ?
-                    'https://webvpn.ujn.edu.cn/' :
-                    'http://one.ujn.edu.cn/';
+                const vpnHostUrl = UJNAPI.VPN_HOST ? `https://${UJNAPI.VPN_HOST}/` : `https://${UJNAPI.VPN_HOST || 'webvpn.ujn.edu.cn'}/`;
+                const portalHostUrl = UJNAPI.PORTAL_HOST ? `http://${UJNAPI.PORTAL_HOST}/` : 'http://one.ujn.edu.cn/';
+                const backupUrl = this._useVpn ? vpnHostUrl : portalHostUrl;
 
                 const backupResult = await ipc.ipassGet(backupUrl, {
                     cookies: this._useVpn ?
@@ -903,6 +960,136 @@ class IPassAccount extends Account {
             return false;
         } finally {
             console.log(`===== 主页访问确认结束 =====`);
+        }
+    }
+
+    /**
+     * VPN模式下同步登录教务系统
+     * 通过VPN层访问教务系统，利用SSO自动传递身份获取JSESSIONID
+     * @returns {Promise<boolean>} 同步是否成功
+     */
+    async syncEducationalSystemLogin() {
+        try {
+            console.log(`\n===== 开始同步教务系统登录 =====`);
+
+            if (!this._useVpn) {
+                console.log("非VPN模式，跳过教务系统同步");
+                return false;
+            }
+
+            // 获取教务系统URL - 使用动态配置支持多学校
+            const easHost = UJNAPI.EA_DEFAULT_HOST || 'jwgl.ujn.edu.cn';
+            const easScheme = UJNAPI.EA_USE_HTTPS ? 'https' : 'http';
+            const pathPrefix = UJNAPI.DEFAULT_PATH_PREFIX || 'jwglxt/';
+            const loginPath = UJNAPI.EA_LOGIN || 'xtgl/login_slogin.html';
+
+            const easOriginalUrl = `${easScheme}://${easHost}/${pathPrefix}${loginPath}`;
+            const easVpnUrl = VpnEncodeUtils.encryptUrl(easOriginalUrl);
+
+            console.log(`教务系统原始URL: ${easOriginalUrl}`);
+            console.log(`教务系统VPN URL: ${easVpnUrl}`);
+
+            // 获取当前VPN Cookie
+            const vpnCookies = await this.vpnCookieJar.getCookies();
+            console.log(`当前VPN Cookie数量: ${vpnCookies.length}`);
+
+            // 访问教务系统VPN URL，VPN层会自动传递SSO身份
+            console.log(`访问教务系统VPN URL以获取JSESSIONID...`);
+            const easResult = await ipc.ipassGet(easVpnUrl, {
+                cookies: vpnCookies,
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                    'Referer': `https://${UJNAPI.VPN_HOST || 'webvpn.ujn.edu.cn'}/`
+                }
+            });
+
+            console.log(`教务系统访问状态码: ${easResult.status}`);
+
+            // 处理可能的重定向链
+            let finalResult = easResult;
+            let redirectCount = 0;
+            const maxRedirects = 10;
+
+            while (finalResult.status === 302 && finalResult.location && redirectCount < maxRedirects) {
+                redirectCount++;
+                let redirectUrl = finalResult.location;
+
+                // 处理相对URL
+                if (!redirectUrl.startsWith('http')) {
+                    redirectUrl = `https://${UJNAPI.VPN_HOST || 'webvpn.ujn.edu.cn'}${redirectUrl.startsWith('/') ? '' : '/'}${redirectUrl}`;
+                }
+
+                console.log(`教务同步重定向 ${redirectCount}: ${redirectUrl}`);
+
+                // 保存重定向过程中的Cookie
+                if (finalResult.cookies && finalResult.cookies.length > 0) {
+                    console.log(`重定向 ${redirectCount} 返回 ${finalResult.cookies.length} 个Cookie`);
+                    await this.vpnCookieJar.saveCookies(finalResult.cookies);
+                }
+
+                // 跟随重定向
+                finalResult = await ipc.ipassGet(redirectUrl, {
+                    cookies: await this.vpnCookieJar.getCookies(),
+                    headers: {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                        'Referer': easVpnUrl
+                    }
+                });
+            }
+
+            // 保存最终返回的Cookie
+            if (finalResult.cookies && finalResult.cookies.length > 0) {
+                console.log(`教务同步最终获得 ${finalResult.cookies.length} 个Cookie`);
+                console.log(`Cookie详情:`, finalResult.cookies);
+                await this.vpnCookieJar.saveCookies(finalResult.cookies);
+
+                // 检查是否获得JSESSIONID
+                const hasJsessionid = finalResult.cookies.some(c =>
+                    c.includes('JSESSIONID')
+                );
+
+                if (hasJsessionid) {
+                    console.log("===== 教务系统同步成功：已获取JSESSIONID =====");
+                    return true;
+                }
+            }
+
+            // 检查vpnCookieJar中是否已有教务系统的JSESSIONID
+            const allCookies = await this.vpnCookieJar.getCookies();
+            const hasEasJsessionid = allCookies.some(c =>
+                c.includes('JSESSIONID') && (c.includes('jwgl') || c.includes('jwglxt'))
+            );
+
+            if (hasEasJsessionid) {
+                console.log("===== 教务系统同步成功：CookieJar中存在JSESSIONID =====");
+                return true;
+            }
+
+            // 如果没有找到JSESSIONID，检查页面内容
+            if (finalResult.status === 200 && finalResult.data) {
+                // 检查是否已经在教务系统主页（而不是登录页）
+                if (!finalResult.data.includes('id="loginForm"') &&
+                    !finalResult.data.includes('用户登录') &&
+                    (finalResult.data.includes('学生个人中心') ||
+                        finalResult.data.includes('jwglxt') ||
+                        finalResult.data.includes('教务'))) {
+                    console.log("===== 教务系统同步成功：已进入教务系统 =====");
+                    return true;
+                }
+            }
+
+            console.warn("===== 教务系统同步警告：未能确认获取JSESSIONID =====");
+            console.log(`最终状态码: ${finalResult.status}`);
+            console.log(`重定向次数: ${redirectCount}`);
+            return false;
+        } catch (error) {
+            console.error(`教务系统同步失败: ${error.message}`);
+            if (error.stack) {
+                console.error(`错误堆栈: ${error.stack}`);
+            }
+            return false;
+        } finally {
+            console.log(`===== 教务系统同步结束 =====`);
         }
     }
 
