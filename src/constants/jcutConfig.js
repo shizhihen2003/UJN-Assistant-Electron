@@ -2,19 +2,10 @@
 
 /**
  * 荆楚理工学院配置常量
- * 包含学校配置、RSA参数和预计算的WebVPN URL
+ * 包含学校配置和预计算的WebVPN URL
  */
 
-/**
- * RSA加密配置（用于登录密码加密）
- * 这些参数从学校CAS系统获取
- */
-export const JCUT_RSA = {
-    PUBLIC_EXPONENT: '010001',
-    MODULUS: '00b5eeb166e069920e80bebd1fea4829d3d1f3216f2aabe79b6c47a3c18dcee5fd22c2e7ac519cab59198ece036dcf289ea8201e2a0b9ded307f8fb704136eaeb670286f5ad44e691005ba9ea5af04ada5367cd724b5a26fdb5120cc95b6431604bd219c6b7d83a6f8f24b43918ea988a76f93c333aa5a20991493d4eb1117e7b1',
-    TAG: 'lyasp',
-    MAX_DIGITS: 131
-}
+import JcutVpnUtils from '@/utils/jcutVpnUtils';
 
 /**
  * 学校配置
@@ -43,7 +34,6 @@ export const JcutSchoolConfig = {
         portalUrl: 'https://my.jcut.edu.cn/',
         requireCaptcha: true,
         passwordEncrypt: 'rsa',
-        rsa: JCUT_RSA, // RSA配置引用
         apis: {
             kaptcha: '/lyuapServer/kaptcha',
             tickets: '/lyuapServer/v1/tickets',
@@ -84,6 +74,38 @@ export const JcutSchoolConfig = {
         }
     },
 
+    // ========== 新增：门户系统配置 ==========
+    portal: {
+        host: 'my.jcut.edu.cn',
+        apis: {
+            // 验证登录状态
+            tryLoginUserInfo: '/tryLoginUserInfo',
+            // 获取登录信息
+            getLoginInfo: '/api/upp/userControl/getLoginInfo',
+            // 服务类型应用列表
+            selectAppByCardId: '/api/uppcard/serviceTypeShow/selectAppByCardId',
+            // 课表查询
+            queryAWeekSchedule: '/api/uppcard/kbsz/queryAWeekSchedule',
+        },
+        // 应用卡片ID
+        cardIds: {
+            // 应用订阅卡片
+            appSubscription: '4855d22336b84fa981c6d05e9bc674b0',
+            // 课表卡片
+            schedule: 'f949bf41737b4fa58d7edc9ff9d4e2e8',
+        }
+    },
+
+    // ========== 新增：校历配置（从门户API动态获取） ==========
+    calendar: {
+        // 校历应用ID（用于匹配）
+        appId: '1da7ab7e2b824b1aa45691f1a81debb5',
+        // 校历应用名称（用于匹配）
+        appName: '校历查询',
+        // 备用名称匹配
+        altNames: ['校历', '学校校历'],
+    },
+
     // 校区配置
     campuses: [
         { value: '00002', label: '荆楚理工学院(主校区)' },
@@ -96,8 +118,9 @@ export const JcutSchoolConfig = {
         emptyRoom: true,
         librarySearch: false,
         cardBalance: false,
+        portalApps: true,  // 新增：门户应用功能
     },
-}
+};
 
 /**
  * 预计算的WebVPN URL
@@ -107,80 +130,121 @@ export const JcutVpnUrls = {
     // WebVPN门户
     VPN_PORTAL: 'https://sec.jcut.edu.cn/webvpn/',
 
-    // CAS登录页面
+    // CAS登录
     CAS_LOGIN: 'https://sec.jcut.edu.cn/webvpn/LjIwMS4xNjkuMTcwLjIxMC4xNjQ=/LjE5Ni4xNTAuMTY5LjE0NC4xNTUuMjAwLjE2NS4yMTUuOTUuMjAzLjE1Ny4xNzAuMTQ1LjE5OC4xNjI=/lyuapServer/login',
 
-    // 验证码API
+    // 验证码
     KAPTCHA: 'https://sec.jcut.edu.cn/webvpn/LjIwMS4xNjkuMTcwLjIxMC4xNjQ=/LjE5Ni4xNTAuMTY5LjE0NC4xNTUuMjAwLjE2NS4yMTUuOTUuMjAzLjE1Ny4xNzAuMTQ1LjE5OC4xNjI=/lyuapServer/kaptcha',
 
-    // 票据API (登录提交)
+    // 票据
     TICKETS: 'https://sec.jcut.edu.cn/webvpn/LjIwMS4xNjkuMTcwLjIxMC4xNjQ=/LjE5Ni4xNTAuMTY5LjE0NC4xNTUuMjAwLjE2NS4yMTUuOTUuMjAzLjE1Ny4xNzAuMTQ1LjE5OC4xNjI=/lyuapServer/v1/tickets',
 
-    // 门户首页
+    // 门户
     PORTAL: 'https://sec.jcut.edu.cn/webvpn/LjIwMS4xNjkuMTcwLjIxMC4xNjQ=/LjIwNi4xNzQuMTAwLjIwNC4xNDguMjE4LjE2NC4xNDUuMTUwLjIwMi4xNzQuOTkuMTk4LjIwOQ==/',
 
+    // ========== 新增：门户API基础URL ==========
+    PORTAL_API: 'https://sec.jcut.edu.cn/webvpn/LjIwMS4xNjkuMTcwLjIxMC4xNjQ=/LjIwNi4xNzQuMTAwLjIwNC4xNDguMjE4LjE2NC4xNDUuMTUwLjIwMi4xNzQuOTkuMTk4LjIwOQ==',
+
     // 教务系统
-    EAS_HOME: 'https://sec.jcut.edu.cn/webvpn/LjIwMS4xNjkuMTcwLjIxMC4xNjQ=/LjIwMy4xNzIuMTU3LjIwNi4xNjkuMjE3Ljk0LjIwNS4xNDguMjE5LjE3My45OS4yMDAuMTk5LjE2OS45NC4yMDMuMjA5/',
-}
+    EAS_HOME: 'https://sec.jcut.edu.cn/webvpn/LjIwMS4xNjkuMTcwLjIxMC4xNjQ=/LjIwMy4xNzIuMTU3LjIwNi4xNjkuMjE3Ljk0LjIwNS4xNDguMjE5LjE3My45OS4yMDAuMTk5LjE2OS45NC4yMDEuMTU4/',
+
+    EAS_LOGIN: 'https://sec.jcut.edu.cn/webvpn/LjIwMS4xNjkuMTcwLjIxMC4xNjQ=/LjIwMy4xNzIuMTU3LjIwNi4xNjkuMjE3Ljk0LjIwNS4xNDguMjE5LjE3My45OS4yMDAuMTk5LjE2OS45NC4yMDEuMTU4/xtgl/login_slogin.html',
+
+    EAS_SSO_LOGIN: 'https://sec.jcut.edu.cn/webvpn/LjIwMS4xNjkuMTcwLjIxMC4xNjQ=/LjIwMy4xNzIuMTU3LjIwNi4xNjkuMjE3Ljk0LjIwNS4xNDguMjE5LjE3My45OS4yMDAuMTk5LjE2OS45NC4yMDEuMTU4/sso/driotlogin',
+};
 
 /**
- * 辅助函数：获取加密后的主机名
- * @param {string} host - 原始主机名
- * @returns {string} WebVPN加密后的路径
+ * URL加密映射表
+ * 用于快速查找已加密的URL
+ */
+export const JcutEncryptedHosts = {
+    'cas.jcut.edu.cn': 'LjE5Ni4xNTAuMTY5LjE0NC4xNTUuMjAwLjE2NS4yMTUuOTUuMjAzLjE1Ny4xNzAuMTQ1LjE5OC4xNjI=',
+    'my.jcut.edu.cn': 'LjIwNi4xNzQuMTAwLjIwNC4xNDguMjE4LjE2NC4xNDUuMTUwLjIwMi4xNzQuOTkuMTk4LjIwOQ==',
+    'jwglxt.jcut.edu.cn': 'LjIwMy4xNzIuMTU3LjIwNi4xNjkuMjE3Ljk0LjIwNS4xNDguMjE5LjE3My45OS4yMDAuMTk5LjE2OS45NC4yMDEuMTU4',
+    'www.jcut.edu.cn': 'LjIxNC4xNzQuMjE0LjE0NC4yMDMuMjE4LjE2NC4xNDUuMTUwLjIwMi4xNzQuOTkuMTk4LjIwOQ==',
+};
+
+/**
+ * 协议加密映射
+ */
+export const JcutEncryptedProtocols = {
+    'https': 'LjIwMS4xNjkuMTcwLjIxMC4xNjQ=',
+    'http': 'LjIwMS4xNjkuMTcwLjIxMA==',
+};
+
+/**
+ * 获取加密后的主机名
+ * @param {string} host 主机名
+ * @returns {string} 加密后的主机名
  */
 export function getEncryptedHost(host) {
-    // 预定义的主机映射
-    const hostMap = {
-        'cas.jcut.edu.cn': 'LjIwMS4xNjkuMTcwLjIxMC4xNjQ=',
-        'my.jcut.edu.cn': 'LjIwNi4xNzQuMTAwLjIwNC4xNDguMjE4LjE2NC4xNDUuMTUwLjIwMi4xNzQuOTkuMTk4LjIwOQ==',
-        'jwglxt.jcut.edu.cn': 'LjIwMy4xNzIuMTU3LjIwNi4xNjkuMjE3Ljk0LjIwNS4xNDguMjE5LjE3My45OS4yMDAuMTk5LjE2OS45NC4yMDMuMjA5',
+    if (JcutEncryptedHosts[host]) {
+        return JcutEncryptedHosts[host];
     }
-    return hostMap[host] || null
+    return JcutVpnUtils.encrypt(host);
 }
 
 /**
- * 辅助函数：获取加密后的协议
- * @param {string} protocol - 原始协议 (http/https)
- * @returns {string} WebVPN加密后的协议路径
+ * 获取加密后的协议
+ * @param {string} protocol 协议 (http/https)
+ * @returns {string} 加密后的协议
  */
 export function getEncryptedProtocol(protocol) {
-    const protocolMap = {
-        'https': 'LjE5Ni4xNTAuMTY5LjE0NC4xNTUuMjAwLjE2NS4yMTUuOTUuMjAzLjE1Ny4xNzAuMTQ1LjE5OC4xNjI=',
-        'http': 'LjE5OC4xNTEuMTY5LjE0NS4xNTYuMjAwLjE2NS4yMTYuOTYuMjAz',
+    const p = protocol.replace(':', '');
+    if (JcutEncryptedProtocols[p]) {
+        return JcutEncryptedProtocols[p];
     }
-    return protocolMap[protocol] || null
+    return JcutVpnUtils.encrypt(p);
 }
 
 /**
- * 辅助函数：构建WebVPN URL
- * @param {string} originalUrl - 原始URL
- * @returns {string} WebVPN格式的URL
+ * 快速构建WebVPN URL
+ * @param {string} host 主机名
+ * @param {string} path 路径
+ * @param {boolean} useHttps 是否使用HTTPS
+ * @returns {string} WebVPN URL
  */
-export function buildVpnUrl(originalUrl) {
-    try {
-        const url = new URL(originalUrl)
-        const host = url.host
-        const protocol = url.protocol.replace(':', '')
-        const path = url.pathname + url.search
+export function buildVpnUrl(host, path = '', useHttps = true) {
+    const protocol = useHttps ? 'https' : 'http';
+    const encProtocol = getEncryptedProtocol(protocol);
+    const encHost = getEncryptedHost(host);
 
-        const encHost = getEncryptedHost(host)
-        const encProtocol = getEncryptedProtocol(protocol)
-
-        if (encHost && encProtocol) {
-            return `https://sec.jcut.edu.cn/webvpn/${encHost}/${encProtocol}${path}`
-        }
-        return null
-    } catch (e) {
-        console.error('构建VPN URL失败:', e)
-        return null
+    let url = `https://sec.jcut.edu.cn/webvpn/${encProtocol}/${encHost}/`;
+    if (path) {
+        url += path.startsWith('/') ? path.substring(1) : path;
     }
+
+    return url;
+}
+
+/**
+ * 构建门户API URL
+ * @param {string} apiPath API路径
+ * @param {object} params 查询参数
+ * @returns {string} 完整的API URL
+ */
+export function buildPortalApiUrl(apiPath, params = {}) {
+    const baseUrl = JcutVpnUrls.PORTAL_API;
+    let url = `${baseUrl}${apiPath}?vpn-12-my.jcut.edu.cn`;
+
+    // 添加时间戳
+    params._t = params._t || Date.now();
+
+    // 添加其他参数
+    Object.keys(params).forEach(key => {
+        url += `&${key}=${encodeURIComponent(params[key])}`;
+    });
+
+    return url;
 }
 
 export default {
-    JCUT_RSA,
     JcutSchoolConfig,
     JcutVpnUrls,
+    JcutEncryptedHosts,
+    JcutEncryptedProtocols,
     getEncryptedHost,
     getEncryptedProtocol,
     buildVpnUrl,
-}
+    buildPortalApiUrl,
+};
