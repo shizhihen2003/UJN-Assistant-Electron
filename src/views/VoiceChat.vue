@@ -102,10 +102,6 @@ export default {
       // 静音检测
       silenceTimer: null,
       silenceThreshold: 3000, // 3秒静音自动停止
-
-      // 自动开始下一轮
-      nextTurnTimer: null,
-      nextTurnDelay: 1500, // 1.5秒后自动开始下一轮
     }
   },
   computed: {
@@ -155,12 +151,7 @@ export default {
         case 'listening':
           this.startSilenceDetection();
           break;
-        case 'idle':
-          // 如果是从 speaking 结束，自动开始下一轮
-          if (oldState === 'speaking' && this.active) {
-            this.scheduleNextTurn();
-          }
-          break;
+          // idle 状态不再自动开始下一轮，由 completeSpeaking 直接触发
       }
     },
 
@@ -282,8 +273,9 @@ export default {
      * AI 回答完成
      */
     completeSpeaking() {
-      console.log('[VoiceChat] -> idle (speaking complete)');
-      this.setState('idle');
+      console.log('[VoiceChat] -> 回答完成，直接开始下一轮');
+      // 不经过 idle 状态，直接开始录音
+      this.startListening();
     },
 
     /**
@@ -320,28 +312,12 @@ export default {
       this.startSilenceDetection();
     },
 
-    // ==================== 自动下一轮 ====================
-
-    scheduleNextTurn() {
-      console.log('[VoiceChat] 安排下一轮对话');
-      this.nextTurnTimer = setTimeout(() => {
-        if (this.active && this.currentState === 'idle') {
-          console.log('[VoiceChat] 自动开始下一轮');
-          this.startListening();
-        }
-      }, this.nextTurnDelay);
-    },
-
     // ==================== 工具方法 ====================
 
     clearTimers() {
       if (this.silenceTimer) {
         clearTimeout(this.silenceTimer);
         this.silenceTimer = null;
-      }
-      if (this.nextTurnTimer) {
-        clearTimeout(this.nextTurnTimer);
-        this.nextTurnTimer = null;
       }
     },
 
