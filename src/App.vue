@@ -79,10 +79,11 @@
             </el-menu-item>
           </el-sub-menu>
 
+          <!-- 门户查询 - 动态显示学校名称 -->
           <el-sub-menu index="/ipass">
             <template #title>
               <el-icon><School /></el-icon>
-              <span>智慧济大查询</span>
+              <span>{{ schoolShortName }}门户</span>
             </template>
             <el-menu-item index="/ipass/school-calendar">
               <el-icon><Bell /></el-icon>
@@ -99,9 +100,10 @@
               <el-icon><Key /></el-icon>
               <span>教务登录</span>
             </el-menu-item>
+            <!-- 门户登录 - 动态显示学校名称 -->
             <el-menu-item index="/login/ipass">
               <el-icon><Connection /></el-icon>
-              <span>智慧济大登录</span>
+              <span>{{ schoolShortName }}门户登录</span>
             </el-menu-item>
           </el-sub-menu>
 
@@ -181,10 +183,7 @@
 </template>
 
 <script setup>
-// App.vue 的 script 部分 - 修复版本 v2
-// 修复问题：
-// 1. 登录成功后右上角仍显示登录按钮，不显示用户姓名
-// 2. 切换学校和账号登录后，仍然显示第一次登录的用户的名字
+// App.vue 的 script 部分
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import {
@@ -198,9 +197,14 @@ import zhCn from 'element-plus/es/locale/lang/zh-cn'
 import authService from '@/services/authService'
 import store from '@/utils/store'
 import SchoolSetupDialog from '@/components/SchoolSetupDialog.vue'
+import { UJNAPI } from '@/constants/api'
 
 // 学校选择对话框引用
 const schoolSetupDialog = ref(null)
+
+// 动态获取学校名称
+const schoolShortName = computed(() => UJNAPI.SCHOOL_SHORT_NAME || '济大')
+const schoolName = computed(() => UJNAPI.SCHOOL_NAME || '济南大学')
 
 // 侧边栏状态
 const isSidebarCollapsed = ref(false)
@@ -222,258 +226,140 @@ const isLoggedIn = ref(false)
 const userName = ref('')
 const userAvatar = ref('')
 const userInitials = computed(() => {
-  return userName.value ? userName.value.charAt(0).toUpperCase() : '游'
+  return userName.value ? userName.value.charAt(0).toUpperCase() : 'U'
 })
 
-// 时间显示
+// 状态信息
+const statusMessage = ref('就绪')
+const isOnline = ref(true)
 const currentTime = ref('')
+
+// 更新时间
 const updateTime = () => {
   const now = new Date()
-  const hours = String(now.getHours()).padStart(2, '0')
-  const minutes = String(now.getMinutes()).padStart(2, '0')
-  currentTime.value = `${hours}:${minutes}`
+  currentTime.value = now.toLocaleTimeString('zh-CN', {
+    hour: '2-digit',
+    minute: '2-digit'
+  })
 }
 
-// 状态信息
-const isOnline = ref(true)
-const statusMessage = ref('就绪')
+// 检查登录状态
+const checkLoginStatus = async () => {
+  try {
+    const status = authService.getLoginStatus()
+    isLoggedIn.value = status.isLoggedIn
 
-// 窗口控制按钮
+    if (isLoggedIn.value) {
+      const userInfo = authService.getUserInfo()
+      userName.value = userInfo.name || userInfo.studentId || '用户'
+    }
+  } catch (error) {
+    console.error('检查登录状态失败', error)
+  }
+}
+
+// 登出
+const handleLogout = async () => {
+  try {
+    await authService.logoutAll()
+    isLoggedIn.value = false
+    userName.value = ''
+    ElMessage.success('已退出登录')
+  } catch (error) {
+    console.error('登出失败', error)
+    ElMessage.error('登出失败')
+  }
+}
+
+// 窗口控制
 const minimizeWindow = () => {
   if (window.electron) {
-    window.electron.minimize();
+    window.electron.ipcRenderer.send('window-minimize')
   }
-};
+}
 
 const maximizeWindow = () => {
   if (window.electron) {
-    window.electron.maximize();
-  }
-};
-
-const closeWindow = () => {
-  if (window.electron) {
-    window.electron.close();
-  }
-};
-
-// 登出处理
-const handleLogout = async () => {
-  try {
-    // 调用 authService 的登出方法
-    await authService.logoutAll();
-
-    // 更新本地状态
-    isLoggedIn.value = false;
-    userName.value = '';
-    userAvatar.value = '';
-
-    ElMessage.success('已成功退出登录');
-  } catch (error) {
-    console.error('退出登录失败:', error);
-    ElMessage.error('退出登录失败: ' + error.message);
+    window.electron.ipcRenderer.send('window-maximize')
   }
 }
 
-// ========== 修复：更新登录状态和用户信息 ==========
-// 问题原因：原来的函数优先使用内存中的 authService.userInfo.name
-// 切换账号后内存中的旧数据没有被及时更新，导致显示旧用户的名字
-// 修复方案：每次都从存储中重新加载最新的用户信息
-const updateUserInfo = async () => {
-  try {
-    // 获取登录状态
-    const loginStatus = authService.getLoginStatus();
-    isLoggedIn.value = loginStatus.isLoggedIn;
-
-    if (isLoggedIn.value) {
-      // ========== 关键修复：强制从存储重新加载用户信息 ==========
-      // 先重新加载 authService 中的用户信息，确保是最新的
-      await authService.loadUserInfo();
-
-      // 然后直接从存储中获取最新的用户信息
-      const storedUserInfo = await authService.getLocalUserInfo();
-      console.log('从存储加载的用户信息:', storedUserInfo);
-
-      // 获取当前登录的学号
-      const currentStudentId = await store.getString('EAS_ACCOUNT', '');
-      console.log('当前登录学号:', currentStudentId);
-
-      // 检查存储中的用户信息是否与当前登录账号匹配
-      if (storedUserInfo && storedUserInfo.name &&
-          (!currentStudentId || storedUserInfo.studentId === currentStudentId)) {
-        // 存储中有姓名且学号匹配（或没有学号信息），使用存储中的姓名
-        userName.value = storedUserInfo.name;
-        console.log('使用存储中的姓名:', userName.value);
-      } else if (currentStudentId) {
-        // 存储中没有姓名或学号不匹配，使用当前登录的学号
-        userName.value = currentStudentId;
-        console.log('使用当前学号作为显示名:', userName.value);
-      } else {
-        // 最后的备选方案：使用 authService 中的信息
-        const userInfo = authService.getUserInfo();
-        userName.value = userInfo.name || userInfo.studentId || '用户';
-        console.log('使用 authService 中的信息:', userName.value);
-      }
-
-      console.log('已更新用户信息:', {
-        displayName: userName.value,
-        currentStudentId: currentStudentId,
-        storedStudentId: storedUserInfo?.studentId
-      });
-    } else {
-      userName.value = '';
-      userAvatar.value = '';
-    }
-  } catch (error) {
-    console.error('更新用户信息失败:', error);
-    // 出错时尝试使用基本信息
-    try {
-      const currentStudentId = await store.getString('EAS_ACCOUNT', '');
-      if (currentStudentId) {
-        userName.value = currentStudentId;
-      }
-    } catch (e) {
-      console.error('获取备用用户信息也失败:', e);
-    }
+const closeWindow = () => {
+  if (window.electron) {
+    window.electron.ipcRenderer.send('window-close')
   }
 }
 
 // 检查是否首次启动
-const checkFirstRun = async () => {
+const checkFirstLaunch = async () => {
   try {
-    const setupCompleted = await store.getBoolean('SCHOOL_SETUP_COMPLETED', false);
-
-    if (!setupCompleted) {
+    const hasSetup = await store.getBoolean('HAS_SCHOOL_SETUP', false)
+    if (!hasSetup) {
       // 首次启动，显示学校选择对话框
       setTimeout(() => {
         schoolSetupDialog.value?.show();
       }, 500);
     }
   } catch (error) {
-    console.error('检查首次启动失败:', error);
+    console.error('检查首次启动失败', error)
   }
 }
 
-// 学校设置完成回调
-const onSchoolSetupCompleted = (schoolId) => {
+// 学校设置完成回调 - 修复：确保设置 HAS_SCHOOL_SETUP
+const onSchoolSetupCompleted = async (schoolId) => {
   console.log('学校设置完成:', schoolId);
+  // 标记已完成学校设置，防止无限弹窗
+  await store.putBoolean('HAS_SCHOOL_SETUP', true);
+  // 同时写入localStorage确保生效
+  localStorage.setItem('ujn_assistant_HAS_SCHOOL_SETUP', 'true');
   // 刷新页面以应用新的学校配置
   window.location.reload();
 }
 
-// ========== 修复：监听路由变化 ==========
-// 当用户从登录页面跳转回首页时，重新检查并更新登录状态
-watch(
-    () => route.path,
-    async (newPath, oldPath) => {
-      console.log(`路由变化: ${oldPath} -> ${newPath}`);
-      // 路由变化时更新用户信息
-      await updateUserInfo();
-    }
-)
-
-// ========== 修复：监听 authService 的登录状态变化 ==========
-// 当登录状态发生变化时，立即更新用户信息
-watch(
-    () => authService.easLoginStatus.value,
-    async (newValue, oldValue) => {
-      console.log(`EAS登录状态变化: ${oldValue} -> ${newValue}`);
-      await updateUserInfo();
-    }
-)
-
-watch(
-    () => authService.ipassLoginStatus.value,
-    async (newValue, oldValue) => {
-      console.log(`IPASS登录状态变化: ${oldValue} -> ${newValue}`);
-      await updateUserInfo();
-    }
-)
-
-// 生命周期钩子
+// 组件挂载
 onMounted(async () => {
-  // 初始化侧边栏状态
-  const sidebarStatus = localStorage.getItem('sidebarStatus')
-  isSidebarCollapsed.value = sidebarStatus === '1'
-
-  // 初始化时间并设置定时器
-  updateTime()
-  setInterval(updateTime, 60000) // 每分钟更新
-
-  // 检查是否首次启动
-  await checkFirstRun();
-
-  // 检查登录状态 - 在应用启动时立即检查
-  try {
-    // 先检查EAS登录状态是否有效
-    if (authService.easAccount) {
-      // 尝试检查当前登录状态
-      const isEasLoggedIn = await authService.easAccount.absCheckLogin();
-      if (!isEasLoggedIn) {
-        // 如果当前会话失效，尝试使用保存的账户密码重新登录
-        const savedAccount = await authService.getSavedAccount('eas');
-        if (savedAccount && savedAccount.autoLogin) {
-          console.log('正在使用保存的账户自动登录...');
-          await authService.loginEas(
-              savedAccount.username,
-              savedAccount.password,
-              savedAccount.entranceYear,
-              savedAccount.nodeIndex
-          );
-        }
-      }
-    }
-
-    // 更新用户信息显示
-    await updateUserInfo();
-  } catch (error) {
-    console.error('检查登录状态失败:', error);
+  // 恢复侧边栏状态
+  const savedSidebarStatus = localStorage.getItem('sidebarStatus')
+  if (savedSidebarStatus === '1') {
+    isSidebarCollapsed.value = true
   }
 
-  // 检查网络状态
-  window.addEventListener('online', () => {
-    isOnline.value = true
-    statusMessage.value = '已连接到网络'
-    setTimeout(() => {
-      statusMessage.value = '就绪'
-    }, 3000)
+  // 更新时间
+  updateTime()
+  setInterval(updateTime, 60000)
+
+  // 检查登录状态
+  await checkLoginStatus()
+
+  // 检查是否首次启动
+  await checkFirstLaunch()
+
+  // 监听登录状态变化
+  watch(() => authService.easLoginStatus.value, (newVal) => {
+    checkLoginStatus()
   })
 
-  window.addEventListener('offline', () => {
-    isOnline.value = false
-    statusMessage.value = '网络连接已断开'
+  watch(() => authService.ipassLoginStatus.value, (newVal) => {
+    checkLoginStatus()
   })
 })
 </script>
 
 <style>
+/* 全局样式 */
 :root {
-  /* 应用主题色 */
   --primary-color: #007AFF;
-  --secondary-color: #5AC8FA;
-  --success-color: #34C759;
-  --warning-color: #FF9500;
-  --danger-color: #FF3B30;
-  --info-color: #5856D6;
-
-  /* 背景色 */
-  --bg-primary: #F2F2F7;
-  --bg-secondary: #FFFFFF;
-  --bg-tertiary: #E5E5EA;
-
-  /* 文本色 */
-  --text-primary: #000000;
-  --text-secondary: #8E8E93;
-  --text-tertiary: #C7C7CC;
-
-  /* 边框和分割线 */
-  --border-color: #D1D1D6;
-  --divider-color: #C6C6C8;
-
-  /* 阴影 */
-  --shadow-light: 0 1px 3px rgba(0, 0, 0, 0.1);
-  --shadow-medium: 0 4px 6px rgba(0, 0, 0, 0.1);
-  --shadow-dark: 0 10px 15px rgba(0, 0, 0, 0.1);
+  --primary-dark: #0056b3;
+  --bg-primary: #ffffff;
+  --bg-secondary: #f8f9fa;
+  --bg-tertiary: #f0f2f5;
+  --text-primary: #333333;
+  --text-secondary: #666666;
+  --text-hint: #999999;
+  --border-color: #e5e5e5;
+  --success-color: #52c41a;
+  --danger-color: #ff4d4f;
+  --warning-color: #faad14;
 }
 
 * {
@@ -482,33 +368,26 @@ onMounted(async () => {
   box-sizing: border-box;
 }
 
-body {
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  background-color: var(--bg-primary);
-  color: var(--text-primary);
-  overflow: hidden;
+html, body, #app {
+  height: 100%;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
 }
 
 .app-container {
   display: flex;
   flex-direction: column;
-  height: 100vh;
-  width: 100vw;
-  overflow: hidden;
+  height: 100%;
+  background-color: var(--bg-primary);
 }
-</style>
 
-<style scoped>
 /* 标题栏样式 */
 .title-bar {
-  height: 38px;
+  height: 32px;
+  background-color: var(--primary-color);
+  color: white;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  background-color: var(--primary-color);
-  color: white;
   -webkit-app-region: drag;
   padding: 0 15px;
 }
