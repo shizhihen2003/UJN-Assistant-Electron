@@ -69,10 +69,6 @@
               <el-icon><DataLine /></el-icon>
               <span>成绩查询</span>
             </el-menu-item>
-            <!--            <el-menu-item index="/eas/academic">-->
-            <!--              <el-icon><Collection /></el-icon>-->
-            <!--              <span>学业查询</span>-->
-            <!--            </el-menu-item>-->
             <el-menu-item index="/eas/exams">
               <el-icon><AlarmClock /></el-icon>
               <span>考试查询</span>
@@ -148,7 +144,6 @@
               </div>
               <template #dropdown>
                 <el-dropdown-menu>
-                  <!--                  <el-dropdown-item>个人信息</el-dropdown-item>-->
                   <el-dropdown-item divided @click="handleLogout">退出登录</el-dropdown-item>
                 </el-dropdown-menu>
               </template>
@@ -186,7 +181,10 @@
 </template>
 
 <script setup>
-// App.vue 的 script 部分
+// App.vue 的 script 部分 - 修复版本 v2
+// 修复问题：
+// 1. 登录成功后右上角仍显示登录按钮，不显示用户姓名
+// 2. 切换学校和账号登录后，仍然显示第一次登录的用户的名字
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import {
@@ -277,7 +275,10 @@ const handleLogout = async () => {
   }
 }
 
-// 更新登录状态和用户信息
+// ========== 修复：更新登录状态和用户信息 ==========
+// 问题原因：原来的函数优先使用内存中的 authService.userInfo.name
+// 切换账号后内存中的旧数据没有被及时更新，导致显示旧用户的名字
+// 修复方案：每次都从存储中重新加载最新的用户信息
 const updateUserInfo = async () => {
   try {
     // 获取登录状态
@@ -285,41 +286,55 @@ const updateUserInfo = async () => {
     isLoggedIn.value = loginStatus.isLoggedIn;
 
     if (isLoggedIn.value) {
-      // 获取用户信息
-      const userInfo = authService.getUserInfo();
+      // ========== 关键修复：强制从存储重新加载用户信息 ==========
+      // 先重新加载 authService 中的用户信息，确保是最新的
+      await authService.loadUserInfo();
 
-      // 如果已经有姓名信息，则直接使用
-      if (userInfo.name) {
-        userName.value = userInfo.name;
-      }
-      // 如果没有姓名但已登录，尝试从 Cookie 或存储中获取已有会话信息
-      else if (loginStatus.eas && userInfo.studentId) {
-        try {
-          // 直接从已存储的用户信息中获取名字
-          // 这样避免再次调用可能需要权限的API
-          const storedUserInfo = await authService.getLocalUserInfo();
-          if (storedUserInfo && storedUserInfo.name) {
-            userName.value = storedUserInfo.name;
-          } else {
-            // 如果本地存储没有名字信息，则使用学号
-            userName.value = userInfo.studentId;
-          }
-        } catch (error) {
-          console.error('获取本地用户信息失败:', error);
-          userName.value = userInfo.studentId;
-        }
+      // 然后直接从存储中获取最新的用户信息
+      const storedUserInfo = await authService.getLocalUserInfo();
+      console.log('从存储加载的用户信息:', storedUserInfo);
+
+      // 获取当前登录的学号
+      const currentStudentId = await store.getString('EAS_ACCOUNT', '');
+      console.log('当前登录学号:', currentStudentId);
+
+      // 检查存储中的用户信息是否与当前登录账号匹配
+      if (storedUserInfo && storedUserInfo.name &&
+          (!currentStudentId || storedUserInfo.studentId === currentStudentId)) {
+        // 存储中有姓名且学号匹配（或没有学号信息），使用存储中的姓名
+        userName.value = storedUserInfo.name;
+        console.log('使用存储中的姓名:', userName.value);
+      } else if (currentStudentId) {
+        // 存储中没有姓名或学号不匹配，使用当前登录的学号
+        userName.value = currentStudentId;
+        console.log('使用当前学号作为显示名:', userName.value);
       } else {
-        // 如果其他方式都失败，显示学号
-        userName.value = userInfo.studentId;
+        // 最后的备选方案：使用 authService 中的信息
+        const userInfo = authService.getUserInfo();
+        userName.value = userInfo.name || userInfo.studentId || '用户';
+        console.log('使用 authService 中的信息:', userName.value);
       }
 
-      console.log('已更新用户信息:', { name: userName.value, studentId: userInfo.studentId });
+      console.log('已更新用户信息:', {
+        displayName: userName.value,
+        currentStudentId: currentStudentId,
+        storedStudentId: storedUserInfo?.studentId
+      });
     } else {
       userName.value = '';
       userAvatar.value = '';
     }
   } catch (error) {
     console.error('更新用户信息失败:', error);
+    // 出错时尝试使用基本信息
+    try {
+      const currentStudentId = await store.getString('EAS_ACCOUNT', '');
+      if (currentStudentId) {
+        userName.value = currentStudentId;
+      }
+    } catch (e) {
+      console.error('获取备用用户信息也失败:', e);
+    }
   }
 }
 
@@ -345,6 +360,35 @@ const onSchoolSetupCompleted = (schoolId) => {
   // 刷新页面以应用新的学校配置
   window.location.reload();
 }
+
+// ========== 修复：监听路由变化 ==========
+// 当用户从登录页面跳转回首页时，重新检查并更新登录状态
+watch(
+    () => route.path,
+    async (newPath, oldPath) => {
+      console.log(`路由变化: ${oldPath} -> ${newPath}`);
+      // 路由变化时更新用户信息
+      await updateUserInfo();
+    }
+)
+
+// ========== 修复：监听 authService 的登录状态变化 ==========
+// 当登录状态发生变化时，立即更新用户信息
+watch(
+    () => authService.easLoginStatus.value,
+    async (newValue, oldValue) => {
+      console.log(`EAS登录状态变化: ${oldValue} -> ${newValue}`);
+      await updateUserInfo();
+    }
+)
+
+watch(
+    () => authService.ipassLoginStatus.value,
+    async (newValue, oldValue) => {
+      console.log(`IPASS登录状态变化: ${oldValue} -> ${newValue}`);
+      await updateUserInfo();
+    }
+)
 
 // 生命周期钩子
 onMounted(async () => {
