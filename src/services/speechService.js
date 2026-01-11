@@ -1,5 +1,5 @@
 // src/services/speechService.js
-// 讯飞语音服务 - 优化版，支持流式TTS
+// 讯飞语音服务 - 支持超拟人流式TTS
 import store from '../utils/store';
 import CryptoJS from 'crypto-js';
 
@@ -18,8 +18,9 @@ class SpeechService {
                 appId: '',
                 apiKey: '',
                 apiSecret: '',
-                host: 'tts-api.xfyun.cn',
-                path: '/v2/tts',
+                // 超拟人语音合成接口
+                host: 'cbm01.cn-huabei-1.xf-yun.com',
+                path: '/v1/private/mcd9m97e6',
             }
         };
 
@@ -57,6 +58,7 @@ class SpeechService {
         };
         this.startCallbackCalled = false;
         this.ttsOptions = {};
+        this.ttsFinished = false;
 
         // 初始化
         this.init();
@@ -98,6 +100,9 @@ class SpeechService {
 
     // ==================== 签名生成 ====================
 
+    /**
+     * 生成 WebSocket 鉴权 URL
+     */
     getSignUrl(type) {
         const config = type === 'iat' ? this.config.iat : this.config.tts;
         const { apiKey, apiSecret, host, path } = config;
@@ -119,7 +124,7 @@ class SpeechService {
     async initAudioContext() {
         if (!this.audioContext || this.audioContext.state === 'closed') {
             this.audioContext = new (window.AudioContext || window.webkitAudioContext)({
-                sampleRate: 16000
+                sampleRate: 24000  // 超拟人TTS使用24000采样率
             });
         }
 
@@ -135,7 +140,6 @@ class SpeechService {
         if (this.recognizing) {
             console.log('[Speech] 已在识别中，先停止');
             await this.stopRecognize();
-            // 等待一下确保完全停止
             await new Promise(resolve => setTimeout(resolve, 200));
         }
 
@@ -215,7 +219,7 @@ class SpeechService {
             this.mediaStream = null;
         }
 
-        // 延迟关闭 WebSocket，等待最后的识别结果
+        // 延迟关闭 WebSocket
         setTimeout(() => {
             if (this.iatWs) {
                 try { this.iatWs.close(); } catch (e) {}
@@ -223,7 +227,6 @@ class SpeechService {
             }
         }, 1000);
 
-        // 返回最终结果
         if (this.onIatResult) {
             this.onIatResult(this.resultTextTemp || this.recognitionText, true);
         }
@@ -242,7 +245,6 @@ class SpeechService {
                 clearTimeout(timeout);
                 console.log('[Speech] IAT WebSocket 已连接');
 
-                // 发送首帧
                 this.iatWs.send(JSON.stringify({
                     common: { app_id: this.config.iat.appId },
                     business: {
@@ -301,7 +303,6 @@ class SpeechService {
             }
         }
 
-        // 处理动态修正
         if (result.data.result.pgs === 'apd') {
             this.recognitionText += text;
         } else if (result.data.result.pgs === 'rpl') {
@@ -351,17 +352,14 @@ class SpeechService {
         }));
     }
 
-    // ==================== 流式 TTS ====================
+    // ==================== 流式 TTS（超拟人版） ====================
 
     /**
      * 启动流式 TTS
-     * @param {Function} onStart 开始播放回调
-     * @param {Function} onEnd 全部播放完成回调
-     * @param {Function} onError 错误回调
-     * @param {Object} options TTS 参数
      */
     startStreamingTTS(onStart, onEnd, onError, options = {}) {
-        console.log('[Speech] 启动流式 TTS');
+        console.log('[Speech] 启动超拟人流式 TTS');
+        console.log('[Speech] TTS配置 - appId:', this.config.tts.appId, 'apiKey:', this.config.tts.apiKey?.substring(0, 8) + '...');
 
         this.isCanceled = false;
         this.ttsQueue = [];
@@ -370,13 +368,13 @@ class SpeechService {
         this.isPlayingAudio = false;
         this.startCallbackCalled = false;
         this.ttsOptions = options;
+        this.ttsFinished = false;
 
         this.ttsCallbacks = { onStart, onEnd, onError };
     }
 
     /**
-     * 添加文本到 TTS 队列（流式调用）
-     * @param {string} text 要合成的文本
+     * 添加文本到 TTS 队列
      */
     addTextToTTS(text) {
         if (this.isCanceled || !text || !text.trim()) return;
@@ -384,21 +382,20 @@ class SpeechService {
         console.log('[Speech] 添加文本到 TTS:', text.substring(0, 30) + (text.length > 30 ? '...' : ''));
         this.ttsQueue.push(text.trim());
 
-        // 如果没有在处理，启动处理
         if (!this.isProcessingTTS) {
             this.processNextTTSItem();
         }
     }
 
     /**
-     * 结束流式 TTS（标记输入完成）
+     * 结束流式 TTS
      */
     finishStreamingTTS() {
         console.log('[Speech] 标记 TTS 输入完成');
-        this.ttsQueue.push(null); // null 表示结束标记
+        this.ttsFinished = true;
 
-        if (!this.isProcessingTTS) {
-            this.processNextTTSItem();
+        if (this.ttsQueue.length === 0 && !this.isProcessingTTS) {
+            this.checkAllComplete();
         }
     }
 
@@ -408,49 +405,182 @@ class SpeechService {
     async processNextTTSItem() {
         if (this.isCanceled) {
             console.log('[Speech] TTS 已取消');
+            this.isProcessingTTS = false;
             return;
         }
 
         if (this.ttsQueue.length === 0) {
             this.isProcessingTTS = false;
+            this.checkAllComplete();
             return;
         }
 
         this.isProcessingTTS = true;
         const text = this.ttsQueue.shift();
 
-        // null 表示结束
-        if (text === null) {
-            console.log('[Speech] TTS 队列处理完成，等待播放完成');
-            this.isProcessingTTS = false;
-
-            // 检查是否所有音频都播放完了
-            this.checkAllComplete();
-            return;
-        }
-
         try {
-            // 合成这段文本
-            const audioData = await this.synthesizeText(text, this.ttsOptions);
+            // 使用超拟人TTS合成
+            const audioData = await this.synthesizeSuperTTS(text, this.ttsOptions);
 
-            if (this.isCanceled) return;
+            if (this.isCanceled) {
+                this.isProcessingTTS = false;
+                return;
+            }
 
-            // 添加到播放队列
             this.audioQueue.push(audioData);
 
-            // 如果没有在播放，启动播放
             if (!this.isPlayingAudio) {
                 this.playNextAudio();
             }
 
-            // 继续处理下一个
             this.processNextTTSItem();
 
         } catch (error) {
             console.error('[Speech] TTS 合成失败:', error);
-            // 继续处理下一个，不要因为一个错误停止整个流程
+            if (this.ttsCallbacks.onError) {
+                this.ttsCallbacks.onError(error);
+            }
             this.processNextTTSItem();
         }
+    }
+
+    /**
+     * 超拟人语音合成 - 单句
+     */
+    async synthesizeSuperTTS(text, options = {}) {
+        return new Promise((resolve, reject) => {
+            if (!this.config.tts.appId || !this.config.tts.apiKey || !this.config.tts.apiSecret) {
+                console.error('[Speech] TTS配置不完整:', {
+                    appId: !!this.config.tts.appId,
+                    apiKey: !!this.config.tts.apiKey,
+                    apiSecret: !!this.config.tts.apiSecret
+                });
+                reject(new Error('TTS 配置不完整'));
+                return;
+            }
+
+            console.log('[Speech] TTS合成配置 - appId:', this.config.tts.appId);
+            const signUrl = this.getSignUrl('tts');
+            console.log('[Speech] 连接超拟人TTS, URL长度:', signUrl.length);
+
+            const ws = new WebSocket(signUrl);
+            const audioChunks = [];
+
+            const timeout = setTimeout(() => {
+                console.error('[Speech] TTS 超时，未收到响应');
+                ws.close();
+                reject(new Error('TTS 超时'));
+            }, 30000);
+
+            ws.onopen = () => {
+                console.log('[Speech] 超拟人TTS WebSocket 已连接');
+
+                // 获取发音人
+                const vcn = options.voice || 'x5_lingfeiyi_flow';
+
+                // 构建超拟人TTS请求 - 使用lame(mp3)编码
+                const request = {
+                    header: {
+                        app_id: this.config.tts.appId,
+                        status: 2  // 一次性合成
+                    },
+                    parameter: {
+                        tts: {
+                            vcn: vcn,
+                            speed: options.speed || 50,
+                            volume: options.volume || 50,
+                            pitch: options.pitch || 50,
+                            bgs: 0,
+                            reg: 0,
+                            rdn: 0,
+                            rhy: 0,
+                            audio: {
+                                encoding: 'lame',  // MP3格式
+                                sample_rate: 24000,
+                                channels: 1,
+                                bit_depth: 16,
+                                frame_size: 0
+                            }
+                        }
+                    },
+                    payload: {
+                        text: {
+                            encoding: 'utf8',
+                            compress: 'raw',
+                            format: 'plain',
+                            status: 2,
+                            seq: 0,
+                            text: btoa(unescape(encodeURIComponent(text)))
+                        }
+                    }
+                };
+
+                console.log('[Speech] 发送超拟人TTS请求, vcn:', vcn, 'text:', text.substring(0, 30));
+                console.log('[Speech] 请求详情:', JSON.stringify(request));
+                ws.send(JSON.stringify(request));
+            };
+
+            ws.onmessage = (event) => {
+                console.log('[Speech] 收到TTS响应');
+                try {
+                    const result = JSON.parse(event.data);
+                    console.log('[Speech] TTS响应header:', JSON.stringify(result.header));
+
+                    // 检查错误
+                    if (result.header && result.header.code !== 0) {
+                        clearTimeout(timeout);
+                        ws.close();
+                        console.error('[Speech] 超拟人TTS错误:', result.header);
+                        reject(new Error(result.header.message || `TTS错误: ${result.header.code}`));
+                        return;
+                    }
+
+                    // 处理音频数据
+                    if (result.payload && result.payload.audio && result.payload.audio.audio) {
+                        const audioBase64 = result.payload.audio.audio;
+                        const audioData = atob(audioBase64);
+                        const buffer = new ArrayBuffer(audioData.length);
+                        const view = new Uint8Array(buffer);
+                        for (let i = 0; i < audioData.length; i++) {
+                            view[i] = audioData.charCodeAt(i);
+                        }
+                        audioChunks.push(buffer);
+                        console.log('[Speech] 收到音频块, 大小:', buffer.byteLength, 'status:', result.payload.audio.status);
+
+                        // 最后一帧
+                        if (result.payload.audio.status === 2) {
+                            clearTimeout(timeout);
+                            ws.close();
+
+                            // 合并音频 (MP3格式)
+                            const totalLength = audioChunks.reduce((acc, chunk) => acc + chunk.byteLength, 0);
+                            const merged = new ArrayBuffer(totalLength);
+                            const mergedView = new Uint8Array(merged);
+                            let offset = 0;
+                            for (const chunk of audioChunks) {
+                                mergedView.set(new Uint8Array(chunk), offset);
+                                offset += chunk.byteLength;
+                            }
+
+                            console.log('[Speech] 超拟人TTS合成完成, 音频大小:', totalLength);
+                            resolve(merged);  // 直接返回MP3数据
+                        }
+                    }
+                } catch (e) {
+                    console.error('[Speech] 解析超拟人TTS响应失败:', e, event.data.substring(0, 200));
+                }
+            };
+
+            ws.onerror = (error) => {
+                clearTimeout(timeout);
+                console.error('[Speech] 超拟人TTS WebSocket错误:', error);
+                reject(error);
+            };
+
+            ws.onclose = (event) => {
+                console.log('[Speech] 超拟人TTS WebSocket已关闭, code:', event.code, 'reason:', event.reason);
+            };
+        });
     }
 
     /**
@@ -470,7 +600,6 @@ class SpeechService {
 
         this.isPlayingAudio = true;
 
-        // 首次播放时调用 onStart
         if (!this.startCallbackCalled && this.ttsCallbacks.onStart) {
             this.startCallbackCalled = true;
             this.ttsCallbacks.onStart();
@@ -484,7 +613,6 @@ class SpeechService {
             console.error('[Speech] 播放音频失败:', error);
         }
 
-        // 播放下一个
         this.playNextAudio();
     }
 
@@ -492,8 +620,11 @@ class SpeechService {
      * 检查是否全部完成
      */
     checkAllComplete() {
-        // 队列为空，没有在处理，没有在播放
-        if (this.ttsQueue.length === 0 && !this.isProcessingTTS && !this.isPlayingAudio && this.audioQueue.length === 0) {
+        if (this.ttsFinished &&
+            this.ttsQueue.length === 0 &&
+            !this.isProcessingTTS &&
+            !this.isPlayingAudio &&
+            this.audioQueue.length === 0) {
             console.log('[Speech] 所有 TTS 播放完成');
             if (this.ttsCallbacks.onEnd) {
                 this.ttsCallbacks.onEnd();
@@ -502,115 +633,16 @@ class SpeechService {
     }
 
     /**
-     * 合成单段文本
-     */
-    async synthesizeText(text, options = {}) {
-        return new Promise((resolve, reject) => {
-            // 检查配置
-            if (!this.config.tts.appId || !this.config.tts.apiKey || !this.config.tts.apiSecret) {
-                reject(new Error('TTS 配置不完整'));
-                return;
-            }
-
-            const signUrl = this.getSignUrl('tts');
-            const ws = new WebSocket(signUrl);
-            const audioChunks = [];
-
-            const timeout = setTimeout(() => {
-                ws.close();
-                reject(new Error('TTS 超时'));
-            }, 30000);
-
-            ws.onopen = () => {
-                console.log('[Speech] TTS WebSocket 已连接');
-
-                // 发送合成请求
-                const encodedText = btoa(unescape(encodeURIComponent(text)));
-
-                ws.send(JSON.stringify({
-                    common: { app_id: this.config.tts.appId },
-                    business: {
-                        aue: 'raw',
-                        auf: 'audio/L16;rate=16000',
-                        vcn: options.voice || 'xiaoyan',
-                        speed: options.speed || 50,
-                        volume: options.volume || 50,
-                        pitch: options.pitch || 50,
-                        tte: 'UTF8'
-                    },
-                    data: {
-                        status: 2,
-                        text: encodedText
-                    }
-                }));
-            };
-
-            ws.onmessage = (event) => {
-                try {
-                    const result = JSON.parse(event.data);
-
-                    if (result.code !== 0) {
-                        clearTimeout(timeout);
-                        ws.close();
-                        reject(new Error(result.message || 'TTS 失败'));
-                        return;
-                    }
-
-                    if (result.data && result.data.audio) {
-                        // 解码音频
-                        const audioData = atob(result.data.audio);
-                        const buffer = new ArrayBuffer(audioData.length);
-                        const view = new Uint8Array(buffer);
-                        for (let i = 0; i < audioData.length; i++) {
-                            view[i] = audioData.charCodeAt(i);
-                        }
-                        audioChunks.push(buffer);
-
-                        // 最后一帧
-                        if (result.data.status === 2) {
-                            clearTimeout(timeout);
-                            ws.close();
-
-                            // 合并音频
-                            const totalLength = audioChunks.reduce((acc, chunk) => acc + chunk.byteLength, 0);
-                            const merged = new ArrayBuffer(totalLength);
-                            const mergedView = new Uint8Array(merged);
-                            let offset = 0;
-                            for (const chunk of audioChunks) {
-                                mergedView.set(new Uint8Array(chunk), offset);
-                                offset += chunk.byteLength;
-                            }
-
-                            // 转换为 WAV
-                            const wavData = this.pcmToWav(merged, 16000);
-                            resolve(wavData);
-                        }
-                    }
-                } catch (e) {
-                    console.error('[Speech] 解析 TTS 结果失败:', e);
-                }
-            };
-
-            ws.onerror = (error) => {
-                clearTimeout(timeout);
-                reject(error);
-            };
-
-            ws.onclose = () => {
-                console.log('[Speech] TTS WebSocket 已关闭');
-            };
-        });
-    }
-
-    /**
      * 播放音频数据
      */
-    async playAudioData(wavData) {
+    async playAudioData(audioData) {
         return new Promise(async (resolve, reject) => {
             try {
                 await this.initAudioContext();
 
-                const audioBuffer = await this.audioContext.decodeAudioData(wavData.slice(0));
+                console.log('[Speech] 开始解码音频, 大小:', audioData.byteLength);
+                const audioBuffer = await this.audioContext.decodeAudioData(audioData.slice(0));
+                console.log('[Speech] 音频解码成功, 时长:', audioBuffer.duration.toFixed(2), '秒');
 
                 if (this.isCanceled) {
                     resolve();
@@ -644,7 +676,6 @@ class SpeechService {
         const buffer = new ArrayBuffer(wavLength);
         const view = new DataView(buffer);
 
-        // WAV 头
         const writeString = (offset, string) => {
             for (let i = 0; i < string.length; i++) {
                 view.setUint8(offset + i, string.charCodeAt(i));
@@ -665,21 +696,17 @@ class SpeechService {
         writeString(36, 'data');
         view.setUint32(40, pcmLength, true);
 
-        // PCM 数据
         new Uint8Array(buffer, 44).set(new Uint8Array(pcmData));
 
         return buffer;
     }
 
-    // ==================== 传统 TTS（兼容旧接口） ====================
+    // ==================== 传统接口兼容 ====================
 
     async startSynthesize(text, onStart, onEnd, onError, options = {}) {
-        // 使用流式 TTS 实现
         this.startStreamingTTS(onStart, onEnd, onError, options);
 
-        // 智能分句
         const sentences = this.splitIntoSentences(text);
-
         for (const sentence of sentences) {
             this.addTextToTTS(sentence);
         }
@@ -687,18 +714,12 @@ class SpeechService {
         this.finishStreamingTTS();
     }
 
-    /**
-     * 智能分句
-     */
     splitIntoSentences(text) {
         if (!text) return [];
 
         const sentences = [];
         let current = '';
-
-        // 分句标点
         const sentenceEnders = /[。！？；\n]/;
-        // 次要断点（用于过长句子）
         const minorBreaks = /[，、：]/;
 
         for (const char of text) {
@@ -710,7 +731,6 @@ class SpeechService {
                 }
                 current = '';
             } else if (minorBreaks.test(char) && current.length > 50) {
-                // 句子太长时在次要断点分割
                 if (current.trim()) {
                     sentences.push(current.trim());
                 }
@@ -718,12 +738,10 @@ class SpeechService {
             }
         }
 
-        // 剩余内容
         if (current.trim()) {
             sentences.push(current.trim());
         }
 
-        // 过滤太短的句子，合并到前一个
         const result = [];
         for (const sentence of sentences) {
             if (sentence.length < 5 && result.length > 0) {
@@ -747,6 +765,7 @@ class SpeechService {
         this.audioQueue = [];
         this.isProcessingTTS = false;
         this.isPlayingAudio = false;
+        this.ttsFinished = false;
 
         if (this.audioSource) {
             try {

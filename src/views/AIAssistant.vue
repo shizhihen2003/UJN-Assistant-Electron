@@ -498,16 +498,14 @@
         </el-form-item>
         <el-form-item label="发音人">
           <el-select v-model="speechSettings.voice" style="width: 100%">
-            <el-option label="讯飞小燕" value="xiaoyan" />
-            <el-option label="讯飞小宇" value="xiaoyu" />
-            <el-option label="讯飞小思" value="xiaoice" />
-            <el-option label="讯飞小梅" value="xiaomei" />
-            <el-option label="讯飞小莉" value="xiaolin" />
-            <el-option label="讯飞小蓉" value="xiaorong" />
-            <el-option label="讯飞小芸" value="xiaoyun" />
-            <el-option label="讯飞小坤" value="xiaokun" />
-            <el-option label="讯飞小强" value="xiaoqiang" />
-            <el-option label="讯飞小莹" value="xiaoying" />
+            <el-option-group label="女声">
+              <el-option label="聆玉言（交互聊天）" value="x5_lingyuyan_flow" />
+              <el-option label="聆小玥（交互聊天）" value="x5_lingxiaoyue_flow" />
+              <el-option label="聆小璇（交互聊天）" value="x5_lingxiaoxuan_flow" />
+            </el-option-group>
+            <el-option-group label="男声">
+              <el-option label="聆飞逸（交互聊天）" value="x5_lingfeiyi_flow" />
+            </el-option-group>
           </el-select>
         </el-form-item>
         <el-form-item label="自动朗读设置">
@@ -1043,7 +1041,7 @@ const speechSettings = ref({
   iatApiSecret: '',
   ttsApiKey: '',
   ttsApiSecret: '',
-  voice: 'xiaoyan', // 默认发音人
+  voice: 'x5_lingfeiyi_flow', // 默认发音人（聆飞逸）
   speed: 50, // 语速
   volume: 50, // 音量
   pitch: 50, // 音调
@@ -3430,7 +3428,7 @@ const loadSpeechSettings = async () => {
       // 加载语音合成偏好设置
       const ttsPrefs = await store.getObject('speech_tts_prefs');
       if (ttsPrefs) {
-        speechSettings.value.voice = ttsPrefs.voice || 'xiaoyan';
+        speechSettings.value.voice = ttsPrefs.voice || 'x5_lingfeiyi_flow';
         speechSettings.value.speed = ttsPrefs.speed || 50;
         speechSettings.value.volume = ttsPrefs.volume || 50;
         speechSettings.value.pitch = ttsPrefs.pitch || 50;
