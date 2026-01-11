@@ -178,6 +178,16 @@ class CookieJar {
     }
 
     /**
+     * 获取用于HTTP请求的Cookie数组（只有name=value格式）
+     * @returns {Array<string>} Cookie字符串数组，格式为 ["name=value", ...]
+     */
+    getRequestCookies() {
+        return this.cookiesList
+            .filter(cookie => !this.isExpired(cookie))
+            .map(cookie => `${cookie.name}=${cookie.value}`)
+    }
+
+    /**
      * 是否已过期
      * @param {Object} cookie Cookie对象
      * @returns {boolean} 是否已过期
