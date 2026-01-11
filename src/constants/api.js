@@ -3,7 +3,7 @@
 /**
  * API常量配置
  * 动态读取当前选中学校的配置，实现多学校支持
- * 
+ *
  * 重要：直接从localStorage读取学校配置，不依赖schoolService初始化
  * 这样可以确保在authService初始化时就能获取正确的学校配置
  */
@@ -80,7 +80,7 @@ const PresetSchools = {
             cardBalance: false,
         },
     },
-    
+
     sdu: {
         id: 'sdu',
         name: '山东大学',
@@ -138,7 +138,7 @@ const PresetSchools = {
             cardBalance: false,
         },
     },
-    
+
     // 荆楚理工学院 - Jingchu University of Technology
     // 教务系统：正方软件 V-9.0 (HTTPS)
     // 统一认证：lyuapServer CAS系统（需要验证码）
@@ -246,18 +246,18 @@ function getCustomSchools() {
  */
 function getCurrentSchoolConfig() {
     const schoolId = getCurrentSchoolId();
-    
+
     // 先从预置学校查找
     if (PresetSchools[schoolId]) {
         return PresetSchools[schoolId];
     }
-    
+
     // 再从自定义学校查找
     const customSchools = getCustomSchools();
     if (customSchools[schoolId]) {
         return customSchools[schoolId];
     }
-    
+
     // 都没找到，返回默认（济南大学）
     console.warn(`未找到学校配置: ${schoolId}，使用默认配置`);
     return PresetSchools.ujn;
@@ -274,80 +274,80 @@ class DynamicAPIConfig {
     get _config() {
         return getCurrentSchoolConfig();
     }
-    
+
     // ==================== VPN配置 ====================
-    
+
     get VPN_HOST() {
         return this._config.vpn?.host || '';
     }
-    
+
     get VPN_LOGIN() {
         return this._config.vpn?.loginUrl || '';
     }
-    
+
     get VPN_ENCRYPT_KEY() {
         return this._config.vpn?.encryptKey || 'wrdvpnisthebest!';
     }
-    
+
     get VPN_ENABLED() {
         return this._config.vpn?.enabled !== false;
     }
-    
+
     get VPN_TYPE() {
         return this._config.vpn?.type || 'standard';
     }
-    
+
     get VPN_ENCRYPT_TYPE() {
         return this._config.vpn?.encryptType || 'des';
     }
-    
+
     // ==================== SSO配置 ====================
-    
+
     get IPASS_HOST() {
         return this._config.sso?.host || '';
     }
-    
+
     get IPASS_LOGIN() {
         return this._config.sso?.loginUrl || '';
     }
-    
+
     get SSO_TYPE() {
         return this._config.sso?.type || 'tpass';
     }
-    
+
     get REQUIRE_CAPTCHA() {
         return this._config.sso?.requireCaptcha === true;
     }
-    
+
     get PORTAL_URL() {
         return this._config.sso?.portalUrl || '';
     }
-    
+
     // ==================== 教务系统配置 ====================
-    
+
     get EA_HOSTS() {
         const hosts = this._config.eas?.hosts || [];
         return hosts.map(h => typeof h === 'string' ? h : h.host);
     }
-    
+
     get EA_DEFAULT_HOST() {
         const hosts = this.EA_HOSTS;
         return hosts.length > 0 ? hosts[0] : '';
     }
-    
+
     getHostHttps(hostIndex = 0) {
         const hosts = this._config.eas?.hosts || [];
         if (hosts.length === 0) return false;
-        
+
         const index = Math.min(hostIndex, hosts.length - 1);
         const host = hosts[index];
-        
+
         if (typeof host === 'object' && host !== null) {
             return host.https === true;
         }
         return this._config.eas?.useHttps === true;
     }
-    
+
     get EA_USE_HTTPS() {
         const hosts = this._config.eas?.hosts || [];
         if (hosts.length > 0 && typeof hosts[0] === 'object') {
@@ -355,92 +355,112 @@ class DynamicAPIConfig {
         }
         return this._config.eas?.useHttps === true;
     }
-    
+
     get DEFAULT_PATH_PREFIX() {
         const prefix = this._config.eas?.defaultPathPrefix;
         return prefix !== undefined ? prefix : null;
     }
-    
+
     // ==================== 教务系统API ====================
-    
+
     get EA_LOGIN() {
         return this._config.eas?.apis?.login || 'xtgl/login_slogin.html';
     }
-    
+
     get EA_LOGOUT() {
         return this._config.eas?.apis?.logout || null;
     }
-    
+
     get EA_PUBLIC_KEY() {
         return this._config.eas?.apis?.publicKey || 'xtgl/login_getPublicKey.html';
     }
-    
+
+    // 别名：兼容EASAccount.js中使用的EA_LOGIN_PUBLIC_KEY
+    get EA_LOGIN_PUBLIC_KEY() {
+        return this.EA_PUBLIC_KEY;
+    }
+
     get SYSTEM_NOTICE() {
         return this._config.eas?.apis?.systemNotice || 'xtgl/index_cxDbsy.html?doType=query';
     }
-    
+
+    // 别名：兼容EASAccount.js中使用的EA_SYSTEM_NOTICE
+    get EA_SYSTEM_NOTICE() {
+        return this.SYSTEM_NOTICE;
+    }
+
     get GET_YEAR_DATA() {
         return this._config.eas?.apis?.yearData || 'xtgl/index_cxAreaFive.html?localeKey=zh_CN&gnmkdm=index';
     }
-    
+
+    // 别名：兼容EASAccount.js中使用的EA_YEAR_DATA
+    get EA_YEAR_DATA() {
+        return this.GET_YEAR_DATA;
+    }
+
     get GET_LESSON_TABLE() {
         return this._config.eas?.apis?.lessonTable || 'kbcx/xskbcx_cxXsgrkb.html';
     }
-    
+
     get GET_CLASS_LESSON_TABLE() {
         return this._config.eas?.apis?.classLessonTable || 'kbdy/bjkbdy_cxBjKb.html';
     }
-    
+
     get GET_LESSON_TABLE_PRINT() {
         return this._config.eas?.apis?.lessonTablePrint || 'kbdy/bjkbdy_cxBjkbdyIndex.html?gnmkdm=0&layout=default';
     }
-    
+
     get GET_MARKS() {
         return this._config.eas?.apis?.marks || 'cjcx/cjcx_cxDgXscj.html?doType=query';
     }
-    
+
+    // 别名：兼容EASAccount.js中使用的GET_MARK（单数）
+    get GET_MARK() {
+        return this.GET_MARKS;
+    }
+
     get GET_MARK_DETAIL() {
         return this._config.eas?.apis?.markDetail || 'cjcx/cjcx_cxXsKccjList.html';
     }
-    
+
     get GET_EXAM() {
         return this._config.eas?.apis?.exam || 'kwgl/kscx_cxXsksxxIndex.html?doType=query';
     }
-    
+
     get GET_ACADEMIC_PAGE() {
         return this._config.eas?.apis?.academicPage || 'xsxy/xsxyqk_cxXsxyqkIndex.html?gnmkdm=N105515&layout=default';
     }
-    
+
     get GET_ACADEMIC_INFO() {
         return this._config.eas?.apis?.academicInfo || 'xsxy/xsxyqk_cxJxzxjhxfyqFKcxx.html';
     }
-    
+
     get GET_EMPTY_ROOM() {
         return this._config.eas?.apis?.emptyRoom || 'cdjy/cdjy_cxKxcdlb.html?doType=query';
     }
-    
+
     get GET_EMPTY_ROOM_PAGE() {
         return this._config.eas?.apis?.emptyRoomPage || 'cdjy/cdjy_cxKxcdlb.html?gnmkdm=N2155';
     }
-    
+
     get GET_BUILDING_LIST() {
         return this._config.eas?.apis?.buildingList || 'cdjy/cdjy_cxXqjc.html?gnmkdm=N2155';
     }
-    
+
     get STUDENT_INFO() {
         return this._config.eas?.apis?.studentInfo || 'xsxxxggl/xsxxwh_cxCkDgxsxx.html?gnmkdm=N100801';
     }
-    
+
     // ==================== 登录特性 ====================
-    
+
     get LOGIN_FEATURES() {
         return this._config.eas?.loginFeatures || {};
     }
-    
+
     get LOGOUT_BEFORE_LOGIN() {
         return this._config.eas?.loginFeatures?.logoutBeforeLogin === true;
     }
-    
+
     get PLAINTEXT_PASSWORD() {
         const value = this._config.eas?.loginFeatures?.plaintextPassword;
         if (value === true || value === false) {
@@ -448,67 +468,67 @@ class DynamicAPIConfig {
         }
         return 'auto';
     }
-    
+
     get REQUIRE_YD_TYPE() {
         return this._config.eas?.loginFeatures?.requireYdType === true;
     }
-    
+
     get KEEP_FULL_CSRF_TOKEN() {
         return this._config.eas?.loginFeatures?.keepFullCsrfToken === true;
     }
-    
+
     // ==================== 学校基本信息 ====================
-    
+
     get SCHOOL_ID() {
         return this._config.id || 'ujn';
     }
-    
+
     get SCHOOL_NAME() {
         return this._config.name || '济南大学';
     }
-    
+
     get SCHOOL_SHORT_NAME() {
         return this._config.shortName || '济大';
     }
-    
+
     get CAMPUSES() {
         return this._config.campuses || [];
     }
-    
+
     get FEATURES() {
         return this._config.features || {};
     }
-    
+
     // ==================== 工具方法 ====================
-    
+
     getEasUrl(hostIndex = 0, apiPath = '', useHttps = null) {
         const hosts = this.EA_HOSTS;
         if (!hosts || hosts.length === 0) {
             console.error('教务系统主机列表为空');
             return '';
         }
-        
+
         const index = Math.min(hostIndex, hosts.length - 1);
         const host = hosts[index];
         const shouldUseHttps = useHttps !== null ? useHttps : this.getHostHttps(index);
         const scheme = shouldUseHttps ? 'https' : 'http';
-        
+
         return `${scheme}://${host}/${apiPath}`;
     }
-    
+
     getVpnUrl(path = '') {
         const host = this.VPN_HOST;
         if (!host) return '';
         return `https://${host}/${path}`;
     }
-    
+
     getSsoUrl(path = '', useHttps = false) {
         const host = this.IPASS_HOST;
         if (!host) return '';
         const scheme = useHttps ? 'https' : 'http';
         return `${scheme}://${host}/${path}`;
     }
-    
+
     refresh() {
         console.log(`[API] 当前学校: ${this.SCHOOL_NAME} (${this.SCHOOL_ID})`);
     }
